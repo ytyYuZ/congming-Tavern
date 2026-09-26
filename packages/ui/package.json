@@ -1,0 +1,19 @@
+{
+  "name": "@smarttavern/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared presentational components for the apps (no business logic, no engine access).",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node -e \"console.log('[build] @smarttavern/ui is consumed as TS source during M0')\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "Shared base for every workspace (M0-T0). docs/06-开发任务拆解.md §0.1 requires",
+    "`strict` + `noUncheckedIndexedAccess`; the rest of the flags are the guards that",
+    "keep the six hard invariants of HANDOFF §4.1 checkable by the compiler.",
+    "Workspaces extend this file and may only REMOVE capability (e.g. packages/core",
+    "extends tsconfig.core.json, which drops the DOM lib) — never add, never loosen.",
+    "",
+    "noEmit is TRUE here so that `pnpm typecheck` (tsc -b) never writes to the tree:",
+    "a checker that litters is a checker people stop trusting. `tsc -b --noCheck`,",
+    "which the root build step overwrites, produces the per-package dist/ output.",
+    "The emit flags below therefore apply to that build pass only."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "useUnknownInCatchVariables": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    "composite": true,
+    "noEmit": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "${configDir}/dist",
+    "rootDir": "${configDir}/src",
+    "tsBuildInfoFile": "${configDir}/dist/.tsbuildinfo",
+
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "pretty": true
+  }
+}

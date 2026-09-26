@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "Hard invariant #1 (HANDOFF §4.1): `packages/core` must not depend on DOM /",
+    "browser-only APIs. This config removes the DOM lib, so `window`, `document`,",
+    "`localStorage`, `HTMLElement` … simply do not exist for core and typecheck",
+    "fails on any use. The Biome config in biome.json additionally bans the globals",
+    "at lint time (belt and braces, and it gives a human-readable error).",
+    "Verify: inside packages/core/src, add `export const w = window;` and run",
+    "`pnpm typecheck` — TS2304 'Cannot find name window'."
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"]
+  }
+}

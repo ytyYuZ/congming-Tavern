@@ -1,0 +1,208 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/build",
+      "!**/coverage",
+      "!**/.pnpm-store",
+      "!**/.npm-cache",
+      "!**/.local-appdata",
+      "!**/target",
+      "!**/*.stpack"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    }
+  },
+  "json": {
+    "formatter": {
+      "enabled": true,
+      "indentWidth": 2
+    }
+  },
+  "css": {
+    "formatter": {
+      "enabled": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/schema/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@smarttavern/core": "schema is the root of the graph and must not depend on core (docs/06 §0.2)",
+                  "@smarttavern/providers": "schema must not depend on any other internal package (docs/06 §0.2)",
+                  "@smarttavern/storage": "schema must not depend on any other internal package (docs/06 §0.2)",
+                  "@smarttavern/rules": "schema must not depend on any other internal package (docs/06 §0.2)",
+                  "@smarttavern/packages": "schema must not depend on any other internal package (docs/06 §0.2)",
+                  "@smarttavern/importers": "schema must not depend on any other internal package (docs/06 §0.2)",
+                  "@smarttavern/ui": "schema must not depend on any other internal package (docs/06 §0.2)",
+                  "@smarttavern/i18n": "schema must not depend on any other internal package (docs/06 §0.2)"
+                },
+                "patterns": [
+                  {
+                    "group": ["@smarttavern/*/**"],
+                    "message": "schema must not depend on any other internal package (docs/06 §0.2)"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/core/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "window": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "document": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "localStorage": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "sessionStorage": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "indexedDB": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "navigator": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "location": "packages/core must stay DOM-free (HANDOFF §4.1 invariant 1)",
+                  "fetch": "packages/core must not do I/O; keep it behind core/ports (HANDOFF §4.1 invariant 1)"
+                }
+              }
+            },
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@smarttavern/providers": "core must not import a concrete provider (HANDOFF §4.1 invariant 1)",
+                  "@smarttavern/storage": "core only knows core/ports; storage is injected (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/rules": "core only knows core/ports; rules are injected (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/packages": "core only knows core/ports; packaging is injected (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/importers": "core must not import importers (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/ui": "core must not know the UI layer",
+                  "@smarttavern/i18n": "core must not know the UI layer"
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "@smarttavern/providers/**",
+                      "@smarttavern/storage/**",
+                      "@smarttavern/rules/**",
+                      "@smarttavern/packages/**",
+                      "@smarttavern/importers/**",
+                      "@smarttavern/ui/**",
+                      "@smarttavern/i18n/**"
+                    ],
+                    "message": "core may only depend on @smarttavern/schema (HANDOFF §4.1 invariant 4)"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/providers/**/*.ts",
+        "packages/storage/**/*.ts",
+        "packages/rules/**/*.ts",
+        "packages/packages/**/*.ts",
+        "packages/importers/**/*.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@smarttavern/providers": "the adapter packages are siblings of each other — no cross-imports (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/storage": "the adapter packages are siblings of each other — no cross-imports (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/rules": "the adapter packages are siblings of each other — no cross-imports (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/packages": "the adapter packages are siblings of each other — no cross-imports (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/importers": "the adapter packages are siblings of each other — no cross-imports (HANDOFF §4.1 invariant 4)",
+                  "@smarttavern/ui": "the adapter layer is UI-agnostic",
+                  "@smarttavern/i18n": "the adapter layer is UI-agnostic"
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "@smarttavern/providers/**",
+                      "@smarttavern/storage/**",
+                      "@smarttavern/rules/**",
+                      "@smarttavern/packages/**",
+                      "@smarttavern/importers/**",
+                      "@smarttavern/ui/**",
+                      "@smarttavern/i18n/**"
+                    ],
+                    "message": "adapter packages may depend only on @smarttavern/schema and @smarttavern/core (HANDOFF §4.1 invariant 4)"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["tools/*/**/*.ts", "tools/*/**/*.mts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@smarttavern/ui": "tools must not depend on the UI layer",
+                  "@smarttavern/i18n": "tools must not depend on the UI layer"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

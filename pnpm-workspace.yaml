@@ -1,0 +1,44 @@
+# SmartTavern pnpm workspaces (M0-T0)
+# Layout mirrors docs/02-技术架构.md §3 代码组织（pnpm workspaces）.
+
+packages:
+  # UI shells: the only place DOM/browser/Tauri APIs are allowed.
+  - "apps/*"
+
+  # Packages in dependency order (schema ← core ← the rest).
+  #   schema     # frozen contracts: Zod entities + JSON Schema export + migrations
+  #   core       # domain + engines, NO DOM, NO concrete providers
+  #   providers  # LLM / image provider adapters
+  #   storage    # IndexedDB / SQLite / AssetStore implementations
+  #   rules      # dice, checks, retrieval, built-in rule-pack data
+  #   packages   # .stpack pack / unpack / validate (pure logic)
+  #   importers  # SillyTavern / Risu / Tavern import + export
+  #   ui         # shared presentational components (no business logic)
+  #   i18n       # message catalogs + locale plumbing
+  - "packages/*"
+
+  # Developer tooling and build scripts.
+  - "tools/*"
+
+# ── pnpm settings (pnpm 12 reads these from THIS file, not from .npmrc) ───────
+# `cacheDir` and `storeDir` live here rather than in .npmrc: pnpm 12 only honours
+# them in this file. Both point inside the workspace because some developer hosts
+# (and CI sandboxes) deny writes to the user-level pnpm/npm directories.
+cacheDir: .npm-cache
+
+# Vite 7 on Rolldown (`rolldown-vite`, the Vite team's in-process native bundler).
+#
+# This override applies to EVERY install — CI runners included — so treat it as a
+# project-level toolchain choice, not a local hack. Two reasons it is here:
+#   1. plain `vite` pulls in esbuild, whose JS API needs a child process with
+#      piped stdio; hosts that deny that (`spawnSync(...) -> EPERM`, including the
+#      sandbox this scaffold was built in) cannot transform a single TypeScript
+#      file, which takes `pnpm test` and `pnpm build` down with it;
+#   2. it drops the esbuild native binary and is the direction Vite itself is
+#      moving, so a greenfield project pays no migration cost.
+# Same Vite 7 API: every vite.config.ts and every CI command is unchanged.
+# To go back to plain `vite`, delete the override below and re-run `pnpm install`;
+# on hosts that deny piped child processes, local `pnpm test` / `pnpm build` then
+# need tools/scripts/vite-sandbox-probe-shim.mjs plus an unrestricted sandbox.
+overrides:
+  vite: npm:rolldown-vite@^7.3.1

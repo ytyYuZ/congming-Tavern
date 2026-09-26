@@ -1,0 +1,145 @@
+# SmartTavern CI — M0-T0 item 4.
+#
+# Documented rule (HANDOFF §5 M0-T0, docs/06-开发任务拆解.md §0.1):
+#   lint → typecheck → test → build, all four green before a merge is allowed.
+#
+# The four jobs are chained with `needs:` so the order is real, not cosmetic —
+# a red lint stops the pipeline immediately (and GitHub branch protection can
+# require the single `ci` gate job below).
+#
+# No secrets and no network services are needed: every workspace is private and
+# consumed as TypeScript source during M0, so there is nothing to publish.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes the previous run for the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only reads the repository.
+permissions:
+  contents: read
+
+env:
+  # Keep the toolchain honest in CI too: pnpm must not run lifecycle scripts it
+  # did not have to run locally.
+  NODE_ENV: development
+
+# NOTE on Node: `.nvmrc` pins the CI runtime. Nothing OS-specific lives in this
+# file: pnpm settings (cacheDir / overrides) come from the tracked
+# pnpm-workspace.yaml, and Linux runners need no workaround from .npmrc.
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          # The dependency-direction check parses sources, so line endings and
+          # permissions must match the committed bytes on every platform.
+          persist-credentials: false
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: install
+        # pnpm settings come from the tracked pnpm-workspace.yaml; no
+        # OS-specific workaround is needed on Linux runners.
+        run: pnpm install --frozen-lockfile
+
+      - name: biome check + dependency-direction check
+        # `pnpm lint` = `biome check .` AND `node tools/scripts/check-dependency-direction.mjs`
+        # (see package.json). Both halves of M0-T0 item 5: the lint rules that
+        # fail fast in the editor, and the import-graph walk that also catches
+        # deep imports and brand-new packages.
+        run: pnpm lint
+
+  typecheck:
+    name: typecheck
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: install
+        run: pnpm install --frozen-lockfile
+      - name: tsc -b (strict + noUncheckedIndexedAccess, packages/core is DOM-free)
+        run: pnpm typecheck
+
+  test:
+    name: test
+    needs: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: install
+        run: pnpm install --frozen-lockfile
+      - name: vitest (all workspaces, including the dependency-direction tests)
+        run: pnpm test
+
+  build:
+    name: build
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: install
+        run: pnpm install --frozen-lockfile
+      - name: vite build (apps/web, apps/desktop)
+        run: pnpm build
+
+  # Single required status check for branch protection: "all four are green".
+  gate:
+    name: ci
+    needs: [lint, typecheck, test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: all four jobs are green
+        run: echo "lint, typecheck, test and build all passed — merge is allowed."

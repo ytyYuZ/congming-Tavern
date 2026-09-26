@@ -1,0 +1,25 @@
+# SmartTavern .gitattributes (M0-T0)
+#
+# LF everywhere in the repository: docs and tools parse file bytes, and the
+# .stpack determinism tests hash payload files, so text must not be rewritten
+# on checkout. See docs/04-分享格式规范.md §11.
+* text=auto eol=lf
+
+# Windows-only helpers keep CRLF so they stay runnable after a checkout.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary payloads: never normalize, never diff.
+*.stpack binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.wasm binary

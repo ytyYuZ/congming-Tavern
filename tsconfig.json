@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "Solution file for `pnpm typecheck` (tsc -b). Reference every workspace so a",
+    "new package is one line away from being type-checked in CI.",
+    "`tsc -b` verifies types and writes no output (noEmit comes from",
+    "tsconfig.base.json, which every workspace extends).",
+    "`pnpm build` runs the SAME graph with the emit switch flipped on the command",
+    "line — `tsc -b --noCheck --noEmit false` — so typecheck and build share one",
+    "configuration and cannot drift apart, then bundles the apps with Vite.",
+    "Note: packages/core/tsconfig.json extends tsconfig.core.json (no DOM lib)."
+  ],
+  "files": [],
+  "references": [
+    { "path": "./packages/schema" },
+    { "path": "./packages/core" },
+    { "path": "./packages/providers" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/rules" },
+    { "path": "./packages/packages" },
+    { "path": "./packages/importers" },
+    { "path": "./packages/ui" },
+    { "path": "./packages/i18n" },
+    { "path": "./apps/web" },
+    { "path": "./apps/desktop" },
+    { "path": "./tools/stpack-cli" }
+  ]
+}
