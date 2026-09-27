@@ -23,6 +23,7 @@
   "dependencies": {
     "@hookform/resolvers": "^5.0.0",
     "@smarttavern/core": "workspace:*",
+    "@smarttavern/i18n": "workspace:*",
     "@smarttavern/providers": "workspace:*",
     "@smarttavern/schema": "workspace:*",
     "@smarttavern/storage": "workspace:*",

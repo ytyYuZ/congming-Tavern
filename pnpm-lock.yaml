@@ -72,6 +72,9 @@ importers:
       '@smarttavern/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@smarttavern/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@smarttavern/providers':
         specifier: workspace:*
         version: link:../../packages/providers
