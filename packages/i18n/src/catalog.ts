@@ -105,6 +105,20 @@ export const zhCN = {
   'play.composerPlaceholder': '例如：我推开门，走进昏暗的酒馆。',
   'play.send': '发送',
   'play.stop': '停止',
+  /**
+   * The persistent world clock (M1-T1). `{date}` is the time engine's own
+   * `renderParts` output — `纪元 1 一月 1 06:30` — and `{segment}` the day-part name
+   * from the world's calendar (`晨`/`昼`/`昏`/`夜`). Those two are WORLD CONTENT and
+   * deliberately do NOT translate with this key; only the words and punctuation
+   * around them are interface copy (ADR-030). The two locales genuinely differ here
+   * — word order and brackets — which is why the sentence cannot be assembled by the
+   * engine or by the app without a catalog.
+   */
+  'play.clock': '当前 {date}（{segment}）',
+  /** The same clock for a calendar that names no day-parts (`Calendar.segments: []`). */
+  'play.clockNoSegment': '当前 {date}',
+  /** The clock readout's accessible name; a screen reader reads this, not the `·`. */
+  'play.clockLabel': '世界时钟',
 
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
@@ -136,6 +150,15 @@ export const zhCN = {
   'error.notInitialized': '应用尚未完成初始化',
   'error.notConfigured': '请先在「设置」中填写服务地址与模型名',
   'error.localFailure': '未知的本地错误',
+  /*
+   * THE ONE KEY BELOW IS SHOWN, unlike the three above it. `{detail}` is the
+   * composer's own numbers (`engine/prompt/budget.ts` reports the shortfall, the
+   * limit and the levers), and the sentence exists because an over-budget assembly
+   * must be explained instead of sent: docs/02 §5.1 requires 明确报错并给出建议, and a
+   * banner saying only "something failed" would hide the one fact — by how much —
+   * that tells the user what to change.
+   */
+  'error.promptBudget': '本次请求超出模型上下文预算，未能发送。{detail}',
 };
 
 /** Every key that must exist in every catalog, derived from the source of truth. */
@@ -198,6 +221,9 @@ export const en: Messages = {
   'play.composerPlaceholder': 'For example: I push the door open and step into the dim tavern.',
   'play.send': 'Send',
   'play.stop': 'Stop',
+  'play.clock': 'Now {date} ({segment})',
+  'play.clockNoSegment': 'Now {date}',
+  'play.clockLabel': 'World clock',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',
@@ -210,6 +236,7 @@ export const en: Messages = {
   'error.notInitialized': 'The app has not finished starting up.',
   'error.notConfigured': 'Enter the endpoint and model name in Settings first.',
   'error.localFailure': 'Unknown local error.',
+  'error.promptBudget': 'This request is over the model budget, so it was not sent. {detail}',
 };
 
 /**

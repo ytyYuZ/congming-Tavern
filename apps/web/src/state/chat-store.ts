@@ -62,6 +62,14 @@ export interface ChatError {
   retryable: boolean;
   /** What the user had typed, so 「重试」 can send it again. */
   turnText: string;
+  /**
+   * The numbers behind a LOCAL failure — today only the prompt composer's budget
+   * report (`chat/send-turn.ts`). Filled into the catalog sentence's `{detail}`
+   * placeholder by the banner, so ADR-019's split holds: the store carries facts
+   * (code, message, numbers), the catalog carries prose. Absent for a provider
+   * failure, whose `message` is the vendor's own text for logs.
+   */
+  detail?: string;
 }
 
 export interface ChatState {
@@ -117,7 +125,21 @@ export function configureChat(next: { transport: FetchLike }): void {
  * deliberately a thin wrapper so there is exactly one code->key table in the app.
  */
 export function errorLabel(code: string): string {
-  return translate(messageKeyForCode(code));
+  return errorSentence({ code });
+}
+
+/**
+ * The sentence the banner renders for one failure, with the local `detail` filled in.
+ *
+ * ONE function for the view and for `errorLabel`, because the banner and a log line
+ * must not be able to disagree about what a code says. `detail` is passed as the
+ * `{detail}` parameter, so a code whose sentence has no placeholder (`error.auth`)
+ * simply ignores it — which is what keeps a provider failure's `message` out of the UI
+ * (ADR-019). The parameter set is uniform while only `error.promptBudget` uses it:
+ * `translate` leaves an unused parameter alone rather than erroring.
+ */
+export function errorSentence(error: { readonly code: string; readonly detail?: string }): string {
+  return translate(messageKeyForCode(error.code), { detail: error.detail ?? '' });
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -258,6 +280,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 message: result.error.message,
                 retryable: result.error.retryable,
                 turnText: trimmed,
+                // Present only for a local failure (the composer's budget report);
+                // absent for a provider failure, whose sentence is the vendor's own
+                // text for logs and has no numbers to interpolate.
+                ...(result.error.detail === undefined ? {} : { detail: result.error.detail }),
               },
       });
     } catch (cause) {

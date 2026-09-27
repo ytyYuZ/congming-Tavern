@@ -43,6 +43,15 @@ import { LLM_ERROR_CODES } from '@smarttavern/providers';
  */
 export const NOT_CONFIGURED_CODE = 'not_configured';
 
+/**
+ * The code `chat/send-turn.ts` sets when the prompt composer says the assembly does
+ * not fit the token budget (`ComposeFailure.error`). Also NOT in `LLM_ERROR_CODES`:
+ * the request never leaves the device, so no vendor vocabulary describes it. It gets
+ * its own code because the user CAN act on it (docs/02 §5.1 requires the suggestion),
+ * whereas `error.unknown` would read as a bug in the app.
+ */
+export const PROMPT_BUDGET_CODE = 'prompt_budget_exceeded';
+
 /** The sentence for anything the table does not know, including `'unknown'`. */
 export const GENERIC_ERROR_KEY: MessageKey = 'error.unknown';
 
@@ -60,6 +69,8 @@ export const ERROR_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
    * say what is actually wrong instead of the generic catch-all.
    */
   [NOT_CONFIGURED_CODE]: 'error.notConfigured',
+  /** Not an adapter code either: the composer refused before a request was built. */
+  [PROMPT_BUDGET_CODE]: 'error.promptBudget',
 };
 
 /** The catalog key whose sentence `code` should render. Never `undefined`. */

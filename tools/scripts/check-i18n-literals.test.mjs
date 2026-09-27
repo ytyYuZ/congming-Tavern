@@ -121,7 +121,7 @@ describe('i18n checker — CJK matcher', () => {
 describe('i18n checker — scope and exemptions', () => {
   it('scopes exactly apps/<app>/src/**/*.{ts,tsx}', () => {
     expect(isScopedSource('apps/web/src/app/app.tsx')).toBe(true);
-    expect(isScopedSource('apps/web/src/chat/prompt.ts')).toBe(true);
+    expect(isScopedSource('apps/web/src/chat/builtin-content.ts')).toBe(true);
     expect(isScopedSource('apps/desktop/src/index.ts')).toBe(true);
     expect(isScopedSource('packages/ui/src/index.tsx')).toBe(false);
     expect(isScopedSource('apps/web/index.html')).toBe(false);
@@ -137,27 +137,27 @@ describe('i18n checker — scope and exemptions', () => {
 
   it('exempts test files and test fixture directories', () => {
     expect(isExemptPath('apps/web/src/app/routes/routes.test.tsx')).toBe(true);
-    expect(isExemptPath('apps/web/src/chat/prompt.test.ts')).toBe(true);
+    expect(isExemptPath('apps/web/src/chat/providers.test.ts')).toBe(true);
     expect(isExemptPath('apps/web/src/__fixtures__/labels.ts')).toBe(true);
     expect(isExemptPath('apps/web/src/chat/providers.ts')).toBe(false);
   });
 
-  it('exempts exactly the one temporary model-prompt file', () => {
-    expect(isExemptPath('apps/web/src/chat/prompt.ts')).toBe(true);
+  it('exempts exactly the one temporary built-in-content file', () => {
+    expect(isExemptPath('apps/web/src/chat/builtin-content.ts')).toBe(true);
   });
 
-  it('keeps the model-prompt exemption from becoming a directory exemption', () => {
+  it('keeps the built-in-content exemption from becoming a directory exemption', () => {
     // THE property that keeps a file exemption honest: a sibling in the same
     // directory is still reported, so the exemption cannot creep outward.
     expect(isExemptPath('apps/web/src/chat/providers.ts')).toBe(false);
     expect(isExemptPath('apps/web/src/chat/send-turn.ts')).toBe(false);
-    expect(isExemptPath('apps/web/src/chat/prompt-extra.ts')).toBe(false);
-    expect(isExemptPath('apps/web/src/chat/prompt.tsx')).toBe(false);
+    expect(isExemptPath('apps/web/src/chat/builtin-content-extra.ts')).toBe(false);
+    expect(isExemptPath('apps/web/src/chat/builtin-content.tsx')).toBe(false);
     expect(
       violationsOf('apps/web/src/chat/providers.ts', "export const message = '连接失败';"),
     ).toHaveLength(1);
     expect(
-      violationsOf('apps/web/src/chat/prompt.ts', "export const message = '连接失败';"),
+      violationsOf('apps/web/src/chat/builtin-content.ts', "export const message = '连接失败';"),
     ).toEqual([]);
   });
 });

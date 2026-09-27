@@ -45,12 +45,14 @@
  *   • `**\/*.test.*` — a test legitimately asserts rendered Chinese text, e.g.
  *     `expect(screen.getByText('设置')).toBeVisible()`; the assertion is the
  *     proof that the catalog key resolves, so it must stay readable.
- *   • `apps/web/src/chat/prompt.ts` — the ONE temporary exemption: that file
- *     builds the messages sent to the MODEL, so its Chinese is prompt content,
- *     not interface copy. Localising it would make the system prompt follow the
- *     UI locale (an English interface would start sending English prompts to the
- *     model — a behaviour bug). Its long-term home is a `PromptPreset`'s blocks
- *     (data, ADR-029, M1-G4); see `MODEL_PROMPT_FILE` for the removal condition.
+ *   • `apps/web/src/chat/builtin-content.ts` — the ONE temporary exemption: that
+ *     file holds the app's BUILT-IN DEFAULT content (a default `PromptPreset`
+ *     and a default world calendar) while the preset/world editors do not exist
+ *     (docs/06 §8.5 决定 1). That is world/prompt CONTENT — names the user will
+ *     eventually author, and prompt text whose language must NOT follow the UI
+ *     language, or it would change what the model is asked (ADR-030 decision 1).
+ *     Its expiry: built-in content comes from real rows / bundled content packs
+ *     once M1-W1/I2 land; see `BUILTIN_CONTENT_FILE` for the removal condition.
  *     Kept as one exact path so it cannot quietly grow.
  *
  * WHY THE COMPILER API AND NOT REGEXES: a regex over raw source cannot tell a
@@ -128,26 +130,27 @@ const TEST_DIR = /^__.*__$/;
 const CATALOG_DIR = /(^|\/)packages\/i18n\//;
 
 /**
- * TEMPORARY single-file exemption — `apps/web/src/chat/prompt.ts` (M1-G1).
+ * TEMPORARY single-file exemption — `apps/web/src/chat/builtin-content.ts`.
  *
- * WHY: that file assembles the messages sent to the MODEL. Its Chinese is prompt
- * content, not interface copy, so it must NOT move into the catalogs: routing it
- * through `t(...)` would make the system prompt switch with the UI locale, and a
- * user with an English interface would silently start sending English prompts to
- * the model — model behaviour changing as a side effect of a UI preference. That
- * is a bug, not a localisation.
+ * WHY: that file holds the app's BUILT-IN DEFAULT content — a default
+ * `PromptPreset` and a default world calendar — for as long as the preset/world
+ * editors do not exist (docs/06 §8.5 决定 1). That text is world/prompt CONTENT,
+ * not interface copy: it carries names the user will eventually author, and for
+ * the prompt it is text whose language must NOT follow the UI language, because
+ * that would change what the model is asked (ADR-030 decision 1). Routing it
+ * through `t(...)` would therefore be a behaviour bug, not a localisation, so it
+ * must not move into the catalogs.
  *
- * WHY TEMPORARY, AND WHAT REMOVES IT: the honest long-term home for this text is
- * a `PromptPreset`'s blocks — data, per ADR-029 — which M1-G4 brings. Until then
- * it is a hardcoded built-in default. When those preset blocks ship, delete this
- * constant and its branch in `isExemptPath`; the exemption must not outlive the
- * reason for it.
+ * WHY TEMPORARY, AND WHAT REMOVES IT: when M1-W1/I2 land, built-in content comes
+ * from real rows / bundled content packs instead of a source file. When that
+ * ships, delete this constant and its branch in `isExemptPath`; the exemption
+ * must not outlive the reason for it.
  *
- * DELIBERATELY ONE EXACT FILE, anchored as `/chat/prompt.ts`: a broader pattern
- * (`chat/**`, `prompt*`) would quietly exempt files nobody decided to exempt —
- * and an exemption that can grow on its own is how a rule dies.
+ * DELIBERATELY ONE EXACT FILE, anchored as `/chat/builtin-content.ts`: a broader
+ * pattern (`chat/**`, `builtin-*`) would quietly exempt files nobody decided to
+ * exempt — and an exemption that can grow on its own is how a rule dies.
  */
-const MODEL_PROMPT_FILE = /(^|\/)chat\/prompt\.ts$/;
+const BUILTIN_CONTENT_FILE = /(^|\/)chat\/builtin-content\.ts$/;
 
 const toPosix = (p) => p.split(sep).join(posix.sep);
 
@@ -185,13 +188,13 @@ export function isScopedSource(relFile, appsGroup = SOURCE_GROUPS[0]) {
 /**
  * True when a path is exempt from the rule: the i18n catalogs (the text belongs
  * there), test files / test fixture directories (they assert rendered text), and
- * the one temporary model-prompt file (prompt content, not interface copy — see
- * `MODEL_PROMPT_FILE` for why and for what removes it).
+ * the one temporary built-in-content file (world/prompt content, not interface
+ * copy — see `BUILTIN_CONTENT_FILE` for why and for what removes it).
  */
 export function isExemptPath(relFile) {
   const normalized = normalizeRelPath(relFile);
   if (CATALOG_DIR.test(normalized)) return true;
-  if (MODEL_PROMPT_FILE.test(normalized)) return true;
+  if (BUILTIN_CONTENT_FILE.test(normalized)) return true;
   const parts = normalized.split('/');
   if (parts.some((part) => TEST_DIR.test(part))) return true;
   return TEST_FILE.test(normalized);

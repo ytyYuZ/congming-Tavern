@@ -12,7 +12,10 @@
  * UNIQUE database name and closes it afterwards, so the order of the file cannot matter
  * and nothing leaks into another file.
  */
+/** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
+import { renderParts } from '@smarttavern/core';
+import { createTranslator } from '@smarttavern/i18n';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, resetDatabase } from '../db/database';
 import {
@@ -23,6 +26,10 @@ import {
   setHeadMessageId,
   writeProviderSettings,
 } from '../db/repository';
+import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
+import { useLocaleStore } from '../state/locale-store';
+import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
+import { clockOf, composeTurn, promptContext, promptSlots, worldClockText } from './clock';
 import { sendTurn } from './send-turn';
 
 /* ─────────────────────────────── the fake wire ───────────────────────────── */
@@ -185,6 +192,11 @@ beforeEach(() => {
   databases += 1;
   databaseName = `apps-web-send-turn-${databases}`;
   resetDatabase(databaseName);
+  // The prompt's own clock block is assembled by the engine and carries no locale,
+  // but the error sentences this file asserts DO come from the catalog. Pinning the
+  // language makes the assertions independent of whatever the host browser reports,
+  // the same thing `routes.test.tsx` does by writing the stored row.
+  useLocaleStore.setState({ locale: 'zh-CN', ready: true });
 });
 
 afterEach(async () => {
@@ -276,11 +288,21 @@ describe('sendTurn', () => {
     expect(stored?.refs.modelConfig.model).toBe(MODEL);
 
     // The request the adapter actually sent: the built-in assembly, and the key in the
-    // `Authorization` header only.
+    // `Authorization` header only. The shape is asserted RELATIVE TO THE END and the
+    // block count is derived from the preset, so adding a block to the built-in content
+    // is a data edit rather than a test edit — while "the input comes last and the
+    // preset's system blocks come first" stays pinned.
     const messages = wire.lastBody()?.messages ?? [];
-    expect(messages.map((message) => message.role)).toEqual(['system', 'user']);
+    const systemBlocks = BUILTIN_PRESET.blocks.filter(
+      (block) => block.enabled && block.position === 'pre_history',
+    ).length;
+    expect(messages).toHaveLength(systemBlocks + 1);
+    expect(messages.slice(0, systemBlocks).map((message) => message.role)).toEqual(
+      Array.from({ length: systemBlocks }, () => 'system'),
+    );
+    expect(messages.at(-1)?.role).toBe('user');
+    expect(messages.at(-1)?.content).toBe('第一句');
     expect(messages[0]?.content).toContain('世界：builtin-default');
-    expect(messages[1]?.content).toBe('第一句');
     expect(wire.lastAuthorization()).toBe(`Bearer ${API_KEY}`);
     expect(JSON.stringify(wire.lastBody())).not.toContain(API_KEY);
   });
@@ -299,15 +321,18 @@ describe('sendTurn', () => {
     );
 
     const messages = wire.lastBody()?.messages ?? [];
-    expect(messages.map((message) => message.role)).toEqual([
-      'system',
-      'user',
-      'assistant',
-      'user',
+    // Same relative shape: system blocks first, then the ACTIVE CHAIN, then this turn's
+    // input. Naming the messages by role+content is what keeps this readable once the
+    // preset contributes more than one system block.
+    const systemBlocks = BUILTIN_PRESET.blocks.filter(
+      (block) => block.enabled && block.position === 'pre_history',
+    ).length;
+    const tail = messages.slice(systemBlocks);
+    expect(tail.map((message) => `${message.role}:${message.content}`)).toEqual([
+      'user:第一次提问',
+      'assistant:第一次回答',
+      'user:第二次提问',
     ]);
-    expect(messages[1]?.content).toBe('第一次提问');
-    expect(messages[2]?.content).toBe('第一次回答');
-    expect(messages[3]?.content).toBe('第二次提问');
   });
 
   it('keeps the partial text when the stream is aborted, and marks it', async () => {
@@ -476,5 +501,110 @@ describe('sendTurn', () => {
     const contents = JSON.stringify(wire.lastBody()?.messages);
     expect(contents).toContain('保留的分支');
     expect(contents).not.toContain('被放弃的分支');
+  });
+});
+
+/* ─────────────── the two engines, actually wired into the app (M1) ────────────── */
+
+/**
+ * The app used to hand-assemble its wire messages (`chat/prompt.ts`, deleted). These
+ * four assertions are what makes the replacement real rather than merely compiled:
+ * the `TimeEngine`'s reading reaches the prompt, the `PromptComposer`'s slot fill
+ * leaves nothing unresolved, its over-budget branch REFUSES the turn instead of
+ * sending it, and the clock sentence follows the catalog while the world's own names
+ * do not (ADR-030's line between UI copy and content).
+ */
+describe('the engines are wired in', () => {
+  /**
+   * WHY THE EXPECTED VALUE IS THE EMPTY LIST: the composer keeps an unknown `{{...}}`
+   * VERBATIM (`engine/prompt/macros.ts`, deliberately), so a slot the app forgot to
+   * fill does not render as a blank — it ships a literal token to the model, and the
+   * model is asked about it. Every macro in the built-in content is either real
+   * (`{{date}}`, `{{time}}`, `{{segment}}`) or was supposed to be gone by this point,
+   * so "no unresolved macros" is the only correct reading.
+   */
+  it('leaves no unresolved macro in the built-in prompt', async () => {
+    const session = await createSession({ title: 'macro-session' });
+    const composed = composeTurn(
+      BUILTIN_PRESET,
+      promptContext(session, [], '第一句', clockOf(session)),
+      BUILTIN_BUDGET,
+      promptSlots(session),
+    );
+
+    expect(composed.unresolvedMacros).toEqual([]);
+    expect(composed.ok).toBe(true);
+  });
+
+  /**
+   * M1-T3, end to end: the world clock is in the request the adapter actually sends.
+   *
+   * `renderParts` is the engine's own data half, so on its own this would be circular
+   * (it would only prove the app can call the engine twice). The literals beside it are
+   * what make it a test: minute 0 of the built-in calendar is inside `晨` (0–6,
+   * `builtin-content.ts`), and the session's world pin is `builtin-default`. A reader
+   * can check both against the fixture.
+   */
+  it('puts the world clock into the request the adapter sends (M1-T3)', async () => {
+    const session = await createSession({ title: 'clock-session' });
+    const wire = fakeWire(() => sseResponse(['好']));
+
+    await sendTurn(
+      { config: CONFIG, transport: wire.fetch },
+      { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
+    );
+
+    const system = (wire.lastBody()?.messages ?? [])
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    expect(system).toContain(renderParts(clockOf(session)));
+    expect(system).toContain('晨');
+    expect(system).toContain('builtin-default');
+  });
+
+  /**
+   * The over-budget turn is REFUSED, and `wire.calls() === 0` is the assertion that
+   * matters: the composer's failure branch exists so that an over-budget request never
+   * leaves the device — a vendor rejects it anyway, so the round trip buys nothing and
+   * costs an error the user cannot act on. History is deliberately NOT a trim
+   * candidate (that is the MemoryManager's job), so one huge stored turn is enough to
+   * exhaust the budget with only `required` blocks left, and the error carries the
+   * numbers the banner needs.
+   */
+  it('refuses an over-budget turn instead of sending it', async () => {
+    const session = await createSession({ title: 'budget-session' });
+    const root = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: 'x'.repeat(40_000),
+    });
+    await setHeadMessageId(session.id, root.id);
+
+    const wire = fakeWire(() => sseResponse(['好']));
+    const result = await sendTurn(
+      { config: CONFIG, transport: wire.fetch },
+      { sessionId: session.id, text: '第二句', signal: new AbortController().signal },
+    );
+
+    expect(result.error?.code).toBe(PROMPT_BUDGET_CODE);
+    expect(wire.calls()).toBe(0);
+  });
+
+  /**
+   * The clock SENTENCE: the words around the reading come from the catalog, the world's
+   * own month and day-part names do not. Asserting the same clock in both locales is
+   * the cheapest way to pin ADR-030's line — if someone later "fixes" the missing
+   * translation of `晨` by routing it through `t(...)`, the English row changes and
+   * this fails.
+   */
+  it('translates the clock around the reading, not the reading itself', async () => {
+    const session = await createSession({ title: 'clock-text-session' });
+    const reading = clockOf(session);
+    const date = renderParts(reading);
+
+    expect(worldClockText(reading, createTranslator('zh-CN').t)).toBe(`当前 ${date}（晨）`);
+    expect(worldClockText(reading, createTranslator('en').t)).toBe(`Now ${date} (晨)`);
   });
 });

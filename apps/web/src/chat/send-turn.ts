@@ -1,6 +1,7 @@
 /**
- * One conversational turn: persist the user message, stream the answer, persist
- * the answer, advance the transcript tip (M0-T8).
+ * One conversational turn: persist the user message, compose the request through the
+ * prompt engine, stream the answer, persist the answer, advance the transcript tip
+ * (M0-T8; M1 integration routes assembly through M1-G4's `compose`).
  *
  * THE PARTIAL-TEXT POLICY (chosen here, documented here)
  * A turn that ends WITHOUT a terminal failure — `done` with any finish reason, or
@@ -21,6 +22,15 @@
  * persisted even when the request fails — it is what the user typed, and the
  * error banner is attached to the live turn's state, not to a row.
  *
+ * WHERE THE PROMPT COMES FROM (M1)
+ * `chat/prompt.ts` used to hand-assemble the wire messages because neither engine
+ * existed; it is deleted. The request is now `compose(preset, context, budget)`:
+ * the built-in preset and calendar (`chat/builtin-content.ts`), the context and the
+ * app-side `{slot}` fill (`chat/clock.ts`). The composer's `ok: false` branch is NOT
+ * thrown — an over-budget assembly is a fact the user can act on (docs/02 §5.1
+ * requires the numbers), so it is returned as `error` and `chat-store.ts` puts it in
+ * the banner. Nothing is sent and no assistant row is written.
+ *
  * WHERE THE KEY IS (HANDOFF §4.1 invariant 6)
  * It is read from `deps.config`, handed to `OpenAICompatibleProvider`'s
  * constructor and kept inside that closure. Nothing in this file logs, rethrows or
@@ -29,9 +39,9 @@
  * (the port's vocabulary), so the UI reads a stable code instead of parsing a
  * vendor sentence.
  */
-import type { ChatMessage, StreamEvent } from '@smarttavern/core';
+import type { ChatMessage, PromptBudget, StreamEvent } from '@smarttavern/core';
 import { type FetchLike, LLM_ERROR_CODES, OpenAICompatibleProvider } from '@smarttavern/providers';
-import type { Id, Message, Session } from '@smarttavern/schema';
+import type { Id, Message, PromptPreset, Session } from '@smarttavern/schema';
 import {
   appendMessage,
   getChain,
@@ -39,7 +49,9 @@ import {
   recordSessionModel,
   setHeadMessageId,
 } from '../db/repository';
-import { buildMessages } from './prompt';
+import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
+import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
+import { clockOf, composeTurn, promptContext, promptSlots } from './clock';
 
 /** Everything one turn needs, injected — this module reaches for no singleton. */
 export interface SendTurnDeps {
@@ -57,6 +69,16 @@ export interface SendTurnDeps {
    * any state layer (ADR-017).
    */
   onDelta?: (textSoFar: string) => void;
+  /**
+   * Preset override. Absent in the app — the built-in preset is used — and present in
+   * a test that has to drive a preset the app would never ship (a block that cannot
+   * fit its own `budget.share`, an empty preset). It is the smallest seam that makes
+   * the composer's trimming and its failure branch REACHABLE from a turn, which is
+   * what "the app really uses the engine" has to mean.
+   */
+  preset?: PromptPreset;
+  /** Budget override, for the same reason as `preset`. */
+  budget?: PromptBudget;
 }
 
 /**
@@ -76,9 +98,27 @@ export interface SendTurnResult {
   /** `Session.headMessageId` after the turn. */
   headMessageId: Id | null;
   /** Terminal failure, when one was reported. `error` events never throw. */
-  error: { code: string; message: string; retryable: boolean } | undefined;
+  error: SendTurnError | undefined;
   /** True when `signal` was aborted, whether or not text had arrived. */
   aborted: boolean;
+}
+
+/**
+ * A failure the caller must show.
+ *
+ * `detail` is the ONE extra field, and only a local (non-provider) failure uses it:
+ * the composer's budget numbers (`PromptBudgetError` carries the shortfall, the
+ * limit and the levers) are the whole value of that error, and the catalog sentence
+ * has a `{detail}` placeholder to receive them (ADR-019 keeps the code and the prose
+ * apart; this keeps the code and the NUMBERS apart). An adapter failure leaves it
+ * absent — its sentence is the provider's own, for logs, and the banner renders the
+ * catalog sentence for the code.
+ */
+export interface SendTurnError {
+  code: string;
+  message: string;
+  retryable: boolean;
+  detail?: string;
 }
 
 /**
@@ -89,8 +129,65 @@ export interface SendTurnResult {
  * Sampling is left to the provider defaults — M0 has no sampling UI, and inventing
  * values here would make the transcript's parameters unreproducible.
  */
-function turnRequest(model: string, messages: ChatMessage[]) {
-  return { model, messages, includeUsage: true };
+function turnRequest(model: string, messages: readonly ChatMessage[]) {
+  return { model, messages: [...messages], includeUsage: true };
+}
+
+/**
+ * The outcome of composing one turn's request — either the messages to send or the
+ * user-facing refusal. A named union rather than an inline object so `sendTurn`'s
+ * early return is checked by the compiler.
+ */
+type Composed =
+  | { readonly ok: true; readonly messages: readonly ChatMessage[] }
+  | { readonly ok: false; readonly error: SendTurnError };
+
+/**
+ * Build this turn's request through the prompt engine.
+ *
+ * WHY THE BUDGET COMES FROM `builtin-content.ts` UNLESS OVERRIDDEN: `ModelInfo`
+ * (`contextWindow`, `maxOutputTokens`) is the real source, and nothing in this app
+ * has one yet (`state/settings-store.ts` stores a model NAME), so the built-in
+ * budget is the documented default until a model picker exists.
+ */
+function composeRequest(
+  deps: SendTurnDeps,
+  session: Session,
+  chain: readonly Message[],
+  text: string,
+): Composed {
+  const result = composeTurn(
+    deps.preset ?? BUILTIN_PRESET,
+    promptContext(session, chain, text, clockOf(session)),
+    deps.budget ?? BUILTIN_BUDGET,
+    promptSlots(session),
+  );
+  if (result.ok) return { ok: true, messages: result.messages };
+  return { ok: false, error: budgetFailure(result.error) };
+}
+
+/**
+ * The composer's explicit over-budget failure, as a `SendTurnResult.error`.
+ *
+ * WHY IT IS TRANSLATED AT ALL: docs/02 §5.1 requires 明确报错并给出建议, and the
+ * suggestion is the actionable half. `error.message` is built here (not from a
+ * vendor) and goes to the log; the SCREEN renders `error.promptBudget`, whose
+ * `{detail}` is `error.detail`. The label is deliberately not a sentence about the
+ * prompt content: the numbers and the levers ARE the message.
+ */
+function budgetFailure(error: {
+  readonly code: 'budget-exceeded' | 'empty-budget';
+  readonly shortfall: number;
+  readonly limit: number;
+  readonly suggestion: string;
+}): SendTurnError {
+  const detail = `prompt ${error.code}: short by ${error.shortfall} tokens of ${error.limit}`;
+  return {
+    code: PROMPT_BUDGET_CODE,
+    message: `${detail}. ${error.suggestion}`,
+    retryable: false,
+    detail,
+  };
 }
 
 /**
@@ -105,7 +202,11 @@ export async function sendTurn(
   const session = await getSession(params.sessionId);
   if (session === undefined) throw new Error(`sendTurn: no session ${params.sessionId}`);
 
+  // Read BEFORE the new message is appended: the engine's `history` is the
+  // conversation so far, and the composer appends `input` itself.
   const chain = await getChain(params.sessionId);
+  const composed = composeRequest(deps, session, chain, params.text);
+
   const userMessage = await appendMessage({
     sessionId: session.id,
     parentId: session.headMessageId,
@@ -117,6 +218,19 @@ export async function sendTurn(
     provider: PROVIDER_ID,
     model: deps.config.model,
   });
+
+  if (!composed.ok) {
+    // Nothing was sent, so there is no draft and no assistant row. The user's own
+    // message stays persisted: it is what they typed, and the banner is attached to
+    // the live turn, not to a row.
+    return {
+      userMessage,
+      assistantMessage: undefined,
+      headMessageId: userMessage.id,
+      error: composed.error,
+      aborted: false,
+    };
+  }
 
   const provider = new OpenAICompatibleProvider({
     baseUrl: deps.config.baseUrl,
@@ -134,7 +248,7 @@ export async function sendTurn(
   };
 
   try {
-    const request = turnRequest(deps.config.model, buildMessages(session, chain, params.text));
+    const request = turnRequest(deps.config.model, composed.messages);
     for await (const event of provider.stream(request, params.signal)) {
       applyEvent(draft, event);
       // Report the arrival so the view can render it now; see `SendTurnDeps.onDelta`.
@@ -152,7 +266,7 @@ export async function sendTurn(
     };
   }
 
-  return finalize(deps, session, userMessage, draft, params.signal.aborted);
+  return recordOutcome(deps, session.id, userMessage, draft, params.signal.aborted);
 }
 
 /** The provider id recorded on the session. `OpenAICompatibleProvider.id` is per-host. */
@@ -163,7 +277,7 @@ interface TurnDraft {
   text: string;
   finishReason: string | undefined;
   usage: { input: number; output: number } | undefined;
-  error: { code: string; message: string; retryable: boolean } | undefined;
+  error: SendTurnError | undefined;
   /** A `tool-call` event arrived. M0 does not run tools; it records that one came. */
   sawToolCall: boolean;
 }
@@ -201,10 +315,14 @@ function applyEvent(draft: TurnDraft, event: StreamEvent): void {
 /**
  * Write the outcome. Split out of `sendTurn` so the policy above reads in one
  * place instead of being interleaved with the streaming loop.
+ *
+ * `sessionId` rather than the whole `Session`: the read at the start of the turn is
+ * stale by now (two writes have happened), so passing only the id removes the
+ * temptation to read anything else off it.
  */
-async function finalize(
+async function recordOutcome(
   deps: SendTurnDeps,
-  session: Session,
+  sessionId: Id,
   userMessage: Message,
   draft: TurnDraft,
   aborted: boolean,
@@ -223,7 +341,7 @@ async function finalize(
   }
 
   const assistantMessage = await appendMessage({
-    sessionId: session.id,
+    sessionId,
     parentId: userMessage.id,
     role: 'assistant',
     content: draft.text,
@@ -240,7 +358,7 @@ async function finalize(
       ...(draft.sawToolCall ? { 'x-saw-tool-call': true } : {}),
     },
   });
-  await setHeadMessageId(session.id, assistantMessage.id);
+  await setHeadMessageId(sessionId, assistantMessage.id);
 
   return {
     userMessage,
