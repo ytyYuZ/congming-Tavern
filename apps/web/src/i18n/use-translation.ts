@@ -33,9 +33,11 @@ import { translatorFor } from './translate';
 /**
  * The non-React lookups a view may also need (an event handler building a sentence, a
  * test asserting a catalog key). Re-exported here so a view has ONE import for language
- * things; the cycle-breaking reason they live in `i18n/translate.ts` is recorded there.
+ * things; the cycle-breaking reason the store-reading ones live in `i18n/translate.ts`
+ * and the browser's own preference in `i18n/browser-locale.ts` is recorded in each header.
  */
-export { browserLocale, currentLocale, translate, translatorFor } from './translate';
+export { browserLocale } from './browser-locale';
+export { currentLocale, translate, translatorFor } from './translate';
 
 export interface Translation {
   /** The catalog lookup for the active locale. Stable until the locale changes. */

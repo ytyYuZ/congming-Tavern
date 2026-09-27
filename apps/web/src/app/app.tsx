@@ -28,6 +28,12 @@
  * `LOCALE_LABELS` — each language's name IN ITS OWN LANGUAGE, deliberately never
  * translated (see `i18n/use-translation.ts`) — while the select's accessible name IS
  * translated, because a screen reader reads it in the active interface language.
+ *
+ * WHY THE APPEARANCE IS PROJECTED HERE TOO (M1-G2)
+ * `<App/>` is the ONE component every mount path goes through, so it is where both
+ * startup reads are started and where the appearance projection is mounted. The
+ * projection is a child element (`<AppearanceEffect/>`) rather than a hook called here,
+ * so its three store subscriptions cannot re-render the shell or the router tree.
  */
 import { isLocale } from '@smarttavern/i18n';
 import {
@@ -39,7 +45,9 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { type ChangeEvent, useEffect } from 'react';
+import { useAppearanceEffect } from '../appearance/use-appearance-effect';
 import { useTranslation } from '../i18n/use-translation';
+import { useAppearanceStore } from '../state/appearance-store';
 import { useLocaleStore } from '../state/locale-store';
 import { HomeRoute } from './routes/home';
 import { PlayRoute } from './routes/play';
@@ -160,26 +168,47 @@ export function createAppRouter(initialPath = '/') {
 }
 
 /**
+ * The appearance projection (M1-G2), isolated in a component that renders nothing.
+ *
+ * WHY IT IS A CHILD AND NOT A HOOK CALLED BY `<App/>`: `useAppearanceEffect` subscribes to
+ * the theme, the font scale and the message width, so whatever calls it re-renders on
+ * every step of a slider drag. Rendering it as a sibling of the router keeps that
+ * subscription — and those re-renders — out of the shell and the route tree.
+ */
+function AppearanceEffect() {
+  useAppearanceEffect();
+  return null;
+}
+
+/**
  * The root component. The router is INJECTED rather than built here so `mount.ts`
  * can await its first load before rendering — see the file header.
  *
- * WHY THE STORED LANGUAGE IS READ HERE AND NOT IN `mountApp`
- * Restoring the persisted preference is an app-startup concern, but `mount.ts` is only
+ * WHY THE STORED LANGUAGE AND APPEARANCE ARE READ HERE AND NOT IN `mountApp`
+ * Restoring the persisted preferences is an app-startup concern, but `mount.ts` is only
  * ONE of the ways `<App/>` is reached: a test renders it directly, and a future embedder
- * (the desktop shell's own frame, a storybook-style harness) would too. Putting the read
+ * (the desktop shell's own frame, a storybook-style harness) would too. Putting the reads
  * in a mount effect here covers EVERY path by construction, and it is how this app
  * already loads its other stores — a component effect calling `useXStore.getState()`.
- * The read only REFINES the store's constructed value (which is already a usable
- * language from `navigator.languages`), so it is safe for it to land after the first
- * paint; `state/locale-store.ts`'s `loadToken` is what makes it safe for it to land after
- * a user has already clicked the picker.
+ * Each read only REFINES the store's constructed value (which is already usable: a
+ * language from `navigator.languages`, an appearance of `system`/1/85), so it is safe for
+ * it to land after the first paint; `state/locale-store.ts`'s `loadToken` and the same
+ * guard in `state/appearance-store.ts` are what make it safe for it to land after a user
+ * has already moved a control.
  */
 export function App({ router }: { router: ReturnType<typeof createAppRouter> }) {
   const loadLocale = useLocaleStore((state) => state.load);
+  const loadAppearance = useAppearanceStore((state) => state.load);
 
   useEffect(() => {
     void loadLocale();
-  }, [loadLocale]);
+    void loadAppearance();
+  }, [loadLocale, loadAppearance]);
 
-  return <RouterProvider router={router} />;
+  return (
+    <>
+      <AppearanceEffect />
+      <RouterProvider router={router} />
+    </>
+  );
 }

@@ -48,6 +48,14 @@ import {
   type Session,
   SessionSchema,
 } from '@smarttavern/schema';
+import {
+  type FontScale,
+  type MessageWidth,
+  parseFontScale,
+  parseMessageWidth,
+  parseTheme,
+  type Theme,
+} from '../appearance/appearance';
 import { readTable, write } from './database';
 
 /* ─────────────────────────────── identifiers ─────────────────────────────── */
@@ -163,6 +171,78 @@ export async function readLocaleSetting(): Promise<Locale | undefined> {
 export async function writeLocaleSetting(locale: Locale): Promise<void> {
   await write(async (tx) => {
     const row: SettingsRow = { id: LOCALE_SETTINGS_ID, value: locale };
+    await settingsOf(tx).put(row);
+  });
+}
+
+/**
+ * The appearance rows (M1-G2, docs/06-开发任务拆解.md §2.1): `theme`, `fontScale` and
+ * `messageWidth`, each its OWN row for the reason the locale row gives below — and one
+ * more: a slider drag writes its row dozens of times, so the font scale must be able to
+ * change without rewriting the row that remembers the theme, and a corrupt font scale
+ * must not discard a perfectly good theme. One object per screen would couple three
+ * independent failures together.
+ *
+ * WHY THE FALLBACK IS APPLIED HERE AND NOWHERE ELSE
+ * `readLocaleSetting` returns `undefined` and lets `state/locale-store.ts` run the
+ * documented chain, because two of that chain's three steps need `navigator`, which this
+ * module must not reach for. The appearance fallback has no browser half — the default IS
+ * a constant in `appearance/appearance.ts` — so the honest place to apply it is the read:
+ * a caller cannot forget it, and a stored `'BLUE'`, `NaN` or `999` becomes `system` /
+ * `1` / `1.5` before it ever reaches the store. The parsers it uses are the same ones
+ * `state/appearance-store.ts` runs on its way IN, so a row this app writes is always a
+ * row this app can read.
+ */
+export const THEME_SETTINGS_ID = 'theme';
+
+/** The font-size row's id. See the block comment above for why it is its own row. */
+export const FONT_SCALE_SETTINGS_ID = 'fontScale';
+
+/** The message-width row's id. See the block comment above for why it is its own row. */
+export const MESSAGE_WIDTH_SETTINGS_ID = 'messageWidth';
+
+/** The stored theme preference; `system` when the row is missing or unusable. */
+export async function readThemeSetting(): Promise<Theme> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(THEME_SETTINGS_ID);
+  return parseTheme(row?.value);
+}
+
+/** Store the theme preference, exactly as given (a value the parser accepted). */
+export async function writeThemeSetting(theme: Theme): Promise<void> {
+  await write(async (tx) => {
+    const row: SettingsRow = { id: THEME_SETTINGS_ID, value: theme };
+    await settingsOf(tx).put(row);
+  });
+}
+
+/** The stored font-size multiplier, clamped into the documented band. */
+export async function readFontScaleSetting(): Promise<FontScale> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
+    FONT_SCALE_SETTINGS_ID,
+  );
+  return parseFontScale(row?.value);
+}
+
+/** Store the font-size multiplier, exactly as given (a value the clamp produced). */
+export async function writeFontScaleSetting(fontScale: FontScale): Promise<void> {
+  await write(async (tx) => {
+    const row: SettingsRow = { id: FONT_SCALE_SETTINGS_ID, value: fontScale };
+    await settingsOf(tx).put(row);
+  });
+}
+
+/** The stored bubble width in percent, clamped into the documented band. */
+export async function readMessageWidthSetting(): Promise<MessageWidth> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
+    MESSAGE_WIDTH_SETTINGS_ID,
+  );
+  return parseMessageWidth(row?.value);
+}
+
+/** Store the bubble width, exactly as given (a value the clamp produced). */
+export async function writeMessageWidthSetting(messageWidth: MessageWidth): Promise<void> {
+  await write(async (tx) => {
+    const row: SettingsRow = { id: MESSAGE_WIDTH_SETTINGS_ID, value: messageWidth };
     await settingsOf(tx).put(row);
   });
 }

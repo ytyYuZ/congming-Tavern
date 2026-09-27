@@ -1,5 +1,6 @@
 /*
- * The web shell's stylesheet (M0-T8) — plain CSS, no framework.
+ * The web shell's stylesheet (M0-T8; the appearance custom properties are M1-G2) —
+ * plain CSS, no framework.
  *
  * WHY NO CSS FRAMEWORK AND NO CSS-IN-JS
  * ADR-017 fixed the state layer, not the styling layer, and M0-T8's job is to prove
@@ -8,9 +9,26 @@
  * the whole design system, and M1 can replace this file wholesale without touching
  * a component.
  *
- * WHY `prefers-color-scheme` RATHER THAN A THEME TOGGLE
- * A theme setting is a second `settings` row and an M1 feature. Following the OS is
- * the honest default until there is somewhere to store a choice.
+ * WHY THE PALETTE IS SELECTED BY A MEDIA QUERY *AND* AN ATTRIBUTE (M1-G2)
+ * `document.documentElement`'s `data-theme` is written by `appearance/apply-appearance.ts`
+ * and holds a RESOLVED `light`/`dark` — never `system`. So the two dark blocks below
+ * answer two different moments:
+ *   • `@media (prefers-color-scheme: dark)` with `:root:not([data-theme="light"])` is the
+ *     FIRST-PAINT answer, before any JavaScript has run: a dark OS gets the dark palette
+ *     with no flash, which is exactly what makes `system` an honest default (and what the
+ *     feature's `appearance/appearance.ts` header says a browser can and cannot do).
+ *   • `:root[data-theme="dark"]` is the answer AFTER the row has been read, when there is
+ *     an explicit opinion. It has to beat the base `:root` light block, and it does:
+ *     (0,2,0) against (0,1,0).
+ * `:root[data-theme="light"]` needs no palette — the `:not()` above already stands the
+ * media query down — but it does pin `color-scheme`, so an explicit Light choice keeps
+ * form controls and scrollbars light on a dark desktop.
+ *
+ * THE DARK DECLARATIONS THEREFORE APPEAR TWICE, and plain CSS cannot share them: a
+ * selector list cannot contain an at-rule, and `light-dark()` would put the whole palette
+ * behind a function that an older WebView2 drops as an invalid value — taking `--bg` and
+ * every colour with it. The two blocks must stay byte-identical in their declarations;
+ * `appearance/app-css.test.ts` reads this file and fails if they drift.
  */
 
 :root {
@@ -29,7 +47,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #16171a;
     --surface: #1f2024;
     --text: #eceef2;
@@ -41,7 +59,31 @@
     --danger-text: #ffb4b4;
     --ok-bg: #16301f;
     --ok-text: #8fe0a9;
+    color-scheme: dark;
   }
+}
+
+/* The explicit dark choice. Identical declarations to the media block above, on purpose
+   — the comment at the top of this file explains why they cannot be shared. */
+:root[data-theme="dark"] {
+  --bg: #16171a;
+  --surface: #1f2024;
+  --text: #eceef2;
+  --muted: #9a9da8;
+  --line: #2e3036;
+  --accent: #8b74ff;
+  --accent-text: #12131a;
+  --danger-bg: #3a1d1d;
+  --danger-text: #ffb4b4;
+  --ok-bg: #16301f;
+  --ok-text: #8fe0a9;
+  color-scheme: dark;
+}
+
+/* The explicit light choice: no palette needed (see the header), only the hint that
+   native controls should not follow a dark OS while this attribute is set. */
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {
@@ -53,7 +95,17 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-  font-size: 15px;
+  /*
+   * The font scale is a MULTIPLIER, and the base size stays here: a reader of this file
+   * should not have to open a TypeScript module to learn that 1 means 15px.
+   *
+   * THE FALLBACK IS LOAD-BEARING (M1-G2): `var(--font-scale, 1)` is what a first paint
+   * with no store at all — no IndexedDB, no `appearance/apply-appearance.ts` run yet, a
+   * consumer embedding the shell — renders at. The app must be readable before any of its
+   * JavaScript has decided anything, so the defaults live in the CSS as well as in
+   * `appearance/appearance.ts`, and the exported bounds are what the two must agree on.
+   */
+  font-size: calc(15px * var(--font-scale, 1));
   line-height: 1.6;
 }
 
@@ -249,9 +301,15 @@ body {
   word-break: break-word;
 }
 
+/*
+ * The MESSAGE WIDTH setting (M1-G2) is a percentage of the transcript column, and the
+ * 85% fallback is the width M0 shipped: `appearance/appearance.ts` documents the 40–100
+ * band and the reason 85 is the default. Both bubbles read it, so the user/assistant
+ * asymmetry stays a matter of alignment rather than of width.
+ */
 .bubble-user {
   align-self: flex-end;
-  max-width: 85%;
+  max-width: var(--message-width, 85%);
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-text);
@@ -259,7 +317,7 @@ body {
 
 .bubble-assistant {
   align-self: flex-start;
-  max-width: 85%;
+  max-width: var(--message-width, 85%);
 }
 
 .composer {
@@ -280,4 +338,47 @@ body {
   border-radius: 0.5rem;
   background: var(--surface);
   color: var(--text);
+}
+
+/* --- the appearance section (M1-G2) -------------------------------------- */
+
+/*
+ * The setup screen's second section. A rule rather than a wrapper element separates it
+ * from the BYO-Key form, so the section keeps its own margins and can move to a screen
+ * of its own without a layout change.
+ */
+.appearance {
+  border-top: 1px solid var(--line);
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
+
+.appearance h2 {
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+/* A slider and its readout on one line: the number is what makes the effect legible, and
+   `min-width: 0` stops the flex item from overflowing the field on a narrow window. */
+.appearance-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* `.field input` gives text inputs their box; a range control wants none of it. */
+.appearance-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--accent);
+}
+
+.appearance-value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 3.5rem;
+  text-align: right;
 }

@@ -16,10 +16,11 @@
  * A first run therefore FOLLOWS THE BROWSER rather than defaulting to zh-CN: the picker
  * is a preference, not the only way to get an interface you can read. Step 1 is the
  * database's answer (`readLocaleSetting`, which owns the row and validates it with
- * `isLocale`); steps 2 and 3 are `i18n/translate.ts`'s `browserLocale()`, whose last
+ * `isLocale`); steps 2 and 3 are `i18n/browser-locale.ts`'s `browserLocale()`, whose last
  * resort is `DEFAULT_LOCALE`. The chain is assembled HERE because this module is the
- * first place allowed to know both the storage layer and the i18n layer — see that
- * function's header for the import cycle that keeps it that way.
+ * first place allowed to know both the storage layer and the i18n layer — and that
+ * function sits in a LEAF module rather than in `i18n/translate.ts` precisely so this
+ * import cannot close a cycle (`translate.ts` reads this store; see its header).
  *
  * WHY `setLocale` UPDATES STATE BEFORE AWAITING THE WRITE
  * The click and the switch must be one gesture. `await writeLocaleSetting(next)` first
@@ -35,7 +36,9 @@
  * Instead the switch STANDS (the user asked for it; reverting is a second, surprising
  * change) and `error` records the failure so a caller can surface it. The write is
  * idempotent and the preference is re-read on the next load, so a failed write costs
- * one reload's worth of preference, never a lost click.
+ * one reload's worth of preference, never a lost click. WHAT is recorded — the error's
+ * name, never its message — and why, lives in `state/write-error.ts`, which the
+ * appearance store uses too (one rule, one implementation).
  *
  * WHY THE PERSISTED READ IS TOKENISED (`loadToken`)
  * `load()` is asynchronous, and the picker is live while it is in flight. An
@@ -56,7 +59,8 @@
 import type { Locale } from '@smarttavern/i18n';
 import { create } from 'zustand';
 import { readLocaleSetting, writeLocaleSetting } from '../db/repository';
-import { browserLocale } from '../i18n/translate';
+import { browserLocale } from '../i18n/browser-locale';
+import { writeErrorName } from './write-error';
 
 /**
  * Which `load` is current. Bumped by everything that decides the locale on its own, so
@@ -117,34 +121,13 @@ export const useLocaleStore = create<LocaleState>((set) => ({
       await writeLocaleSetting(next);
       set({ error: undefined });
     } catch (cause) {
-      // The error's NAME only: a storage failure's message can quote the value that
-      // failed to store, and there is nothing in a locale write worth quoting. The check
-      // is structural rather than `instanceof Error` on purpose — a browser reports a
-      // failed IndexedDB write as a `DOMException`, which is not an `Error` subclass in
-      // every engine, and "which engine threw" is not something a diagnostic should
-      // depend on.
-      set({ error: errorName(cause) });
+      // The error's NAME only, and the reason is `state/write-error.ts`'s: a storage
+      // failure's message can quote the value that failed to store, and there is nothing
+      // in a locale write worth quoting.
+      set({ error: writeErrorName(cause, 'unknown locale write failure') });
     }
   },
 }));
-
-/**
- * The one field read off an unknown thrown value, spelled ONCE as a variable because
- * this workspace's two guards disagree about the literal form: `tsconfig` sets
- * `noPropertyAccessFromIndexSignature` (which rejects `record.name`) while Biome's
- * `useLiteralKeys` rejects `record['name']`. A PARAMETERISED key is the only spelling
- * both accept — the same conflict CONTRIBUTING.md §6 describes.
- */
-const ERROR_NAME_FIELD = 'name';
-
-/** An error's `name`, or a fixed label when the thrown value does not carry one. */
-function errorName(cause: unknown): string {
-  if (typeof cause === 'object' && cause !== null) {
-    const candidate: unknown = (cause as Record<string, unknown>)[ERROR_NAME_FIELD];
-    if (typeof candidate === 'string' && candidate !== '') return candidate;
-  }
-  return 'unknown locale write failure';
-}
 
 /** Test seam: forget everything this process loaded, exactly as the store started. */
 export function resetLocaleStore(): void {

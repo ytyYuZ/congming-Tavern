@@ -205,9 +205,18 @@ export function promptSlots(session: Session): Record<BuiltinSlot, string> {
  *
  * The slot fill happens HERE and not in `compose`, because the preset's `{slot}`
  * tokens are the app's own notation over the app's own session shape (see
- * `fillSlots`). Filling the block contents — rather than the composed messages —
- * keeps the argument text that macros expand to untouched: a slot value that
- * happened to contain `{{...}}` is filled in first, so it is data, never a macro.
+ * `fillSlots`). It is applied to the BLOCK CONTENTS rather than to the composed
+ * messages, because filling the composed text would mean editing text the macro
+ * expander had already produced.
+ *
+ * WHAT MAKES THAT SAFE IS THE VALUES, NOT THE ORDER: the fill lands BEFORE the macro
+ * pass, so a slot value that contained `{{...}}` WOULD be scanned and expanded like any
+ * other text — `engine/prompt/macros.ts` states exactly that as a deliberate rule, since
+ * the expander is a stateless text function and cannot tell a macro from a value that
+ * looks like one. Today's slots are ids and version numbers copied from the session's
+ * pins (`promptSlots`), so none of them can contain a brace. A future slot fed from FREE
+ * TEXT must escape or refuse `{{` before it is put in a slot; the ordering above is not
+ * what makes it data.
  */
 export function composeTurn(
   preset: PromptPreset,

@@ -60,7 +60,7 @@ export const zhCN = {
   'nav.language': '语言',
   'nav.settings': '设置',
 
-  /* ── setup: the BYO-Key screen, in the order the form is filled ──────────── */
+  /* ── setup: the BYO-Key screen, then the appearance section (M1-G2) ──────── */
   'setup.loading': '正在读取设置…',
   'setup.baseUrlLabel': '服务地址（Base URL）',
   /** The input's placeholder: an EXAMPLE value, not copy — same in both locales. */
@@ -84,6 +84,29 @@ export const zhCN = {
   /** `{status}`'s stand-in when no response arrived at all (the client fills it in). */
   'setup.statusUnknown': '未知状态',
   'setup.saved': '已保存',
+  /*
+   * THE APPEARANCE SECTION (M1-G2) — the theme / font-size / message-width controls
+   * that share the setup screen with the BYO-Key form.
+   *
+   * WHY `setup.` AND NOT AN `appearance.` AREA: the catalog's areas are a pinned list in
+   * order (`catalog.test.ts`), and a new area is a change to that test and to every
+   * `grep` a translator runs — for eight keys describing one screen. The keys are named
+   * after the screen they are on; they can move to their own area the day appearance
+   * gets a screen of its own.
+   */
+  'setup.appearanceTitle': '外观',
+  'setup.themeLabel': '主题',
+  /** The documented default: follow the operating system (`appearance/appearance.ts`). */
+  'setup.themeSystem': '跟随系统',
+  'setup.themeLight': '亮色',
+  'setup.themeDark': '暗色',
+  'setup.fontScaleLabel': '字号',
+  'setup.messageWidthLabel': '消息宽度',
+  /**
+   * The readout beside both sliders. `{percent}` is the value as a percentage, which is
+   * the unit the settings are stored and shown in (a multiplier `1.15` reads as `115%`).
+   */
+  'setup.percentValue': '{percent}%',
 
   /* ── home: the session list ─────────────────────────────────────────────── */
   'home.newSession': '新建会话',
@@ -204,6 +227,16 @@ export const en: Messages = {
   'setup.testHttpFailed': 'Connection failed: the server answered HTTP {status}',
   'setup.statusUnknown': 'unknown status',
   'setup.saved': 'Saved',
+
+  /* ── the appearance section (M1-G2), in the order the controls appear ───── */
+  'setup.appearanceTitle': 'Appearance',
+  'setup.themeLabel': 'Theme',
+  'setup.themeSystem': 'Match system',
+  'setup.themeLight': 'Light',
+  'setup.themeDark': 'Dark',
+  'setup.fontScaleLabel': 'Text size',
+  'setup.messageWidthLabel': 'Message width',
+  'setup.percentValue': '{percent}%',
 
   /* ── home ───────────────────────────────────────────────────────────────── */
   'home.newSession': 'New session',

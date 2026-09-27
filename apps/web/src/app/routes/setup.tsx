@@ -1,5 +1,6 @@
 /**
- * The BYO-Key setup view: endpoint, key, model, and 「测试连接」 (M0-T8).
+ * The BYO-Key setup view: endpoint, key, model, and 「测试连接」 (M0-T8), plus the
+ * appearance section — theme, font scale, message width — added by M1-G2.
  *
  * WHY react-hook-form + zodResolver
  * ADR-017 fixes the state layer, and this is the one screen with real input
@@ -29,10 +30,32 @@
  * `t` and memoised on it: a language switch rebuilds the RULES (with their sentences in
  * the new language) while react-hook-form keeps the values the user typed. A
  * module-level schema would have frozen the validation copy into one language.
+ *
+ * WHY THE APPEARANCE SECTION IS HERE AND NOT ON A ROUTE OF ITS OWN (M1-G2)
+ * This is the only settings screen the app has, and appearance is a setting: a second
+ * route would need a second link in the header for three controls. It is a SIBLING of
+ * the form rather than a field inside it, because the two are independent — the
+ * appearance store is a different store, and its controls must work on a first run where
+ * the provider row does not exist yet (the form's own loading gate is deliberately not
+ * applied to them). It therefore has its own `<section>` and its own heading.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useEffect, useMemo, useState } from 'react';
+import type { MessageKey } from '@smarttavern/i18n';
+import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import {
+  clampFontScale,
+  clampMessageWidth,
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
+  FONT_SCALE_STEP,
+  isTheme,
+  MESSAGE_WIDTH_MAX,
+  MESSAGE_WIDTH_MIN,
+  MESSAGE_WIDTH_STEP,
+  THEMES,
+  type Theme,
+} from '../../appearance/appearance';
 import {
   type ConnectionNote,
   connectionNote,
@@ -43,7 +66,21 @@ import {
 } from '../../chat/providers';
 import type { ProviderSettings } from '../../db/repository';
 import { useTranslation } from '../../i18n/use-translation';
+import { useAppearanceStore } from '../../state/appearance-store';
 import { useSettingsStore } from '../../state/settings-store';
+
+/**
+ * The theme options in picker order, each with the catalog key that names it.
+ *
+ * A `Record<Theme, MessageKey>` rather than three literals in the markup: adding a theme
+ * to `THEMES` then fails to compile until it has a sentence, which is the same guarantee
+ * the catalogs give each other.
+ */
+const THEME_LABEL_KEYS: Readonly<Record<Theme, MessageKey>> = {
+  system: 'setup.themeSystem',
+  light: 'setup.themeLight',
+  dark: 'setup.themeDark',
+};
 
 export function SetupRoute() {
   const { t } = useTranslation();
@@ -55,8 +92,108 @@ export function SetupRoute() {
     void load();
   }, [load]);
 
-  if (!loaded) return <p className="muted">{t('setup.loading')}</p>;
-  return <SetupForm stored={provider} />;
+  return (
+    <>
+      {loaded ? <SetupForm stored={provider} /> : <p className="muted">{t('setup.loading')}</p>}
+      <AppearanceSection />
+    </>
+  );
+}
+
+/**
+ * The three appearance controls (M1-G2).
+ *
+ * WHY IT READS THE STORE DIRECTLY AND DOES NOT LOAD IT
+ * `<App/>` already starts the appearance read on every mount (`app/app.tsx` records why
+ * one place is enough), and the store's constructed value is a complete, usable
+ * appearance — so this section renders immediately and never shows a spinner. The
+ * sliders are CONTROLLED by the store, which is what makes a change visible everywhere at
+ * once: `state/appearance-store.ts` updates its value before it awaits the write, and
+ * `appearance/use-appearance-effect.ts` projects it onto `<html>`.
+ */
+function AppearanceSection() {
+  const { t } = useTranslation();
+  const theme = useAppearanceStore((state) => state.theme);
+  const fontScale = useAppearanceStore((state) => state.fontScale);
+  const messageWidth = useAppearanceStore((state) => state.messageWidth);
+  const setTheme = useAppearanceStore((state) => state.setTheme);
+  const setFontScale = useAppearanceStore((state) => state.setFontScale);
+  const setMessageWidth = useAppearanceStore((state) => state.setMessageWidth);
+
+  const onThemeChange = (event: ChangeEvent<HTMLSelectElement>): void => {
+    const raw = event.target.value;
+    if (!isTheme(raw)) return;
+    // Not awaited: the store applies the theme immediately and reports a write failure
+    // through its own `error` field, so a slow write cannot stall the control
+    // (`state/appearance-store.ts` records why).
+    void setTheme(raw);
+  };
+
+  // A slider's event carries a STRING, and `Number('')` is 0 — which the bound turns into
+  // the lower edge rather than into `calc(15px * 0)`. A bound the CSS can use is the
+  // reason the clamp runs here and not only on the way back out of storage.
+  const onFontScaleChange = (event: ChangeEvent<HTMLInputElement>): void => {
+    void setFontScale(clampFontScale(Number(event.target.value)));
+  };
+
+  const onMessageWidthChange = (event: ChangeEvent<HTMLInputElement>): void => {
+    void setMessageWidth(clampMessageWidth(Number(event.target.value)));
+  };
+
+  return (
+    <section className="appearance" aria-labelledby="appearance-title">
+      <h2 id="appearance-title">{t('setup.appearanceTitle')}</h2>
+
+      <div className="field">
+        <label htmlFor="theme">{t('setup.themeLabel')}</label>
+        <select id="theme" value={theme} onChange={onThemeChange}>
+          {THEMES.map((option) => (
+            <option key={option} value={option}>
+              {t(THEME_LABEL_KEYS[option])}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <label htmlFor="fontScale">{t('setup.fontScaleLabel')}</label>
+        <div className="appearance-row">
+          {/* The bounds are the exported constants, so the control and the parser cannot
+              disagree about what is reachable (a test pins the attributes). */}
+          <input
+            id="fontScale"
+            type="range"
+            min={FONT_SCALE_MIN}
+            max={FONT_SCALE_MAX}
+            step={FONT_SCALE_STEP}
+            value={fontScale}
+            onChange={onFontScaleChange}
+          />
+          <span className="appearance-value">
+            {t('setup.percentValue', { percent: Math.round(fontScale * 100) })}
+          </span>
+        </div>
+      </div>
+
+      <div className="field">
+        <label htmlFor="messageWidth">{t('setup.messageWidthLabel')}</label>
+        <div className="appearance-row">
+          <input
+            id="messageWidth"
+            type="range"
+            min={MESSAGE_WIDTH_MIN}
+            max={MESSAGE_WIDTH_MAX}
+            step={MESSAGE_WIDTH_STEP}
+            value={messageWidth}
+            onChange={onMessageWidthChange}
+          />
+          <span className="appearance-value">
+            {t('setup.percentValue', { percent: Math.round(messageWidth) })}
+          </span>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function SetupForm({ stored }: { stored: ProviderSettings }) {

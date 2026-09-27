@@ -21,18 +21,18 @@
  * keep producing the old language forever, with no render to correct it. Reading
  * `useLocaleStore.getState()` per call is a property read and cannot go stale.
  *
- * WHY THE BROWSER PREFERENCE IS RESOLVED HERE AND NOT IN `db/repository.ts`
- * `resolveLocale` is the ONE place a fuzzy tag list becomes a supported locale, and a
- * reader's own list (`navigator.languages`) is presentation-adjacent, not storage. The
- * repository stores and returns exactly what the row holds; this module supplies the
- * browser's guess when it does not. Keeping the DOM-touching line in the UI layer also
- * means the storage module can be driven by a test with no `navigator` at all.
+ * WHY THE BROWSER PREFERENCE IS NOT RESOLVED HERE
+ * `browserLocale()` used to live in this file, and that put `state/locale-store.ts` in a
+ * cycle with it: this module reads the store, the store needed the browser's guess, so the
+ * store imported the layer that reads it. It now lives in `i18n/browser-locale.ts`, a leaf
+ * that imports only `@smarttavern/i18n` — that file's header records the incident (ADR-030's
+ * addendum) and the rule it produced: a module that reads the store must not be imported by
+ * the store. Anything else this module exports is above the store by definition.
  */
 import {
   createTranslator,
   type Locale,
   type MessageKey,
-  resolveLocale,
   type TranslateParams,
   type Translator,
 } from '@smarttavern/i18n';
@@ -68,21 +68,4 @@ export function currentLocale(): Locale {
  */
 export function translate(key: MessageKey, params?: TranslateParams): string {
   return translatorFor(currentLocale()).t(key, params);
-}
-
-/**
- * The browser's preferred locale, or `DEFAULT_LOCALE`.
- *
- * `navigator.languages` is read through a PARAMETERISED key on purpose: this workspace
- * compiles with `noPropertyAccessFromIndexSignature` (which rejects dot access on the
- * `Navigator` index signature) while Biome's `useLiteralKeys` rejects the literal
- * bracket form — the same spelling `db/repository.ts`'s `stringField` uses for the
- * identical conflict. A host without a `languages` list (a test process, a future
- * worker) falls through to `DEFAULT_LOCALE` instead of throwing.
- */
-export function browserLocale(): Locale {
-  const key = 'languages';
-  const candidate: unknown = typeof navigator === 'undefined' ? undefined : navigator[key];
-  if (!Array.isArray(candidate)) return resolveLocale([]);
-  return resolveLocale(candidate.filter((tag): tag is string => typeof tag === 'string'));
 }
