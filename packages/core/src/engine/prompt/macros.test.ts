@@ -45,6 +45,7 @@ describe('expandMacros — the registry', () => {
 
   it('registers exactly the names docs/02 §5.1 can serve from a context', () => {
     expect([...MACRO_NAMES].sort()).toEqual([
+      'addvar',
       'char',
       'date',
       'getvar',
@@ -183,6 +184,74 @@ describe('expandMacros — setvar is a report, not a write', () => {
     const expansion = expandMacros('[{{getvar::note}}]', context);
     expect(expansion.text).toBe('[]');
     expect(expansion.unresolved).toEqual([]);
+  });
+});
+
+/**
+ * `addvar` exists because of ADR-031: an increment needs its own name, since
+ * `{{setvar::hp::+3}}` cannot be told apart from assigning the literal string "+3".
+ * The refusals below are the load-bearing half — every one of them is a case where
+ * "helpfully" assuming 0 would put a value in the prompt that nobody wrote.
+ */
+describe('expandMacros — addvar adds, and refuses to invent a base', () => {
+  it('adds a positive and a negative delta and records the result', () => {
+    const context = deepFreeze(macroContext({ variables: { hp: 10, mood: '7' } }));
+    const expansion = expandMacros(
+      '{{addvar::hp::3}}{{addvar::hp::-4}}{{addvar::mood::1}}',
+      context,
+    );
+    // Two changes on one variable: the sink is an ordered log, not a final map, so a
+    // persister can replay it (and the frozen context still says 10 — see below).
+    expect(expansion.changes).toEqual([
+      { name: 'hp', value: '13' },
+      { name: 'hp', value: '6' },
+      { name: 'mood', value: '8' },
+    ]);
+    expect(expansion.unresolved).toEqual([]);
+    // The directive itself expands to nothing, and the context is untouched.
+    expect(expansion.text).toBe('');
+    expect(context.variables).toEqual({ hp: 10, mood: '7' });
+  });
+
+  it('adds to the value the context ARRIVED with, not to the one just recorded', () => {
+    // The same frozen-context rule `setvar` has: one block cannot chain its own writes.
+    const expansion = expandMacros('{{setvar::hp::100}}{{addvar::hp::1}}', macroContext());
+    expect(expansion.changes).toEqual([
+      { name: 'hp', value: '100' },
+      { name: 'hp', value: '11' },
+    ]);
+  });
+
+  it('keeps the macro visible when the base is not arithmetic', () => {
+    const missing = expandMacros('[{{addvar::nope::1}}]', macroContext());
+    const empty = expandMacros(
+      '[{{addvar::blank::1}}]',
+      macroContext({ variables: { blank: '' } }),
+    );
+    const words = expandMacros(
+      '[{{addvar::name::1}}]',
+      macroContext({ variables: { name: 'Aria' } }),
+    );
+    for (const expansion of [missing, empty, words]) {
+      expect(expansion.changes).toEqual([]);
+      // `unresolved` carries the RAW TOKEN, not the macro name — that is what makes a
+      // report actionable: it names the exact text to go and fix.
+      expect(expansion.unresolved).toHaveLength(1);
+    }
+    expect(missing.unresolved).toEqual(['{{addvar::nope::1}}']);
+    expect(missing.text).toBe('[{{addvar::nope::1}}]');
+  });
+
+  it('keeps the macro visible when the delta is not a number', () => {
+    const expansion = expandMacros('[{{addvar::hp::lots}}]', macroContext());
+    expect(expansion.unresolved).toEqual(['{{addvar::hp::lots}}']);
+    expect(expansion.changes).toEqual([]);
+  });
+
+  it('treats a malformed directive as unresolved rather than as a no-op', () => {
+    for (const source of ['{{addvar::hp}}', '{{addvar::}}', '{{addvar::hp::}}']) {
+      expect(expandMacros(source, macroContext()).unresolved).toEqual([source]);
+    }
   });
 });
 

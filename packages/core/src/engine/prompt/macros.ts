@@ -18,15 +18,26 @@
  *     (docs/06 §2.4 M3-R1). Expanding them to '' would silently delete a dice
  *     roll from a prompt and nobody would see it; leaving them in the text makes
  *     the gap readable in the assembled prompt.
- * The one expansion that IS deliberately empty is `{{setvar::…}}`: it is a
- * directive, not text, and dropping it from the sentence is the point. It is
- * therefore not reported as unresolved.
+ * The only expansions that ARE deliberately empty are the two write directives,
+ * `{{setvar::…}}` and `{{addvar::…}}`: they are instructions, not text, and dropping
+ * them from the sentence is the point. They are therefore not reported as unresolved.
+ *
+ * `setvar` ASSIGNS, `addvar` ADDS (ADR-031). The two names exist because a single
+ * `{{setvar::hp::+3}}` would be indistinguishable from the literal text `"+3"`: the
+ * macro would mean "assign the string +3" to one reader and "add 3" to the next, so
+ * the same preset would change behaviour between versions. `addvar` refuses anything
+ * that is not arithmetic — a non-numeric delta, or a variable that is absent, empty
+ * or non-numeric — and stays unresolved rather than treating the base as 0, because
+ * inventing a starting value is the same silent substitution this module refuses
+ * everywhere else.
  *
  * `setvar` DOES NOT MUTATE. The composer is pure, so the expander only records a
  * change through `MacroSink` (M1-S6 persists it). `{{getvar::name}}` therefore
  * still reads the value the context arrived with — a `setvar` earlier in the same
  * block does not make a later `getvar` see it. That is stated so the behaviour is
- * a contract rather than an accident of evaluation order.
+ * a contract rather than an accident of evaluation order. `addvar` reads through the
+ * same frozen context, so an `addvar` after a `setvar` in one block adds to the value
+ * the context arrived with, not to the one just recorded.
  *
  * SINGLE PASS, AND WHAT "IDEMPOTENT" MEANS HERE. The scanner walks the ORIGINAL
  * text and never rescans what it substituted, so a value that itself contains
@@ -209,6 +220,29 @@ const MACRO_TABLE: readonly (readonly [string, MacroExpander])[] = [
       if (name.length === 0 || args.length < 2) return undefined;
       const value = args.slice(1).join(ARG_SEPARATOR);
       sink.setVariable(name, value);
+      return '';
+    },
+  ],
+  [
+    'addvar',
+    (args, context, sink) => {
+      const name = (args[0] ?? '').trim();
+      if (name.length === 0 || args.length < 2) return undefined;
+      const deltaText = args.slice(1).join(ARG_SEPARATOR).trim();
+      // `Number('')` is 0 and `Number(' ')` is 0: an empty delta is not "add nothing",
+      // it is a malformed directive, and treating it as 0 would hide the typo.
+      if (deltaText.length === 0) return undefined;
+      const delta = Number(deltaText);
+      if (!Number.isFinite(delta)) return undefined;
+      const current = readVariable(context, name);
+      // Absent OR empty is not 0. See the header: the base is never invented.
+      if (current === undefined || current.trim().length === 0) return undefined;
+      const base = Number(current.trim());
+      if (!Number.isFinite(base)) return undefined;
+      // `String` of a JS number is decimal for every value a game counter reaches; it
+      // switches to exponential notation around 1e21 and below 1e-6, which is far
+      // outside what a variable holds and would be a data problem, not a macro one.
+      sink.setVariable(name, String(base + delta));
       return '';
     },
   ],
