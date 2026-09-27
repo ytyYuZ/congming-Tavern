@@ -1,0 +1,106 @@
+/**
+ * `stpack` entry point: `parseArgs` → subcommand → exit code.
+ *
+ * Argument parsing uses Node's built-in `node:util` `parseArgs` (`docs/06` §8.3):
+ * zero dependencies, and it is strict enough that a typo'd flag fails instead of
+ * being ignored. `main()` never calls `process.exit` and never touches
+ * `process.argv` — the runnable wrapper (`../bin/stpack.mjs`) does both, which is
+ * what makes every subcommand testable.
+ */
+import { parseArgs } from 'node:util';
+import {
+  type CommonOptions,
+  EXIT,
+  runInspect,
+  runUnpack,
+  runValidate,
+  type UnpackOptions,
+} from './commands';
+import { type CliIo, defaultCliIo } from './format';
+
+export const USAGE = `stpack — inspect, validate and unpack .stpack packages
+
+Usage:
+  stpack validate <file>          check a package, exit 1 if it is not importable
+  stpack inspect  <file>          print the manifest summary and the content list
+  stpack unpack   <file> <dir>    extract a package into <dir> (manifest first)
+
+Options:
+  --json     machine-readable output on stdout
+  --force    unpack: overwrite files that already exist
+  -h, --help show this message
+
+Exit codes: 0 ok · 1 invalid package · 2 usage · 3 I/O`;
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+export async function main(argv: readonly string[], io: CliIo = defaultCliIo): Promise<number> {
+  let values: { json?: boolean; force?: boolean; help?: boolean };
+  let positionals: string[];
+
+  try {
+    const parsed = parseArgs({
+      args: [...argv],
+      allowPositionals: true,
+      strict: true,
+      options: {
+        json: { type: 'boolean', default: false },
+        force: { type: 'boolean', default: false },
+        help: { type: 'boolean', short: 'h', default: false },
+      },
+    });
+    values = parsed.values;
+    positionals = parsed.positionals;
+  } catch (cause) {
+    io.err(`stpack: ${messageOf(cause)}`);
+    io.err(USAGE);
+    return EXIT.usage;
+  }
+
+  if (values.help === true) {
+    io.out(USAGE);
+    return EXIT.ok;
+  }
+
+  const command = positionals[0];
+  if (command === undefined) {
+    io.err(USAGE);
+    return EXIT.usage;
+  }
+
+  const options: CommonOptions = { json: values.json === true };
+  const file = positionals[1];
+
+  switch (command) {
+    case 'validate': {
+      if (file === undefined) {
+        io.err('stpack: validate needs a <file>');
+        return EXIT.usage;
+      }
+      return runValidate(file, options, io);
+    }
+    case 'inspect': {
+      if (file === undefined) {
+        io.err('stpack: inspect needs a <file>');
+        return EXIT.usage;
+      }
+      return runInspect(file, options, io);
+    }
+    case 'unpack': {
+      const target = positionals[2];
+      if (file === undefined || target === undefined) {
+        io.err('stpack: unpack needs a <file> and a <dir>');
+        return EXIT.usage;
+      }
+      const unpackOptions: UnpackOptions = { ...options, force: values.force === true };
+      return runUnpack(file, target, unpackOptions, io);
+    }
+    default: {
+      io.err(`stpack: unknown command ${JSON.stringify(command)}`);
+      io.err(USAGE);
+      return EXIT.usage;
+    }
+  }
+}
