@@ -70,17 +70,22 @@ describe('StreamEvent (docs/02 §6)', () => {
     const capabilities: ProviderCapabilities = {
       tools: true,
       structuredOutput: true,
-      vision: false,
       streaming: true,
-      tokenCounting: false,
+      // ADR-020: usage reporting and offline counting are separate capabilities,
+      // because the old single `tokenCounting` flag meant both and a caller that
+      // read it the other way crashed on `countTokens!`.
+      reportsUsage: false,
     };
     expect(Object.keys(capabilities).sort()).toEqual([
+      'reportsUsage',
       'streaming',
       'structuredOutput',
-      'tokenCounting',
       'tools',
-      'vision',
     ]);
+    // ADR-021: no `vision` flag — `ChatMessage.content` is a plain string, so it
+    // could never be `true`, and a flag that can only lie is worse than none.
+    expect(Object.keys(capabilities)).not.toContain('vision');
+    expect(Object.keys(capabilities)).not.toContain('tokenCounting');
     // `reasoning` is an addition (docs/02 §6 does not list it): a provider that
     // emits `reasoning-delta` needs to be able to say so.
     expect<ProviderCapabilities>({ ...capabilities, reasoning: true }).toEqual({

@@ -18,7 +18,16 @@
  * job.
  */
 import type { Id } from '@smarttavern/schema';
-import type { Collection, CollectionName, Query, RowBase, StorageAdapter, Tx } from '../storage';
+import {
+  type Collection,
+  type CollectionName,
+  type Query,
+  RANGE_FIELD_REQUIRED_MESSAGE,
+  type RowBase,
+  type StorageAdapter,
+  StorageQueryError,
+  type Tx,
+} from '../storage';
 import { cloneValue, createIdMinter } from './_support';
 
 /** Collection name -> rows, in insertion order. */
@@ -121,9 +130,16 @@ class MockCollection<T extends RowBase> implements Collection<T> {
     }
 
     if (query?.from !== undefined || query?.to !== undefined) {
-      // The range field is named explicitly. Falling back to the first `where`
-      // key would silently range-scan the wrong column on a compound index.
-      const field = query.field ?? Object.keys(query.where ?? {})[0] ?? 'id';
+      // A range needs its field named. The old behaviour guessed — the first
+      // `where` key, else `id` — which silently range-scanned the wrong column and
+      // could answer an empty array for a reasonable-looking query. ADR-023 turns
+      // that into a refusal, and `packages/storage` does the same.
+      const field = query.field;
+      if (field === undefined) {
+        // The sentence is owned by the port, so the mock, the adapter and the tests
+        // cannot drift apart (ADR-023).
+        throw new StorageQueryError(RANGE_FIELD_REQUIRED_MESSAGE, query);
+      }
       rows = rows.filter((row) => {
         const value = asRecord(row)[field];
         if (value === undefined) return false;

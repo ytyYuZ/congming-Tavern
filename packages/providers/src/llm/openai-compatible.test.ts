@@ -8,12 +8,18 @@
  * - the chunk -> `StreamEvent` mapping, including fragments, comments and a
  *   frame split across two writes;
  * - the four error mappings of §9.2 with their `retryable` value, plus the
- *   non-SSE JSON error body a gateway returns with a 200;
+ *   machine facts the port now carries (`status`, `retryAfterMs`, `providerCode`,
+ *   `details` — ADR-019) and the non-SSE JSON error body a gateway returns
+ *   with a 200;
+ * - `done.finishReason`: the modelled values verbatim, everything else as
+ *   `x-<reason>` (ADR-019);
  * - cancellation: abort mid-stream yields exactly what was delivered and stops,
  *   a pre-aborted signal yields nothing and sends no request;
- * - `listModels()` never throws;
- * - HANDOFF §4.1 invariant 6: the key appears in no event and no thrown error,
- *   even when the provider echoes it back inside an error body.
+ * - `listModels()` never throws and never hangs, including when its signal
+ *   aborts (ADR-020);
+ * - HANDOFF §4.1 invariant 6: the key appears in no event — `message` or
+ *   `details` — and no thrown error, even when the provider echoes it back
+ *   inside an error body.
  */
 import {
   createServer,
@@ -207,12 +213,15 @@ describe('OpenAICompatibleProvider identity', () => {
       apiKey: '',
       model: 'whatever',
     });
+    // There is no `vision` key to assert (ADR-021) and no `countsTokensOffline`
+    // one either: this adapter deliberately does not implement `countTokens`, and
+    // the port's rule is that the optional flag is ABSENT in that case rather
+    // than `false`. `toEqual` on the whole object is what pins both.
     expect(custom.capabilities).toEqual({
       streaming: true,
       tools: false,
       structuredOutput: false,
-      vision: false,
-      tokenCounting: false,
+      reportsUsage: false,
       reasoning: false,
     });
   });
@@ -227,10 +236,25 @@ describe('OpenAICompatibleProvider identity', () => {
       streaming: true,
       tools: true,
       structuredOutput: true,
-      vision: false,
-      tokenCounting: true,
+      reportsUsage: true,
       reasoning: true,
     });
+  });
+
+  it('splits "reports usage" from "counts offline" (ADR-020)', () => {
+    // The old `tokenCounting` flag meant both things at once, so a caller that
+    // read it as the second crashed on `countTokens!`. This adapter reports
+    // usage and has no tokenizer, and the two facts are now two fields.
+    const openai = new OpenAICompatibleProvider({
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      model: 'gpt-4o-mini',
+    });
+    expect(openai.capabilities.reportsUsage).toBe(true);
+    expect(openai.capabilities.countsTokensOffline).toBeUndefined();
+    // The class declares no `countTokens` at all, so an `in` check is the honest
+    // way to assert its absence — the port marks the method optional.
+    expect('countTokens' in openai).toBe(false);
   });
 
   it('appends /v1 only to a bare host', () => {
@@ -359,6 +383,52 @@ describe('streaming translation', () => {
     ]);
   });
 
+  it('keeps a vendor finish reason it does not model as `x-<reason>` (ADR-019)', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveFrames(response, [
+        deltaFrame('cut short'),
+        // An Anthropic-flavoured gateway behind an OpenAI-shaped facade.
+        frame({ choices: [{ index: 0, delta: {}, finish_reason: 'max_tokens' }] }),
+        frame('[DONE]'),
+      ]),
+    );
+    expect(await run(providerFor(server))).toEqual([
+      { type: 'text-delta', text: 'cut short' },
+      // Flattening this to `stop` would tell the runtime the model finished its
+      // thought when it was actually truncated.
+      { type: 'done', finishReason: 'x-max_tokens' },
+    ]);
+  });
+
+  it('passes the modelled finish reasons through unchanged', async () => {
+    for (const reason of ['length', 'stop', 'tool_calls'] as const) {
+      const server = await startFakeServer((_request, response) =>
+        serveFrames(response, [
+          frame({ choices: [{ index: 0, delta: { content: 'x' }, finish_reason: reason }] }),
+          frame('[DONE]'),
+        ]),
+      );
+      expect((await run(providerFor(server))).at(-1)).toEqual({
+        type: 'done',
+        finishReason: reason,
+      });
+    }
+  });
+
+  it('maps a vendor finish reason on the non-streamed JSON path too', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveJson(response, 200, {
+        choices: [
+          { index: 0, message: { role: 'assistant', content: 'cut' }, finish_reason: 'eos' },
+        ],
+      }),
+    );
+    expect((await run(providerFor(server))).at(-1)).toEqual({
+      type: 'done',
+      finishReason: 'x-eos',
+    });
+  });
+
   it('translates a whole (non-streamed) completion instead of passing text through', async () => {
     const server = await startFakeServer((_request, response) =>
       serveJson(response, 200, {
@@ -460,28 +530,110 @@ describe('failure classification', () => {
       const events = await run(providerFor(server));
 
       expect(events).toHaveLength(2);
-      expect(events[0]).toMatchObject({ type: 'error', code, retryable });
+      // ADR-019: the status is a field now, not a fragment of the sentence.
+      expect(events[0]).toMatchObject({ type: 'error', code, retryable, status });
       // `ports/llm.ts`: an adapter that emits `error` must still terminate.
       expect(events[1]).toEqual({ type: 'done', finishReason: 'error' });
     });
   }
 
-  it('surfaces Retry-After from a 429', async () => {
+  it('carries Retry-After as `retryAfterMs`, not as prose (ADR-019)', async () => {
     const server = await startFakeServer((_request, response) =>
       serveJson(response, 429, { error: { message: 'slow down' } }, { 'retry-after': '30' }),
     );
     const [error] = await run(providerFor(server));
-    expect(error).toMatchObject({ code: LLM_ERROR_CODES.rateLimit, retryable: true });
-    expect(JSON.stringify(error)).toContain('retry-after 30s');
+
+    expect(error).toMatchObject({
+      type: 'error',
+      code: LLM_ERROR_CODES.rateLimit,
+      retryable: true,
+      status: 429,
+      retryAfterMs: 30_000,
+    });
   });
 
-  it('surfaces Retry-After given as an HTTP date', async () => {
+  it('parses Retry-After given as an HTTP date into milliseconds', async () => {
     const at = new Date(Date.now() + 5000).toUTCString();
     const server = await startFakeServer((_request, response) =>
       serveJson(response, 429, { error: { message: 'slow down' } }, { 'retry-after': at }),
     );
     const [error] = await run(providerFor(server));
-    expect(JSON.stringify(error)).toMatch(/retry-after [0-5]s/);
+
+    const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs ?? -1;
+    // The HTTP-date form is second-resolution, so the exact value depends on
+    // when the server rendered the header; the window is what matters.
+    expect(retryAfterMs).toBeGreaterThan(3500);
+    expect(retryAfterMs).toBeLessThanOrEqual(5000);
+    expect(error).toMatchObject({ status: 429 });
+  });
+
+  it('keeps an unusable Retry-After out of the event rather than guessing', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveJson(
+        response,
+        429,
+        { error: { message: 'slow down' } },
+        { 'retry-after': 'whenever you feel like it' },
+      ),
+    );
+    const [error] = await run(providerFor(server));
+
+    expect(error).toMatchObject({ code: LLM_ERROR_CODES.rateLimit, status: 429 });
+    expect(error).not.toHaveProperty('retryAfterMs');
+  });
+
+  it('carries the vendor code and the vendor error object in `details`', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveJson(response, 401, {
+        error: {
+          message: 'Incorrect API key provided',
+          type: 'invalid_request_error',
+          code: 'invalid_api_key',
+          param: null,
+        },
+      }),
+    );
+    const [error] = await run(providerFor(server));
+
+    expect(error).toMatchObject({
+      type: 'error',
+      code: LLM_ERROR_CODES.auth,
+      retryable: false,
+      status: 401,
+      // `code` wins over `type`, because that is the field OpenAI's own docs
+      // call the error's code and the one a caller is most likely to match on.
+      providerCode: 'invalid_api_key',
+      details: {
+        message: 'Incorrect API key provided',
+        type: 'invalid_request_error',
+        code: 'invalid_api_key',
+        param: null,
+      },
+    });
+  });
+
+  it('falls back to the vendor `type` when there is no code', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveJson(response, 400, { error: { type: 'invalid_request_error' } }),
+    );
+    const [error] = await run(providerFor(server));
+
+    expect(error).toMatchObject({ providerCode: 'invalid_request_error', status: 400 });
+  });
+
+  it('carries a non-JSON error body as `details` instead of losing it', async () => {
+    const server = await startFakeServer((_request, response) => {
+      response.writeHead(503, { 'content-type': 'text/plain' });
+      response.end('upstream is having a bad day');
+    });
+    const [error] = await run(providerFor(server));
+
+    expect(error).toMatchObject({
+      code: LLM_ERROR_CODES.network,
+      status: 503,
+      details: 'upstream is having a bad day',
+    });
+    expect(error).not.toHaveProperty('providerCode');
   });
 
   it('reports a rejected fetch as a retryable network failure', async () => {
@@ -499,6 +651,9 @@ describe('failure classification', () => {
       }),
       { type: 'done', finishReason: 'error' },
     ]);
+    // No response was ever received, so there is no status to report.
+    const [error] = await run(provider);
+    expect(error).not.toHaveProperty('status');
   });
 
   it('reports a body that dies mid-stream as a retryable network failure', async () => {
@@ -543,14 +698,53 @@ describe('failure classification', () => {
     ]);
   });
 
+  it('carries the vendor payload of an in-stream error object too (ADR-019)', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveFrames(response, [
+        frame({
+          error: { message: 'engine overloaded', type: 'server_error', code: 'engine_overloaded' },
+        }),
+      ]),
+    );
+    const [error] = await run(providerFor(server));
+
+    expect(error).toMatchObject({
+      type: 'error',
+      code: LLM_ERROR_CODES.network,
+      retryable: true,
+      // The HTTP request really was a 200; the vendor put its failure in the
+      // body instead. Reporting 200 is the honest reading. ADR-019.
+      status: 200,
+      providerCode: 'engine_overloaded',
+      details: { message: 'engine overloaded', type: 'server_error', code: 'engine_overloaded' },
+    });
+  });
+
+  it('picks up Retry-After from a 200 that carries an error object', async () => {
+    const server = await startFakeServer((_request, response) => {
+      response.writeHead(200, { ...SSE_HEADERS, 'retry-after': '12' });
+      response.write(
+        frame({ error: { message: 'the engine is saturated', code: 'engine_overloaded' } }),
+      );
+      response.end();
+    });
+    const [error] = await run(providerFor(server));
+
+    expect(error).toMatchObject({ status: 200, retryAfterMs: 12_000 });
+  });
+
   it('never passes a non-SSE JSON error body through as text', async () => {
     const server = await startFakeServer((_request, response) =>
       serveJson(response, 400, { error: { message: 'invalid api key' } }),
     );
     const [error] = await run(providerFor(server));
 
-    expect(error).toMatchObject({ type: 'error', code: LLM_ERROR_CODES.auth });
+    expect(error).toMatchObject({ type: 'error', code: LLM_ERROR_CODES.auth, status: 400 });
     expect((error as { message: string }).message).not.toContain('{"error"');
+    // …but the parsed body is still handed over, structurally (ADR-019): the
+    // point is that the caller does not have to parse the sentence, not that
+    // the vendor's words are hidden.
+    expect(error).toMatchObject({ details: { message: 'invalid api key' } });
   });
 
   it('classifies a JSON error body returned with HTTP 200', async () => {
@@ -677,6 +871,20 @@ describe('listModels', () => {
     expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${SECRET}`);
   });
 
+  it('leaves per-model capabilities empty, because the wire carries none (ADR-020)', async () => {
+    // `ModelInfo.capabilities` exists so a provider that can tell its models
+    // apart says so. `GET /v1/models` returns ids and context windows and
+    // nothing else, so every entry here has to be the provider-level answer —
+    // inventing `{ tools: true }` for `gpt-4o` would be a guess, and a wrong
+    // guess makes the engine take a ladder path the model cannot honour.
+    const server = await startFakeServer((_request, response) =>
+      serveJson(response, 200, { data: [{ id: 'alpha' }, { id: 'beta' }] }),
+    );
+    for (const model of await providerFor(server).listModels()) {
+      expect(model.capabilities).toBeUndefined();
+    }
+  });
+
   it('falls back to built-in candidates instead of throwing', async () => {
     const server = await startFakeServer((_request, response) =>
       serveJson(response, 500, { error: { message: 'boom' } }),
@@ -700,6 +908,67 @@ describe('listModels', () => {
       serveJson(response, 200, { unexpected: true }),
     );
     expect((await providerFor(server).listModels()).map((model) => model.id)).toContain(
+      'test-model',
+    );
+  });
+
+  it('forwards its signal to the transport', async () => {
+    let sawSignal: AbortSignal | null | undefined;
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: 'https://llm.example.test/v1',
+      apiKey: SECRET,
+      model: 'test-model',
+      fetch: (_url, init) => {
+        sawSignal = init.signal;
+        return Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'alpha' }] })));
+      },
+    });
+
+    const controller = new AbortController();
+    expect(await provider.listModels(controller.signal)).toEqual([{ id: 'alpha' }]);
+    // The port's optional signal is only worth having if it reaches the socket.
+    expect(sawSignal).toBe(controller.signal);
+  });
+
+  it('returns the offline candidates instead of hanging when aborted', async () => {
+    // A gateway that accepts the connection and never answers: without the
+    // signal this promise never settles, which is the hang ADR-020 existed to
+    // stop. "Never throws, never hangs" resolves to the same offline list a
+    // dead gateway produces, because the caller that aborted already gave up.
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: 'http://127.0.0.1:1/v1',
+      apiKey: SECRET,
+      model: 'hand-typed-model',
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    });
+
+    const controller = new AbortController();
+    const pending = provider.listModels(controller.signal);
+    controller.abort();
+
+    // `http://127.0.0.1:1` matches the local-runtime profile, so the offline
+    // answer is the configured model followed by that profile's well-known ids.
+    expect(await pending).toEqual([
+      { id: 'hand-typed-model' },
+      { id: 'llama3.2' },
+      { id: 'qwen2.5' },
+      { id: 'local-model' },
+    ]);
+  });
+
+  it('returns the offline candidates for a signal that was already aborted', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveJson(response, 200, { data: [{ id: 'alpha' }] }),
+    );
+    const controller = new AbortController();
+    controller.abort();
+
+    // A real `fetch` rejects such a request before opening a socket; either
+    // path must end in the candidate list rather than an exception.
+    expect((await providerFor(server).listModels(controller.signal)).map((m) => m.id)).toContain(
       'test-model',
     );
   });
@@ -739,8 +1008,17 @@ describe('request translation', () => {
         },
       ],
       responseSchema: { type: 'object' },
-      sampling: { temperature: 0.7, topP: 0.9, maxTokens: 128, topK: 40, stop: ['\n\n'] },
-      reasoningEffort: 'low',
+      sampling: {
+        temperature: 0.7,
+        topP: 0.9,
+        maxTokens: 128,
+        topK: 40,
+        stop: ['\n\n'],
+        // `reasoningEffort` lives in `sampling` and ONLY there (ADR-020): the
+        // port deleted `ChatRequest.reasoningEffort` because two spellings of
+        // one thing mean one silently wins. `tsc` would reject the old field.
+        reasoningEffort: 'low',
+      },
       includeUsage: true,
     };
 
@@ -822,6 +1100,29 @@ describe('request translation', () => {
     await run(providerFor(server, { apiKey: '' }));
     expect(server.requests[0]?.headers.authorization).toBeUndefined();
   });
+
+  it('reads reasoning effort from `sampling`, and nowhere else', async () => {
+    const server = await startFakeServer((_request, response) =>
+      serveFrames(response, [frame('[DONE]')]),
+    );
+    // A caller built against the OLD port, which had a top-level field. The
+    // adapter must not honour it: ADR-020 chose one spelling, and "the other
+    // one also works" is how the two drifted apart in the first place.
+    const legacy = {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+      reasoningEffort: 'low',
+    } as unknown as ChatRequest;
+    await run(providerFor(server), legacy);
+    expect(JSON.parse(server.requests[0]?.body ?? '{}')).not.toHaveProperty('reasoning_effort');
+
+    await run(providerFor(server), {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+      sampling: { reasoningEffort: 'high' },
+    });
+    expect(JSON.parse(server.requests[1]?.body ?? '{}').reasoning_effort).toBe('high');
+  });
 });
 
 /* ──────────────────────── the key must not leak ──────────────────────────── */
@@ -866,6 +1167,50 @@ describe('the API key never leaks (HANDOFF §4.1 invariant 6)', () => {
       'JSON error body with a 200',
       (response) => serveJson(response, 200, { error: { message: `bad key ${SECRET}` } }),
     ],
+    // `details` is the field most likely to carry a vendor echo of the key, so
+    // the next four paths leak it somewhere OTHER than the human message:
+    // whoever remembers to redact one string and not the structured value fails
+    // here, and the fifth path proves an empty body has nothing to leak.
+    [
+      'vendor code in `details`',
+      (response) => serveJson(response, 401, { error: { message: 'bad key', code: SECRET } }),
+    ],
+    [
+      'vendor type in `details`',
+      (response) =>
+        serveJson(response, 401, { error: { message: 'bad key', type: `Bearer ${SECRET}` } }),
+    ],
+    [
+      'nested vendor field in `details`',
+      (response) =>
+        serveJson(response, 500, {
+          error: { message: 'upstream said no', innererror: { authorization: SECRET } },
+        }),
+    ],
+    [
+      'non-JSON error body in `details`',
+      (response) => {
+        // A proxy that echoes the header it received, as plain text.
+        response.writeHead(502, { 'content-type': 'text/plain' });
+        response.end(`upstream rejected Authorization: Bearer ${SECRET}`);
+      },
+    ],
+    [
+      'in-stream error with the key in a nested field',
+      (response) =>
+        serveFrames(response, [
+          frame({ error: { message: 'saturated', innererror: { key: SECRET } } }),
+        ]),
+    ],
+  ];
+
+  /** A path where nothing leaked: it must still produce an `error` event. */
+  const CLEAN_PATH: readonly [string, (response: ServerResponse) => void] = [
+    'empty JSON error body',
+    (response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('');
+    },
   ];
 
   for (const [name, handler] of LEAKY_PATHS) {
@@ -885,6 +1230,17 @@ describe('the API key never leaks (HANDOFF §4.1 invariant 6)', () => {
       expect(JSON.stringify(events)).toContain('***');
     });
   }
+
+  it(`still fails cleanly on the ${CLEAN_PATH[0]} path`, async () => {
+    // Nothing to redact here; the point is that an empty body produces an
+    // `error` + `done` pair rather than an empty iteration or a throw.
+    const server = await startFakeServer((_request, response) => CLEAN_PATH[1](response));
+    const events = await run(providerFor(server));
+
+    expect(events[0]).toMatchObject({ type: 'error', code: LLM_ERROR_CODES.invalidResponse });
+    expect(events.at(-1)).toEqual({ type: 'done', finishReason: 'error' });
+    expect(JSON.stringify(events)).not.toContain(SECRET);
+  });
 
   it('scrubs the key out of a transport failure', async () => {
     const provider = new OpenAICompatibleProvider({

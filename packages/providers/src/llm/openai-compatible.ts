@@ -19,13 +19,15 @@
  * port gives us.
  *
  * THE FOUR ERROR MAPPINGS ARE EVENTS, NOT THROWS (§9.2). They need a stable
- * vocabulary, and the port only exposes `{ code, message, retryable }`, so the
- * vocabulary is `LLM_ERROR_CODES`. Two facts the port cannot carry — the HTTP
- * status and `Retry-After` — are folded into `message`; a machine-readable
- * channel for them would need a contract change, and inventing an extra field
- * on `StreamEvent` here would fork the port. A mapped failure ENDS the
- * iteration immediately after it, because `ports/llm.ts` says an adapter "MUST
- * still terminate with `done` or throw, so a consumer never has to guess".
+ * vocabulary, and `LLM_ERROR_CODES` is it. The machine facts — HTTP status,
+ * `Retry-After`, the vendor's own `code`/`type` and the vendor's error object —
+ * ride in the dedicated fields the port now has for them (`status`,
+ * `retryAfterMs`, `providerCode`, `details`, ADR-019); `message` stays readable
+ * but is no longer their only carrier, because a sentence can only be parsed by
+ * accident. A mapped failure ENDS the iteration immediately after it, because
+ * `ports/llm.ts` says an adapter "MUST still terminate with `done` or throw, so
+ * a consumer never has to guess" — and that terminating event is
+ * `done{finishReason:'error'}`.
  *
  * CANCELLATION ENDS THE STREAM — it never throws. The signal is checked before
  * every yield, so an abort after N events yields exactly N and stops; an
@@ -40,12 +42,13 @@
  * inside an error body, so every emitted message goes through `redactSecret`.
  *
  * WHAT THIS ADAPTER DELIBERATELY DOES NOT IMPLEMENT: `countTokens` (see the
- * `capabilities` field — the port's flag means two different things) and any
- * retry policy (the caller owns `retryable`, because only it knows the budget).
+ * `capabilities` field) and any retry policy (the caller owns `retryable`,
+ * because only it knows the budget).
  */
 import type {
   ChatMessage,
   ChatRequest,
+  FinishReason,
   LLMProvider,
   ModelInfo,
   ProviderCapabilities,
@@ -200,7 +203,7 @@ export interface OpenAICompatibleOptions {
 /* ───────────────────────── vendor profiles (capabilities) ─────────────────── */
 
 /**
- * What a vendor's chat endpoint documents, plus model ids worth offering when
+ * WHAT A VENDOR'S CHAT ENDPOINT DOCUMENTS, plus model ids worth offering when
  * `GET /v1/models` is unavailable.
  *
  * WHY A TABLE AND NOT A CONSTRUCTOR OPTION: `ProviderCapabilities` is a property
@@ -208,6 +211,21 @@ export interface OpenAICompatibleOptions {
  * on some models of this endpoint". Guessing `true` for an unknown host would
  * make the engine take a degradation-ladder path the vendor cannot honour, so
  * the default is the vendor-agnostic minimum and only documented hosts opt in.
+ *
+ * NO `vision` ANYWHERE (ADR-021). `ChatMessage.content` is a plain `string`, so
+ * no adapter could send an image, and a flag that can only ever be `false` tells
+ * the UI a road exists that does not. Vendors that do see images (OpenAI, Qwen,
+ * OpenRouter) still get no claim here: the claim comes back with multimodal
+ * content, which will reference an `assetId`.
+ *
+ * NO PER-MODEL `capabilities`, ON PURPOSE (ADR-020). The port added
+ * `ModelInfo.capabilities` so a provider that can tell "this model calls tools,
+ * that one does not" apart can say so, but this adapter is a *transport*: it
+ * reads the `data[]` of `GET /v1/models` and the vendor's model ids, neither of
+ * which carries a capability list. Inventing per-model values here would be a
+ * guess wearing a fact's clothes — the profiles below are exactly the vendor
+ * level where a documented claim exists. It gets filled in when M1 adds a
+ * provider (OpenRouter, Ollama) whose models endpoint really reports it.
  */
 interface VendorProfile {
   /** Hostnames (exact, or a domain suffix) that identify the vendor. */
@@ -222,8 +240,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: true,
-      tokenCounting: true,
+      reportsUsage: true,
       // Chat Completions does not stream reasoning CONTENT (only the Responses
       // API exposes a summary), so claiming otherwise would light up a UI panel
       // that never receives an event.
@@ -236,8 +253,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: false,
-      tokenCounting: true,
+      reportsUsage: true,
       // `deepseek-reasoner` streams `delta.reasoning_content`.
       reasoning: true,
     },
@@ -248,8 +264,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: true,
-      tokenCounting: true,
+      reportsUsage: true,
       reasoning: false,
     },
     models: [{ id: 'moonshot-v1-8k' }, { id: 'moonshot-v1-32k' }],
@@ -259,8 +274,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: true,
-      tokenCounting: true,
+      reportsUsage: true,
       reasoning: true,
     },
     models: [{ id: 'qwen-plus' }, { id: 'qwen-max' }],
@@ -270,8 +284,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: false,
-      tokenCounting: true,
+      reportsUsage: true,
       reasoning: false,
     },
     models: [{ id: 'llama-3.3-70b-versatile' }, { id: 'llama-3.1-8b-instant' }],
@@ -281,8 +294,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: true,
-      tokenCounting: true,
+      reportsUsage: true,
       reasoning: false,
     },
     models: [{ id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' }],
@@ -292,24 +304,20 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: true,
-      tokenCounting: true,
+      reportsUsage: true,
       // OpenRouter normalises vendor reasoning onto `reasoning`/`reasoning_content`.
       reasoning: true,
     },
     models: [{ id: 'openai/gpt-4o-mini' }, { id: 'anthropic/claude-3.5-sonnet' }],
   },
   {
-    // Ollama, LM Studio, vLLM and anything else served from this machine. They
-    // are OpenAI-compatible for tools and JSON schema, but whether a given local
-    // model can see an image depends on the weights, so `vision` stays off.
+    // Ollama, LM Studio, vLLM and anything else served from this machine.
     // `[::1]` is written the way `URL.hostname` reports an IPv6 literal.
     hosts: ['localhost', '127.0.0.1', '0.0.0.0', '[::1]', 'host.docker.internal'],
     capabilities: {
       tools: true,
       structuredOutput: true,
-      vision: false,
-      tokenCounting: true,
+      reportsUsage: true,
       reasoning: false,
     },
     models: [{ id: 'llama3.2' }, { id: 'qwen2.5' }, { id: 'local-model' }],
@@ -320,8 +328,7 @@ const VENDOR_PROFILES: readonly VendorProfile[] = [
 const MINIMAL_CAPABILITIES: Omit<ProviderCapabilities, 'streaming'> = {
   tools: false,
   structuredOutput: false,
-  vision: false,
-  tokenCounting: false,
+  reportsUsage: false,
   reasoning: false,
 };
 
@@ -352,19 +359,16 @@ interface StreamState {
 export class OpenAICompatibleProvider implements LLMProvider {
   readonly id: string;
   /**
-   * `tokenCounting` IS READ AS "THIS ENDPOINT REPORTS `usage` WHEN ASKED".
+   * `reportsUsage` SAYS ONE THING: this endpoint reports `usage` when asked.
    *
-   * The port uses the flag twice and the two readings disagree. `ChatRequest`
-   * documents `includeUsage` as legal "only when capabilities.tokenCounting",
-   * while `LLMProvider.countTokens` is documented as absent whenever the provider
-   * cannot count, "which is legal (the flag in capabilities says so)". An
-   * OpenAI-compatible endpoint has no offline tokenizer, so this adapter cannot
-   * implement `countTokens` without either a dependency or a local estimate — and
-   * a char/4 guess returned from a method called `countTokens` is a wrong number
-   * wearing a right one's clothes. The flag therefore follows the reading that
-   * keeps a real capability alive (the `usage` event, which §9.2 requires), and
-   * `countTokens` stays absent. A caller must not treat the flag as proof that
-   * the method exists.
+   * ADR-020 split the old `tokenCounting` flag because it meant two different
+   * things — "reports usage when asked" and "counts offline" — and a caller that
+   * read it the second way crashed on `countTokens!`. This adapter implements
+   * `countTokens` NOT AT ALL: an OpenAI-compatible endpoint has no offline
+   * tokenizer, and a char/4 guess returned from a method called `countTokens` is
+   * a wrong number wearing a right one's clothes. That is also why
+   * `countsTokensOffline` is deliberately absent rather than set to `false`:
+   * absent is what the port documents for "this method does not exist".
    */
   readonly capabilities: ProviderCapabilities;
 
@@ -397,16 +401,23 @@ export class OpenAICompatibleProvider implements LLMProvider {
   /**
    * `GET {base}/models`. A failure is NOT an error: a hand-typed model name is
    * the normal case (§9.2), so this falls back to the configured model plus the
-   * vendor's well-known ids instead of throwing. Note that the port gives this
-   * method no `AbortSignal`, so a hanging gateway can only be bounded by the
-   * injected transport.
+   * vendor's well-known ids instead of throwing.
+   *
+   * The optional `signal` goes straight into the transport (ADR-020): a gateway
+   * that accepts the connection and then never answers must not hang the model
+   * picker. An abort takes the same road as every other failure — the offline
+   * candidate list — because this method's contract is "never throws", and the
+   * caller that aborted already knows it gave up. A transport that ignores
+   * `signal` can still hang; that is the documented contract of `FetchLike`.
    */
-  async listModels(): Promise<ModelInfo[]> {
+  async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
     try {
       const response = await this.fetchImpl(`${this.endpoint}/models`, {
         method: 'GET',
         headers: this.requestHeaders('application/json'),
+        signal,
       });
+      if (signal?.aborted === true) return this.fallbackModels();
       if (!response.ok) return this.fallbackModels();
 
       const parsed: unknown = await response.json();
@@ -473,7 +484,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
     if (contentType.includes('text/event-stream')) {
-      yield* this.streamEvents(this.readTextChunks(response), signal);
+      yield* this.streamEvents(this.readTextChunks(response), signal, response.headers);
       return;
     }
 
@@ -483,7 +494,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (head.startsWith('data:')) {
       // A gateway that lost the SSE content type. The body is already buffered,
       // so parse it through the same path instead of rejecting a readable stream.
-      yield* this.streamEvents(once(head), signal);
+      yield* this.streamEvents(once(head), signal, response.headers);
       return;
     }
     for (const event of this.bodyEvents(response.status, response.headers, body)) {
@@ -515,16 +526,25 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
   }
 
-  /** Translate a stream of SSE messages into the port's event vocabulary. */
+  /**
+   * Translate a stream of SSE messages into the port's event vocabulary.
+   *
+   * `headers` belongs to the 200 the stream arrived on. An in-stream `error`
+   * object has no status of its own, but a gateway that throttles *inside* a
+   * 200 still sends `Retry-After` there, so the headers are carried in rather
+   * than dropped — an error event with no `retryAfterMs` because the throttle
+   * was polite enough not to use HTTP 429 would be a fact lost for nothing.
+   */
   private async *streamEvents(
     chunks: AsyncIterable<string>,
     signal: AbortSignal,
+    headers: Headers,
   ): AsyncGenerator<StreamEvent> {
     const state = createStreamState();
     try {
       for await (const message of parseSseStream(chunks)) {
         if (signal.aborted) return;
-        for (const event of this.eventsForMessage(message, state)) {
+        for (const event of this.eventsForMessage(message, state, 200, headers)) {
           if (signal.aborted) return;
           yield event;
         }
@@ -578,7 +598,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
    * it as the network failure it is, while a stray keep-alive chunk must not
    * kill an otherwise healthy stream.
    */
-  private eventsForMessage(message: SseMessage, state: StreamState): StreamEvent[] {
+  private eventsForMessage(
+    message: SseMessage,
+    state: StreamState,
+    status: number,
+    headers: Headers,
+  ): StreamEvent[] {
     const events: StreamEvent[] = [];
     const data = message.data.trim();
     if (data === '[DONE]') {
@@ -591,8 +616,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (payload === undefined) return events;
 
     // Some gateways report a failure as an ordinary chunk with a 200 status.
+    // The status is passed through as the 200 it really was: "the HTTP request
+    // succeeded, the vendor's answer was an error object" is itself a fact a
+    // caller acting on `status` needs to see (ADR-019). `Retry-After` from this
+    // response is picked up the same way it would be on a 429.
     if (field(payload, 'error') !== undefined) {
-      events.push(this.failureEvent(undefined, undefined, data));
+      events.push(this.failureEvent(status, headers, data));
       state.failed = true;
       state.terminated = true;
       return events;
@@ -698,8 +727,15 @@ export class OpenAICompatibleProvider implements LLMProvider {
   /* ─────────────────────────────── failures ────────────────────────────── */
 
   /**
-   * Classify an HTTP failure (or an in-stream `error` object, where `status` is
-   * undefined) and render it as a terminal `error` event.
+   * Classify a failure that carried a body — a non-2xx response, or an `error`
+   * object inside a 200 — and render it as a terminal `error` event. `status`
+   * is the status of the response it arrived on, whatever that was; only the
+   * transport-failure path has no status at all and does not come through here.
+   *
+   * `body` is what the vendor sent, verbatim. It reaches the event as
+   * `details` — after redaction and compaction — because that is where the real
+   * cause usually lives ("model `x` does not exist" is not derivable from a
+   * status alone). The human sentence keeps the readable part of it.
    */
   private failureEvent(
     status: number | undefined,
@@ -714,17 +750,56 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     let message = `${status === undefined ? '' : `HTTP ${status}: `}${CODE_LABELS[code]}`;
     if (detail !== undefined) message += ` (${detail})`;
-    // `Retry-After` has no field on `StreamEvent`, so it is surfaced where a
-    // human (and a log) will see it: the message.
-    const retryAfter = code === 'rate_limit' ? retryAfterSeconds(headers) : undefined;
-    if (retryAfter !== undefined) message += `; retry-after ${retryAfter}s`;
+    // The machine fact is `retryAfterMs`; the sentence is for people reading a
+    // log, and the port's docstring says a human string must never be the only
+    // carrier of it (ADR-019).
+    const retryAfter = code === 'rate_limit' ? retryAfterMs(headers) : undefined;
+    if (retryAfter !== undefined) message += `; retry-after ${formatMs(retryAfter)}`;
 
-    return this.errorEvent(code, message, retryable);
+    return this.errorEvent(code, message, retryable, {
+      status,
+      headers,
+      body,
+      providerError,
+    });
   }
 
-  /** The single place an `error` event is built, so redaction cannot be skipped. */
-  private errorEvent(code: LLMErrorCode, message: string, retryable: boolean): StreamEvent {
-    return { type: 'error', code, message: redactSecret(message, this.apiKey), retryable };
+  /**
+   * The single place an `error` event is built, so redaction cannot be skipped.
+   *
+   * `facts` are the raw ingredients of the machine-readable part; this method is
+   * what turns them into `status` / `retryAfterMs` / `providerCode` / `details`.
+   * Keeping the redaction of `message` AND `details` here is deliberate: there
+   * is one exit, so there is no path that forgets it (HANDOFF §4.1 invariant 6).
+   */
+  private errorEvent(
+    code: LLMErrorCode,
+    message: string,
+    retryable: boolean,
+    facts?: ErrorFacts,
+  ): StreamEvent {
+    const providerCode = facts === undefined ? undefined : providerCodeOf(facts.providerError);
+    const details = facts === undefined ? undefined : providerDetails(facts);
+    // `Retry-After` is meaningful wherever a response existed, including the 200
+    // that carried an error object — vendored gateways do send it there.
+    const retryAfter = facts?.headers === undefined ? undefined : retryAfterMs(facts.headers);
+    // `providerCode` is a VENDOR string and therefore untrusted input: a gateway
+    // that puts the offending `Authorization` header in its `code` field would
+    // otherwise leak through the field that exists to be trustworthy. It is
+    // redacted like everything else, and dropped when it is too long to be a
+    // code at all (a payload wearing a code's name).
+    const safeCode =
+      providerCode === undefined ? undefined : redactSecret(providerCode, this.apiKey);
+    return {
+      type: 'error',
+      code,
+      message: redactSecret(message, this.apiKey),
+      retryable,
+      ...(facts?.status === undefined ? {} : { status: facts.status }),
+      ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter }),
+      ...(safeCode === undefined || safeCode.length > 100 ? {} : { providerCode: safeCode }),
+      ...(details === undefined ? {} : { details: redactValue(details, this.apiKey) }),
+    };
   }
 
   /* ────────────────────────────── the wire ─────────────────────────────── */
@@ -740,7 +815,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   private chatBody(req: ChatRequest): Record<string, unknown> {
-    const reasoningEffort = req.reasoningEffort ?? req.sampling?.reasoningEffort;
+    // `reasoningEffort` is read from `sampling` ONLY (ADR-020): the port used to
+    // carry it in two places with no stated precedence, so one of them silently
+    // won. There is exactly one spelling now.
+    const reasoningEffort = req.sampling?.reasoningEffort;
     return {
       model: req.model === '' ? this.defaultModel : req.model,
       messages: toWireMessages(req.messages),
@@ -754,7 +832,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         ? {}
         : { response_format: jsonSchemaFormat(req.responseSchema) }),
       // `includeUsage` is the caller's decision and the port documents it as
-      // "only when capabilities.tokenCounting"; we forward it verbatim.
+      // "only when capabilities.reportsUsage"; we forward it verbatim.
       ...(req.includeUsage === true ? { stream_options: { include_usage: true } } : {}),
     };
   }
@@ -971,11 +1049,179 @@ function usageEvent(usage: Record<string, unknown> | undefined): StreamEvent | u
   return { type: 'usage', input: input ?? 0, output: output ?? 0 };
 }
 
+/**
+ * A vendor `finish_reason` -> the port's `FinishReason` (ADR-019).
+ *
+ * The five modelled values pass through unchanged. Anything else — `max_tokens`
+ * from a gateway that never read the OpenAI docs, `eos`, `stop_sequence` — is
+ * reported as `x-<reason>`: the union is open at the end exactly so a vendor
+ * reason we do not model survives as data instead of being flattened into
+ * `stop`, which would tell the runtime the model finished its thought when it
+ * did not.
+ */
 function doneEvent(finishReason: string): StreamEvent {
-  return { type: 'done', finishReason };
+  return { type: 'done', finishReason: toFinishReason(finishReason) };
+}
+
+function toFinishReason(finishReason: string): FinishReason {
+  switch (finishReason) {
+    case 'stop':
+    case 'length':
+    case 'tool_calls':
+    case 'content_filter':
+      return finishReason;
+    // `error` is the adapter's own convention ("this stream ended on a failure
+    // already delivered as an `error` event"), never a vendor's word — but a
+    // vendor that literally says `error` means the same thing.
+    case 'error':
+      return 'error';
+    default:
+      return `x-${finishReason}`;
+  }
 }
 
 /* ────────────────────────────── error parsing ────────────────────────────── */
+
+/**
+ * The raw ingredients of an `error` event's machine-readable half.
+ *
+ * They are carried as data, not pre-rendered, so `errorEvent` is the single
+ * place that decides what an `error` looks like — and therefore the single place
+ * redaction has to be correct. `ErrorFacts` never leaves the adapter.
+ */
+interface ErrorFacts {
+  readonly status?: number | undefined;
+  readonly headers?: Headers | undefined;
+  /** The vendor's response body, verbatim. */
+  readonly body: string;
+  /** `body` parsed to its `error` member, when both exist. */
+  readonly providerError?: Record<string, unknown> | undefined;
+}
+
+/**
+ * The vendor's own error identifier: `code` first (OpenAI, Moonshot, most
+ * gateways), then `type` (Anthropic-flavoured bodies). An adapter-local
+ * `error.code` stays ours — this field is *their* word, which is the point of
+ * having both: a caller can match on our stable vocabulary and still log the
+ * vendor's.
+ */
+function providerCodeOf(providerError: Record<string, unknown> | undefined): string | undefined {
+  if (providerError === undefined) return undefined;
+  return firstString(providerError, ['code', 'type']);
+}
+
+/**
+ * What goes in `details`: the vendor's error value, never the whole envelope.
+ *
+ * For a JSON body that is the `error` member itself — the object the vendor
+ * wrote, `message`/`code`/`type`/`param`/`innererror` and all, since dropping
+ * fields we do not recognise is how a "why did this 400?" investigation ends in
+ * guesswork. `code`/`type` also appear in `providerCode`; the duplication is
+ * intentional, because one is a flat field to branch on and the other is the
+ * evidence, and a caller may reasonably keep only one of them.
+ *
+ * For a body that is not JSON (a proxy's HTML login page, a plain-text 503) the
+ * raw text is used instead of nothing: a machine fact we cannot parse is still a
+ * fact. Both forms are redacted and compacted before leaving.
+ */
+function providerDetails(facts: ErrorFacts): JsonValue | undefined {
+  const value: unknown =
+    facts.providerError ?? (facts.body === '' ? undefined : truncate(facts.body, 512));
+  return value === undefined ? undefined : compactJson(value);
+}
+
+/** `Retry-After` is either delta-seconds or an HTTP date; both are handled. */
+function retryAfterMs(headers: Headers | undefined): number | undefined {
+  const raw = headers?.get('retry-after')?.trim();
+  if (raw === undefined || raw === '') return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return Math.max(0, Math.round(Number(raw) * 1000));
+  const at = Date.parse(raw);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, at - Date.now());
+}
+
+/**
+ * `Retry-After` for the human sentence. The machine fact is the raw
+ * `retryAfterMs`; this is a rendering of it, and it rounds rather than
+ * truncates so a header of `0.4` does not read as "0s".
+ */
+function formatMs(milliseconds: number): string {
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  return `${Math.round(milliseconds / 1000)}s`;
+}
+
+/**
+ * HANDOFF §4.1 invariant 6, last line of defence: a gateway that echoes the
+ * `Authorization` header back inside an error body must not turn our own error
+ * report into the leak. `split`/`join` rather than a regex, because a key may
+ * contain regex metacharacters.
+ *
+ * `redactValue` is the same guarantee for the structured `details` field, which
+ * is the new place a vendor echo could reach: redacting only the sentence would
+ * leave the leak one field over.
+ */
+function redactSecret(text: string, secret: string): string {
+  if (secret === '') return text;
+  return text.split(secret).join('***');
+}
+
+function redactValue(value: unknown, secret: string): JsonValue {
+  if (typeof value === 'string') {
+    // `truncate` after redaction: `***` is shorter than a real key, so a
+    // redacted string can never be pushed over the limit by the substitution.
+    return truncate(redactSecret(value, secret), JSON_STRING_LIMIT);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+  if (Array.isArray(value)) {
+    return value.slice(0, JSON_ARRAY_LIMIT).map((item) => redactValue(item, secret));
+  }
+  return redactRecord(value, secret);
+}
+
+function redactRecord(value: unknown, secret: string): Record<string, JsonValue> {
+  const record = asRecord(value);
+  const result: Record<string, JsonValue> = {};
+  if (record === undefined) return result;
+  for (const key of Object.keys(record).slice(0, JSON_KEY_LIMIT)) {
+    result[redactSecret(key, secret)] = redactValue(field(record, key), secret);
+  }
+  return result;
+}
+
+/**
+ * Shrink a vendor payload to something a `StreamEvent` can honestly carry: an
+ * error event travels into the UI and the session log, and a gateway that
+ * answers with a megabyte of HTML must not put a megabyte in both.
+ *
+ * It is deliberately a *truncation* and not a projection to known keys — see
+ * `providerDetails` — and it is lossy only past limits no real error body
+ * reaches.
+ */
+function compactJson(value: unknown, depth = 0): JsonValue {
+  if (typeof value === 'string') return truncate(value, JSON_STRING_LIMIT);
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+  if (Array.isArray(value)) {
+    if (depth >= JSON_DEPTH_LIMIT) return null;
+    return value.slice(0, JSON_ARRAY_LIMIT).map((item) => compactJson(item, depth + 1));
+  }
+  if (depth >= JSON_DEPTH_LIMIT) return null;
+  const record = asRecord(value);
+  if (record === undefined) return String(value);
+  const result: Record<string, JsonValue> = {};
+  for (const key of Object.keys(record).slice(0, JSON_KEY_LIMIT)) {
+    result[key] = compactJson(field(record, key), depth + 1);
+  }
+  return result;
+}
+
+/** Longest string `details` keeps; longer vendor text is cut with an ellipsis. */
+const JSON_STRING_LIMIT = 512;
+/** Nesting levels `details` keeps before a branch becomes `null`. */
+const JSON_DEPTH_LIMIT = 4;
+/** Entries per array `details` keeps. */
+const JSON_ARRAY_LIMIT = 20;
+/** Keys per object `details` keeps. */
+const JSON_KEY_LIMIT = 40;
 
 /**
  * Pull the human-readable part out of `{"error":{…}}`. Vendors disagree on
@@ -989,27 +1235,6 @@ function errorDetail(providerError: Record<string, unknown>): string | undefined
     asString(field(providerError, 'type')),
   ].filter((part): part is string => part !== undefined);
   return parts.length === 0 ? undefined : truncate(parts.join(' / '), 300);
-}
-
-/** `Retry-After` is either delta-seconds or an HTTP date; both are handled. */
-function retryAfterSeconds(headers: Headers | undefined): number | undefined {
-  const raw = headers?.get('retry-after')?.trim();
-  if (raw === undefined || raw === '') return undefined;
-  if (/^\d+(?:\.\d+)?$/.test(raw)) return Math.max(0, Math.round(Number(raw)));
-  const at = Date.parse(raw);
-  if (Number.isNaN(at)) return undefined;
-  return Math.max(0, Math.round((at - Date.now()) / 1000));
-}
-
-/**
- * HANDOFF §4.1 invariant 6, last line of defence: a gateway that echoes the
- * `Authorization` header back inside an error body must not turn our own error
- * report into the leak. `split`/`join` rather than a regex, because a key may
- * contain regex metacharacters.
- */
-function redactSecret(text: string, secret: string): string {
-  if (secret === '') return text;
-  return text.split(secret).join('***');
 }
 
 function describeCause(cause: unknown): string {

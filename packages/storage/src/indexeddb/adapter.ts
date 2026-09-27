@@ -24,11 +24,12 @@
  *    the primary key of every table (`indexeddb/schema.ts` argues this in full).
  *    §7 keys two collections otherwise — `settings` by `key`, `migrations` by
  *    `version` — and the port gives `Collection<T>` no way to say so: there is no
- *    `getBy`, although the `RowBase` docstring says "which this port therefore
- *    handles through `getBy`", a method that does not exist. This adapter
- *    therefore treats `id` as the key everywhere; storing a settings row means
- *    giving it an `id`. Reported as a port ambiguity rather than guessed at
- *    silently.
+ *    `getBy`. ADR-022 settled that in the port's favour rather than adding one:
+ *    **`settings` and `migrations` are keyed by `id` too**, holding the config key
+ *    and the version number respectively, so the whole port keeps ONE addressing
+ *    rule. This adapter therefore treats `id` as the key everywhere, and
+ *    `adapter.test.ts` pins both row shapes (ADR-022) so the convention cannot
+ *    regress into an undocumented deviation again.
  * 2. ROW SHAPE. `put` requires an `id` and the adapter never mints one. The mock's
  *    `nextId()` is a *test convenience*, not port surface; an adapter inventing
  *    ids would make "the returned row is the row you wrote" untrue.
@@ -54,10 +55,11 @@
  *    exactly as `core/ports/mock` does. That keeps this adapter's answers
  *    identical to the double the engine tests were written against, instead of
  *    introducing a second, subtly different definition of "range" and "desc" —
- *    which is the trap `mock-storage.test.ts` was written to catch. `desc`
- *    reverses a COPY in `ordered()`, so the caller's `Query` object is never
- *    mutated, and the port's `order` therefore composes with `limit`/`offset`
- *    ("newest 2" = desc + limit).
+ *    which is the trap `mock-storage.test.ts` was written to catch. A bound with
+ *    no `field` is REFUSED rather than guessed (ADR-023), with the mock's exact
+ *    wording so the two cannot drift. `desc` reverses a COPY in `ordered()`, so
+ *    the caller's `Query` object is never mutated, and the port's `order`
+ *    therefore composes with `limit`/`offset` ("newest 2" = desc + limit).
  */
 import {
   COLLECTION_NAMES,
@@ -65,8 +67,10 @@ import {
   INDEXES,
   type Collection as PortCollection,
   type Query,
+  RANGE_FIELD_REQUIRED_MESSAGE,
   type RowBase,
   type StorageAdapter,
+  StorageQueryError,
   type Tx,
 } from '@smarttavern/core';
 import type { Id } from '@smarttavern/schema';
@@ -273,19 +277,31 @@ class IndexedDbCollection<T extends RowBase> implements PortCollection<T> {
    * not already answer, then the bounds. Bounds are applied even when the scan
    * fixed the same field, because `core/ports/mock` does the same thing and this
    * adapter must not be cleverer than the double (see the header).
+   *
+   * A bound (`from`/`to`) whose `field` is omitted is refused, not guessed —
+   * ADR-023. The old fallback here was copied from the mock (`field ?? first
+   * `where` key ?? 'id'`), and it made `{where: {createdAt: 10}, from: 1, to: 5}`
+   * range-scan `createdAt` and answer an EMPTY ARRAY for a query that looks
+   * perfectly reasonable. A wrong answer that a test pins down becomes a
+   * compatibility promise, so both implementations now throw the same
+   * `StorageQueryError` with the same message.
    */
   private filtered(rows: Row[], query: Query<RowBase> | undefined): Row[] {
     const constraints = constraintsOf(query);
     const bounds = query?.from !== undefined || query?.to !== undefined;
     if (constraints.length === 0 && !bounds) return rows;
-    // The range field is named explicitly by the port; the fallback chain below is
-    // copied from `core/ports/mock` so the adapter and the double answer a
-    // half-specified query identically (a bare `where` key, then `id`).
-    const field = query?.field ?? constraints[0]?.[0] ?? 'id';
+
+    const rangeField = query?.field;
+    if (query !== undefined && bounds && rangeField === undefined) {
+      throw new StorageQueryError(RANGE_FIELD_REQUIRED_MESSAGE, query);
+    }
+
     return rows.filter((row) => {
       if (!constraints.every(([key, expected]) => valuesMatch(row[key], expected))) return false;
-      if (!bounds) return true;
-      const value = row[field];
+      // The `rangeField === undefined` half is unreachable: a bounded query
+      // without a field threw above. It keeps the indexed access type-safe.
+      if (!bounds || rangeField === undefined) return true;
+      const value = row[rangeField];
       if (value === undefined) return false;
       if (query?.from !== undefined && compare(value, query.from) < 0) return false;
       if (query?.to !== undefined && compare(value, query.to) > 0) return false;

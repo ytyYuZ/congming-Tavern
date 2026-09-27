@@ -13,7 +13,7 @@
  * `fake-indexeddb/auto` polyfills `globalThis.indexedDB`; no jsdom is involved.
  */
 import 'fake-indexeddb/auto';
-import { COLLECTIONS } from '@smarttavern/core';
+import { COLLECTIONS, RANGE_FIELD_REQUIRED_MESSAGE, StorageQueryError } from '@smarttavern/core';
 import {
   type Character,
   CharacterSchema,
@@ -140,6 +140,23 @@ interface SessionRow {
   createdAt: number;
 }
 
+/**
+ * §7's two non-entity tables, as this package stores them. §7 spells them
+ * `settings (key, value)` and `migrations (version, appliedAt)`; ADR-022 keeps the
+ * port's ONE addressing rule by putting the config key and the version in `id`,
+ * and these two row types are what that decision looks like at a call site.
+ */
+interface SettingsRow {
+  id: string;
+  value: unknown;
+  updatedAt: number;
+}
+
+interface MigrationsRow {
+  id: string;
+  appliedAt: number;
+}
+
 describe('createIndexedDbStorage', () => {
   let dbName: string;
 
@@ -224,6 +241,44 @@ describe('createIndexedDbStorage', () => {
         tx.collection<World>(COLLECTIONS.worlds).put({ name: 'No id' } as unknown as World),
       ),
     ).rejects.toBeInstanceOf(IndexedDbStorageError);
+  });
+
+  /* ──────────────────────── ADR-022: one addressing rule ─────────────────── */
+
+  it('keys a `settings` row by `id`, holding the config key there (ADR-022)', async () => {
+    const storage = createIndexedDbStorage({ name: dbName });
+    // §7 writes `settings (key, value)`. ADR-022 rejected a per-collection
+    // primary key for the port, so the config key IS the row id.
+    const row: SettingsRow = { id: 'ui.theme', value: { mode: 'dark' }, updatedAt: 1 };
+
+    const stored = await storage.transaction(async (tx) => {
+      const settings = tx.collection<SettingsRow>(COLLECTIONS.settings);
+      await settings.put(row);
+      return { byKey: await settings.get('ui.theme'), all: await settings.list() };
+    });
+
+    expect(stored.byKey).toEqual(row);
+    expect(stored.all).toEqual([row]);
+    expect(
+      await storage.transaction((tx) => tx.collection<SettingsRow>(COLLECTIONS.settings).count()),
+    ).toBe(1);
+  });
+
+  it('keys a `migrations` row by `id`, holding the version there (ADR-022)', async () => {
+    const storage = createIndexedDbStorage({ name: dbName });
+    // §7 writes `migrations (version, appliedAt)`, and the adapter's docstring says
+    // `id` holds the version. `Id` is a string (`packages/schema` common.ts), so a
+    // numeric version is stored in its string form — v3 as `'3'`.
+    const row: MigrationsRow = { id: '3', appliedAt: 1_700_000_000_000 };
+
+    const stored = await storage.transaction(async (tx) => {
+      const migrations = tx.collection<MigrationsRow>(COLLECTIONS.migrations);
+      await migrations.put(row);
+      return { byVersion: await migrations.get('3'), all: await migrations.list() };
+    });
+
+    expect(stored.byVersion).toEqual(row);
+    expect(stored.all).toEqual([row]);
   });
 
   /* ────────────────────────────── rollback ───────────────────────────────── */
@@ -381,7 +436,7 @@ describe('createIndexedDbStorage', () => {
     expect(rows.map((row) => row.id).sort()).toEqual(['m1', 'm2']);
   });
 
-  it('applies bounds on the `where` key when `field` is omitted, like the mock does', async () => {
+  it('refuses a range query that does not name its `field` instead of guessing (ADR-023)', async () => {
     const storage = createIndexedDbStorage({ name: dbName });
     await storage.transaction((tx) =>
       tx.collection<SessionRow>(COLLECTIONS.sessions).putMany([
@@ -390,22 +445,30 @@ describe('createIndexedDbStorage', () => {
       ]),
     );
 
-    // `field` is optional in the port, and `core/ports/mock` ranges over the first
-    // `where` key — here `createdAt`. The adapter copies that fallback so the two
-    // implementations cannot disagree, which is what these two answers pin down.
-    const inRange = await storage.transaction((tx) =>
-      tx
-        .collection<SessionRow>(COLLECTIONS.sessions)
-        .list({ where: { createdAt: 10 }, from: 10, to: 20 }),
-    );
-    expect(inRange.map((row) => row.id)).toEqual(['s1']);
+    await storage.transaction(async (tx) => {
+      const sessions = tx.collection<SessionRow>(COLLECTIONS.sessions);
+      // `field` is optional in the port, and the adapter used to mirror the mock's
+      // fallback — the first `where` key, else `id`. For this query that meant
+      // range-scanning `createdAt`, which is exactly 10, so `from: 1, to: 5`
+      // answered an EMPTY ARRAY for something that looks reasonable. A wrong answer
+      // pinned by a test becomes a compatibility promise, so ADR-023 turns the
+      // fallback into a refusal, with the mock's exact message so the two cannot
+      // drift.
+      const ambiguous = sessions.list({ where: { createdAt: 10 }, from: 1, to: 5 });
+      await expect(ambiguous).rejects.toBeInstanceOf(StorageQueryError);
+      await expect(ambiguous).rejects.toThrow(RANGE_FIELD_REQUIRED_MESSAGE);
+      // `count` shares the same select path, so it must refuse too.
+      await expect(sessions.count({ from: 1, to: 5 })).rejects.toBeInstanceOf(StorageQueryError);
 
-    const outOfRange = await storage.transaction((tx) =>
-      tx
-        .collection<SessionRow>(COLLECTIONS.sessions)
-        .list({ where: { createdAt: 10 }, from: 1, to: 5 }),
-    );
-    expect(outOfRange).toEqual([]);
+      // Naming the field is all it takes, and the bound is then really applied:
+      // `createdAt` is 10 for `s1` and 20 for `s2`.
+      expect(
+        (await sessions.list({ field: 'createdAt', from: 1, to: 20 })).map((row) => row.id),
+      ).toEqual(['s1', 's2']);
+      expect(
+        (await sessions.list({ field: 'createdAt', from: 1, to: 15 })).map((row) => row.id),
+      ).toEqual(['s1']);
+    });
   });
 
   it('throws on an index name the collection does not declare', async () => {

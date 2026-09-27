@@ -15,6 +15,7 @@
  */
 import type {
   ChatRequest,
+  FinishReason,
   LLMProvider,
   ModelInfo,
   ProviderCapabilities,
@@ -29,9 +30,10 @@ export type ScriptedTurn = readonly StreamEvent[] | AsyncIterable<StreamEvent>;
 export const MOCK_LLM_CAPABILITIES: ProviderCapabilities = {
   tools: true,
   structuredOutput: true,
-  vision: true,
   streaming: true,
-  tokenCounting: true,
+  reportsUsage: true,
+  // The double answers `countTokens` from a scripted number, so it may claim this.
+  countsTokensOffline: true,
   reasoning: true,
 };
 
@@ -127,7 +129,10 @@ async function* abortableIterable(
 }
 
 /** Default answer: one text delta, a usage report and a normal finish. */
-export function defaultScript(text = 'mock response', finishReason = 'stop'): ScriptedTurn {
+export function defaultScript(
+  text = 'mock response',
+  finishReason: FinishReason = 'stop',
+): ScriptedTurn {
   return [
     { type: 'text-delta', text },
     { type: 'usage', input: text.length, output: text.length },

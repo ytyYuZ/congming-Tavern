@@ -87,9 +87,13 @@ export interface ChatRequest {
    */
   responseSchema?: JsonValue;
   sampling?: Partial<SamplingParams>;
-  /** System prompt is a message, not a field; this pins the reasoning budget. */
-  reasoningEffort?: SamplingParams['reasoningEffort'];
-  /** Ask the provider to report usage (only when `capabilities.tokenCounting`). */
+  /**
+   * Ask the provider to report usage (only when `capabilities.reportsUsage`).
+   *
+   * There is deliberately no `reasoningEffort` field here as well: the budget lives
+   * in `sampling` only. Two ways to say one thing means one of them silently wins,
+   * and M0-T6 had to guess the precedence (ADR-020).
+   */
   includeUsage?: boolean;
 }
 
@@ -101,22 +105,46 @@ export interface ModelInfo {
   maxOutputTokens?: number;
   /** Cheap routing hint, e.g. 'chat' | 'reasoning' | 'embedding'. Free string. */
   kind?: string;
-  /** True when the model accepts images on the input side. */
-  vision?: boolean;
+  /**
+   * Per-model overrides for `ProviderCapabilities`, merged over the provider's own
+   * answer (a key present here wins). Capabilities are really a property of the
+   * MODEL — one OpenRouter or Ollama endpoint serves tool-calling and non-tool
+   * models side by side — so a provider that can tell them apart says so here
+   * (ADR-020). A provider that cannot simply omits it.
+   */
+  capabilities?: Partial<ProviderCapabilities>;
 }
 
 /**
  * What a provider can do — the whole point of the port, because it lets the
  * engine degrade (§5.3) or hide UI instead of discovering a limit at runtime.
+ *
+ * There is no `vision` flag (ADR-021). `ChatMessage.content` is a plain `string`,
+ * so no adapter could ever send an image, and a flag that can only ever be `false`
+ * is worse than no flag: it tells the UI a road exists that does not. It comes back
+ * with multimodal content, which will reference an `assetId` rather than inline
+ * base64 (assets already live in the `AssetStore`, ADR-004).
  */
 export interface ProviderCapabilities {
   /** ① of the degradation ladder: native function calling. */
   tools: boolean;
   /** ② of the ladder: JSON-Schema-constrained output. */
   structuredOutput: boolean;
-  vision: boolean;
   streaming: boolean;
-  tokenCounting: boolean;
+  /**
+   * True when the provider can REPORT token usage for a completion
+   * (`ChatRequest.includeUsage` → the `usage` event). Says nothing about counting
+   * offline — see `countsTokensOffline`. ADR-020 split the old single
+   * `tokenCounting` flag because it meant both, and a caller that read it the other
+   * way crashed on `countTokens!`.
+   */
+  reportsUsage: boolean;
+  /**
+   * True when `LLMProvider.countTokens` exists AND answers without generating.
+   * Optional because most adapters honestly cannot: a char/4 guess returned from a
+   * method named `countTokens` is a wrong number wearing a right name.
+   */
+  countsTokensOffline?: boolean;
   /** True when the provider reports reasoning (e.g. `reasoning-delta` events). */
   reasoning?: boolean;
 }
@@ -124,20 +152,51 @@ export interface ProviderCapabilities {
 /* ──────────────────────────────── 流事件 ───────────────────────────────── */
 
 /**
+ * Why a stream ended. Open at the end for vendor-specific reasons, matching the
+ * `x-` convention the rest of the schema uses for extensible enums (ADR-019).
+ */
+export type FinishReason =
+  | 'stop'
+  | 'length'
+  | 'tool_calls'
+  | 'content_filter'
+  | 'error'
+  | `x-${string}`;
+
+/**
  * The six variants of §6, verbatim. Discriminated by `type`, so a consumer
  * narrows with a `switch` and the compiler proves every case is handled.
  *
- * `error` is the only variant that does not end the stream by itself: the
- * adapter decides whether to retry from `retryable` and MUST still terminate
- * with `done` or throw, so a consumer never has to guess.
+ * `error` is the only variant that does not end the stream by itself: the adapter
+ * decides whether to retry from `retryable` and MUST still terminate with `done` or
+ * throw, so a consumer never has to guess. When it reports instead of throwing, the
+ * terminating event is `done` with `finishReason: 'error'` — that is the published
+ * convention (ADR-019): `'error'` means "this stream ended on a failure that was
+ * already delivered as an event", and a consumer that only watches `done` still
+ * learns that something went wrong.
  */
 export type StreamEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'reasoning-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; args: unknown }
   | { type: 'usage'; input: number; output: number }
-  | { type: 'error'; code: string; message: string; retryable: boolean }
-  | { type: 'done'; finishReason: string };
+  | {
+      type: 'error';
+      /** Stable code from the adapter's own vocabulary (retry policy, i18n). */
+      code: string;
+      /** The sentence a human reads. Never the only carrier of a machine fact. */
+      message: string;
+      retryable: boolean;
+      /** HTTP status, when the failure came from a response. */
+      status?: number;
+      /** Parsed `Retry-After` — both the delta-seconds and the HTTP-date form. */
+      retryAfterMs?: number;
+      /** The vendor's own error code, when it has one. */
+      providerCode?: string;
+      /** The vendor's error value, already stripped of credentials. */
+      details?: JsonValue;
+    }
+  | { type: 'done'; finishReason: FinishReason };
 
 /* ─────────────────────────────── Provider ─────────────────────────────── */
 
@@ -146,14 +205,17 @@ export type StreamEvent =
  *
  * `stream` takes an `AbortSignal` because generation MUST be cancellable; an
  * implementation stops pulling from the vendor and resolves the iteration when
- * the signal aborts. `countTokens` is optional: it is absent whenever the
- * provider cannot count without generating, which is legal (the flag in
- * `capabilities` says so).
+ * the signal aborts. `listModels` takes an optional one for the same reason: a
+ * gateway that stops answering must not hang the model picker (ADR-020).
+ *
+ * `countTokens` is optional: it is absent whenever the provider cannot count
+ * without generating, which is legal — `capabilities.countsTokensOffline` is what
+ * says so.
  */
 export interface LLMProvider {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
-  listModels(): Promise<ModelInfo[]>;
+  listModels(signal?: AbortSignal): Promise<ModelInfo[]>;
   stream(req: ChatRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
   countTokens?(req: ChatRequest): Promise<number>;
 }

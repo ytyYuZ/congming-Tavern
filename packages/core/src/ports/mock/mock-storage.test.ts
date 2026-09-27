@@ -135,6 +135,31 @@ describe('MockStorageAdapter', () => {
     });
   });
 
+  it('refuses a range query that does not name its field (ADR-023)', async () => {
+    const db = new MockStorageAdapter();
+    await db.transaction(async (tx) => {
+      const messages = tx.collection<MessageRow>(COLLECTIONS.messages);
+      await messages.put({ id: 'm1', sessionId: 's1', createdAt: 10 });
+    });
+
+    await db.transaction(async (tx) => {
+      const messages = tx.collection<MessageRow>(COLLECTIONS.messages);
+      // The old behaviour guessed the range field — the first `where` key, else
+      // `id` — so this query range-scanned `createdAt` (which is 10) and answered
+      // an empty array. A wrong answer that a test pins down becomes a
+      // compatibility promise, so it is a refusal now.
+      await expect(messages.list({ where: { createdAt: 10 }, from: 1, to: 5 })).rejects.toThrow(
+        /must name `field`/,
+      );
+      // Naming the field is all it takes. (The row's `createdAt` is 10, so a range
+      // that contains it — not the [1, 5] of the refusing query above — is what
+      // proves the refusal did not eat a legitimate answer.)
+      expect(
+        (await messages.list({ field: 'createdAt', from: 1, to: 20 })).map((row) => row.id),
+      ).toEqual(['m1']);
+    });
+  });
+
   it('keeps putMany and remove idempotent, as a rollback path needs', async () => {
     const db = new MockStorageAdapter();
     await db.transaction(async (tx) => {

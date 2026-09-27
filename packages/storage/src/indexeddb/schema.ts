@@ -28,10 +28,11 @@
  *
  * WHY THE PRIMARY KEY IS ALWAYS `id`
  * The port's `RowBase` is `{ id: Id }` and its `Collection<T>` addresses rows by
- * that id, so `id` is the primary key of every table. Two §7 collections are
- * deliberately keyed otherwise — `settings` by `key`, `migrations` by `version`
- * — and the port does not say how they are addressed either; see the adapter's
- * header for how that gap is handled. No primary key is auto-incrementing: this
+ * that id, so `id` is the primary key of every table. §7 names two collections
+ * otherwise — `settings` by `key`, `migrations` by `version` — and ADR-022
+ * settled it: both are keyed by `id` as well, holding the config key and the
+ * version number respectively, so there is ONE addressing rule and no
+ * per-collection primary-key layer. No primary key is auto-incrementing: this
  * app mints UUIDv7 ids (`docs/04` §4) and a silently generated id would break
  * the "`put(row)` gives back exactly the row you wrote" contract.
  */

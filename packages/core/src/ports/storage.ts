@@ -157,9 +157,22 @@ export const INDEXES: Readonly<Record<CollectionName, readonly CollectionIndex[]
 /* ─────────────────────────────── 行与查询 ──────────────────────────────── */
 
 /**
- * The minimum every stored row must have. §7's collections are not all
- * primary-key-only (`settings` uses `key`), but every one of them has an `id`
- * except `settings`, which this port therefore handles through `getBy`.
+ * The minimum every stored row must have.
+ *
+ * §7 lists `settings` as `(key, value)` and `migrations` as `(version, appliedAt)`,
+ * which reads like a different primary key each. ADR-022 settles it: **their primary
+ * key is `id`**, holding the config key and the version number respectively, so the
+ * whole port keeps ONE addressing rule. The alternative — a general non-`id`
+ * primary-key mechanism — was rejected as changing a global abstraction for two
+ * tables that never leave the local database.
+ *
+ * (An earlier version of this comment promised a `getBy` that does not exist on
+ * `Collection`, and missed `migrations` entirely. Both are corrected here.)
+ *
+ * ONE CONSEQUENCE WORTH SPELLING OUT: `Id` is a string, so `migrations`'s version
+ * number is stored as its DECIMAL STRING. Do not order by that key — strings sort
+ * lexicographically and `'10' < '9'` — §7 gives `migrations` an `appliedAt` for
+ * exactly that question. The same applies to any numeric key parked in `id`.
  */
 export interface RowBase {
   id: Id;
@@ -175,9 +188,13 @@ export interface Query<TRow> {
   where?: Partial<Record<keyof TRow & string, unknown>>;
   /**
    * Field the `from`/`to` bounds apply to, i.e. the leftmost field of the index
-   * being scanned. Explicit because a bound without a field is ambiguous: §7 has
-   * collections whose first indexed field is not the range one (`messages` is
-   * `(sessionId, parentId)` but its useful range is `createdAt`).
+   * being scanned. Optional ONLY while no bounds are given: a bound without a field
+   * is ambiguous — §7 has collections whose first indexed field is not the range one
+   * (`messages` is `(sessionId, parentId)` but its useful range is `createdAt`) — so
+   * supplying `from`/`to` without `field` MUST throw `StorageQueryError` rather than
+   * guess. Guessing is what made `{where: {createdAt: 10}, from: 1, to: 5}` answer an
+   * empty array, and a wrong answer pinned by a test becomes a compatibility promise
+   * (ADR-023).
    */
   field?: keyof TRow & string;
   /** Inclusive lower bound on `field` (range scans). */
@@ -189,6 +206,33 @@ export interface Query<TRow> {
   limit?: number;
   offset?: number;
 }
+
+/**
+ * A query the port REFUSES to interpret rather than answering it wrongly. The one
+ * case in M0 is bounds without a `field`; the port owns this error so that every
+ * implementation and every test agrees on what "ambiguous" means (ADR-023).
+ *
+ * Generic in the row type so a thrower keeps its own `Query<T>` (a `Query<unknown>`
+ * parameter would reject every real query: `field` collapses to `never`).
+ */
+export class StorageQueryError<TRow = unknown> extends Error {
+  constructor(
+    message: string,
+    readonly query: Query<TRow>,
+  ) {
+    super(message);
+    this.name = 'StorageQueryError';
+  }
+}
+
+/**
+ * The refusal sentence for a range query without a `field`, exported so the mock,
+ * every adapter and every test say the SAME thing. A message typed out by hand in
+ * two packages drifts, and this one is asserted verbatim — owning the string here
+ * makes "cannot drift" structural instead of a comment asking nicely (ADR-023).
+ */
+export const RANGE_FIELD_REQUIRED_MESSAGE =
+  'a range query must name `field`: bounds without it are ambiguous (ADR-023)';
 
 /** Write shape: `id` may be omitted only when the store mints it (`put`). */
 export type RowPatch<T> = Partial<T>;
