@@ -1,6 +1,21 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "jsx is required HERE too, and not only in apps/web (M0-T8). This project has no",
+    "`.tsx` of its own, but it imports `@smarttavern/web/mount`, and tsc follows that",
+    "import into `apps/web/src/**/*.tsx` — so the web package's TSX files are compiled",
+    "as part of THIS program. Without the setting the failure is reported against a",
+    "FILE IN ANOTHER WORKSPACE (TS6142, `app.tsx`: '--jsx' is not set) from a project",
+    "that does not contain it, which is exactly the class of error only a root",
+    "`tsc -b` sees — the per-package `typecheck` scripts cannot catch it.",
+    "",
+    "The exclude is `src/**/*.test.*` rather than `src/**/*.test.ts` so a future",
+    "`.test.tsx` cannot slip past it; see apps/web/tsconfig.json for the full reasoning."
+  ],
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.*"]
 }

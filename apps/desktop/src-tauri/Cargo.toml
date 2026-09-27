@@ -1,0 +1,41 @@
+[package]
+name = "smarttavern-desktop"
+version = "0.0.0"
+description = "Thin Tauri 2 shell for SmartTavern: native HTTP transport plus the web UI it loads"
+edition = "2021"
+# The shell is a distributed binary, not a library; `cargo publish` is not a path
+# this crate takes (ADR-006 ships source, users build it).
+publish = false
+
+[lib]
+# Tauri 2 wants the app's commands in a lib (mobile targets link it), and a lib is
+# also the only way `tests/` can see them.
+name = "smarttavern_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Default features ON: the `wry` runtime is what actually renders the webview, and
+# turning defaults off to drop the tray/icon helpers would be a build-config
+# micro-optimisation this crate has no reason to make.
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# rustls, deliberately NOT native-tls/schannel (docs/06-开发任务拆解.md §9.4): one
+# TLS implementation on every platform means the transport behaves identically
+# everywhere, and it is the only TLS stack that works on the sandbox this was
+# developed on (Windows schannel is broken there).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# Tauri re-exports an async runtime but not the primitives the transport needs:
+# `select!` against the cancel signal, `timeout` for the caller's budget, and
+# `watch`/`mpsc` for the cancellation handle. No `rt-*` feature: the runtime comes
+# from tauri, tokio is used only as a library of primitives.
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+
+[dev-dependencies]
+# The end-to-end test needs a local HTTP server. `std::net::TcpListener` in a
+# thread is enough, so the only thing borrowed is a trusted base64 *decoder*: the
+# encoder under test stays hand-written (zlib/ring are not in the tree).
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }

@@ -3,11 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>聪明酒馆 SmartTavern（桌面）</title>
+    <title>聪明酒馆 SmartTavern</title>
+    <!--
+      The desktop shell serves its own bundle from tauri://localhost, so the app is
+      same-origin with itself and needs no remote origins. `connect-src` names the
+      IPC endpoints because model requests travel over IPC to Rust, never over
+      `fetch` from this document — which is the whole reason CORS cannot apply here.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'"
+    />
   </head>
   <body>
-    <!-- M0-T0 scaffold; M0-T8 replaces this with the web build output + Tauri. -->
-    <div data-app="smarttavern">Loading…</div>
+    <!-- The SAME root contract as apps/web/index.html — an empty `#root` and nothing
+         else, so the two shell markups cannot drift and `mountApp` is handed the
+         identical element in both builds. Only the entry module differs. -->
+    <div id="root"></div>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

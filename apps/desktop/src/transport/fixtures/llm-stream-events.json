@@ -1,0 +1,49 @@
+{
+  "$comment": [
+    "Cross-language drift alarm for the Tauri LLM transport (M0-T8).",
+    "The Rust side (src-tauri/tests/llm_stream_events.rs) asserts every entry of",
+    "`events` round-trips through `LlmStreamEvent` back to this exact JSON; the TS",
+    "side (src/transport/tauri-fetch.test.ts) feeds the same entries through a fake",
+    "invoke and asserts the Response it produces. Change either side and the other",
+    "test fails.",
+    "",
+    "`chunk` payloads are base64 of RAW BYTES, not text: the 4-byte emoji U+1F409 is",
+    "deliberately split across the two chunks, because a per-chunk text decode would",
+    "replace half of it with U+FFFD."
+  ],
+  "request": {
+    "requestId": "req-fixture-1",
+    "url": "https://api.example.test/v1/chat/completions",
+    "method": "POST",
+    "headers": [
+      ["content-type", "application/json"],
+      ["accept", "text/event-stream"],
+      ["authorization", "Bearer sk-fixture-SECRET"]
+    ],
+    "body": "{\"model\":\"fixture-model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}",
+    "timeoutMs": 30000
+  },
+  "events": [
+    {
+      "type": "response",
+      "status": 200,
+      "headers": [["content-type", "text/event-stream"], ["cache-control", "no-cache"]]
+    },
+    {
+      "type": "chunk",
+      "dataBase64": "ZGF0YTogeyJjaG9pY2VzIjpbeyJkZWx0YSI6eyJjb250ZW50Ijoi5L2g5aW9In0sImluZGV4IjowfV19CgpkYXRhOiB7ImNob2ljZXMiOlt7ImRlbHRhIjp7ImNvbnRlbnQiOiLwnw=="
+    },
+    {
+      "type": "chunk",
+      "dataBase64": "kIkifSwiaW5kZXgiOjB9XX0KCmRhdGE6IFtET05FXQoK"
+    },
+    {
+      "type": "end"
+    }
+  ],
+  "expected": {
+    "status": 200,
+    "headers": [["content-type", "text/event-stream"], ["cache-control", "no-cache"]],
+    "text": "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"},\"index\":0}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"🐉\"},\"index\":0}]}\n\ndata: [DONE]\n\n"
+  }
+}
