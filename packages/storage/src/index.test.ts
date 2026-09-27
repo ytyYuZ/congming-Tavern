@@ -13,6 +13,11 @@ describe('@smarttavern/storage (M0-T0 scaffold)', () => {
     expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
       '@smarttavern/core',
       '@smarttavern/schema',
+      'dexie',
     ]);
+  });
+
+  it('keeps the IndexedDB polyfill a devDependency (`docs/06` §9.3)', () => {
+    expect(Object.keys(manifest.devDependencies ?? {}).sort()).toEqual(['fake-indexeddb']);
   });
 });

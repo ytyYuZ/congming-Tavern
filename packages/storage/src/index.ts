@@ -1,5 +1,5 @@
 /**
- * @smarttavern/storage — workspace entry point (M0-T0 placeholder).
+ * @smarttavern/storage — workspace entry point.
  *
  * BOUNDARY: adapter layer. May import `@smarttavern/schema` and
  * `@smarttavern/core` (it implements `core/ports` StorageAdapter/AssetStore);
@@ -9,4 +9,7 @@
  * rollback tests. This is the only layer allowed to touch IndexedDB / SQLite /
  * OPFS — browser and runtime APIs stop here.
  */
+export * from './indexeddb/adapter';
+export * from './indexeddb/schema';
+
 export const STORAGE_PACKAGE = '@smarttavern/storage' as const;
