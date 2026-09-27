@@ -9,6 +9,11 @@
 #
 # No secrets and no network services are needed: every workspace is private and
 # consumed as TypeScript source during M0, so there is nothing to publish.
+# ACTIONS MUST STAY ON node24-CAPABLE MAJORS.
+# GitHub removed Node 20 from the runners and now forces these actions onto Node
+# 24, which prints a deprecation notice on every run. checkout@v5, setup-node@v5
+# and pnpm/action-setup@v5 are the first majors that declare `using: node24`, so
+# they are the floor here: pinning back to v4 brings the notice back.
 name: CI
 
 on:
@@ -41,19 +46,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # The dependency-direction check parses sources, so line endings and
           # permissions must match the committed bytes on every platform.
           persist-credentials: false
 
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 12.6.0
 
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
 
@@ -75,15 +80,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 12.6.0
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
       - name: install
@@ -97,15 +102,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 12.6.0
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
       - name: install
@@ -119,15 +124,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 12.6.0
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
       - name: install
