@@ -3,7 +3,7 @@
  * engine tests will rely on.
  */
 import { describe, expect, it } from 'vitest';
-import { COLLECTIONS } from '../storage';
+import { COLLECTIONS, type Query, StorageQueryError } from '../storage';
 import { MockStorageAdapter, MockStorageError } from './mock-storage';
 
 interface WorldRow {
@@ -71,6 +71,7 @@ describe('MockStorageAdapter', () => {
       const worlds = tx.collection<WorldRow>(COLLECTIONS.worlds);
       await worlds.put(row);
       handed = await worlds.get('w1');
+      if (handed === undefined) throw new Error('the row put in this transaction must be readable');
       handed.name = 'MUTATED INSIDE';
       // Mutating the caller's object after `put` must not reach committed state.
       row.name = 'MUTATED OUTSIDE';
@@ -132,6 +133,31 @@ describe('MockStorageAdapter', () => {
 
       const page = await messages.list({ offset: 1, limit: 2 });
       expect(page.map((row) => row.id)).toEqual(['m2', 'm3']);
+    });
+  });
+
+  it('refuses a range bound that cannot be compared, instead of matching every row (ADR-024)', async () => {
+    const db = new MockStorageAdapter();
+    await db.transaction(async (tx) => {
+      const messages = tx.collection<MessageRow>(COLLECTIONS.messages);
+      await messages.put({ id: 'm1', sessionId: 's1', createdAt: 10 });
+    });
+
+    await db.transaction(async (tx) => {
+      const messages = tx.collection<MessageRow>(COLLECTIONS.messages);
+      // `compareValues` answers 0 ("equal") for anything that is not a number or a
+      // string, so a `Date` bound used to MATCH EVERY ROW: the query answered the
+      // whole table instead of complaining. The port now refuses it at runtime as
+      // well, so a cast or a plain JS caller cannot smuggle one past the type.
+      // @ts-expect-error a Date is not a comparable bound (ADR-024)
+      const dateBound: Query<MessageRow> = { field: 'createdAt', from: new Date(0) };
+      await expect(messages.list(dateBound)).rejects.toBeInstanceOf(StorageQueryError);
+      await expect(messages.list(dateBound)).rejects.toThrow(/must be a number or a string/);
+
+      // Scalars keep working, unchanged.
+      expect(
+        (await messages.list({ field: 'createdAt', from: 1, to: 20 })).map((row) => row.id),
+      ).toEqual(['m1']);
     });
   });
 

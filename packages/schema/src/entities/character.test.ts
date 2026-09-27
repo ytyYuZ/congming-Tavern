@@ -13,6 +13,19 @@
 import { describe, expect, it } from 'vitest';
 import { CharacterDataSchema, CharacterVersionSchema } from './character';
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `broken.characterId` trips
+ * `noPropertyAccessFromIndexSignature`, and `broken['characterId']` trips
+ * Biome's `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 const CHARACTER_ID = '0192f0a1-1111-7000-8000-000000000001';
 const VERSION_ID = '0192f0a1-1111-7000-8000-000000000002';
 const NOW = 1_790_000_000_000;
@@ -185,8 +198,7 @@ describe('character version envelope', () => {
   });
 
   it('requires the characterId back-pointer used by the storage collection', () => {
-    const broken: Record<string, unknown> = { ...version };
-    delete broken.characterId;
+    const broken = withoutKeys(version, 'characterId');
     expect(CharacterVersionSchema.safeParse(broken).success).toBe(false);
   });
 

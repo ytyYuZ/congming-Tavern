@@ -12,7 +12,7 @@
     "lint": "biome check . && node tools/scripts/check-dependency-direction.mjs",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && node tools/scripts/typecheck-tests.mjs",
     "test": "vitest run --pool=threads",
     "test:watch": "vitest --pool=threads",
     "check:deps": "node tools/scripts/check-dependency-direction.mjs",

@@ -163,6 +163,7 @@ describe('MockToolRuntime.execute', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe('rejected');
+      if (result.reason !== 'rejected') throw new Error('expected a rejection');
       expect(result.issues.map((issue) => issue.parameter)).toEqual(['expr', 'target']);
     }
   });

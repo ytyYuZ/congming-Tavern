@@ -58,6 +58,19 @@ function expectStrips(schema: Parseable, fixture: Record<string, unknown>) {
   );
 }
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `minimal.thumbId` trips
+ * `noPropertyAccessFromIndexSignature`, and `minimal['thumbId']` trips Biome's
+ * `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /* ───────────────────────────────── tests ─────────────────────────────────── */
 
 describe('asset meta', () => {
@@ -66,9 +79,7 @@ describe('asset meta', () => {
   });
 
   it('parses a minimal asset (thumb and generation source may be absent)', () => {
-    const minimal: Record<string, unknown> = { ...fullAsset };
-    delete minimal.thumbId;
-    delete minimal.source;
+    const minimal = withoutKeys(fullAsset, 'thumbId', 'source');
     expect(AssetMetaSchema.safeParse(minimal).success).toBe(true);
     expectRequired(AssetMetaSchema, fullAsset, [
       'id',

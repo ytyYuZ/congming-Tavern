@@ -53,6 +53,19 @@ function expectStrips(schema: Parseable, fixture: Record<string, unknown>) {
   );
 }
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `minimal.comment` trips
+ * `noPropertyAccessFromIndexSignature`, and `minimal['comment']` trips Biome's
+ * `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /* ───────────────────────────────── tests ─────────────────────────────────── */
 
 describe('worldbook conditions', () => {
@@ -86,8 +99,7 @@ describe('worldbook entry', () => {
   });
 
   it('parses a minimal entry (comment is the only optional field, conditions may be empty)', () => {
-    const minimal: Record<string, unknown> = { ...fullEntry, conditions: {} };
-    delete minimal.comment;
+    const minimal = withoutKeys({ ...fullEntry, conditions: {} }, 'comment');
     expect(WorldbookEntrySchema.safeParse(minimal).success).toBe(true);
     // A keyword-less, unconditioned entry is a disabled-or-constant entry; the
     // schema does not decide that, `enabled` does.

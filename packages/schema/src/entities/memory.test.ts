@@ -53,6 +53,19 @@ function expectStrips(schema: Parseable, fixture: Record<string, unknown>) {
   );
 }
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `minimal.sourceMessageId`
+ * trips `noPropertyAccessFromIndexSignature`, and `minimal['sourceMessageId']`
+ * trips Biome's `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /* ───────────────────────────────── tests ─────────────────────────────────── */
 
 describe('memory entry', () => {
@@ -61,8 +74,7 @@ describe('memory entry', () => {
   });
 
   it('parses a minimal entry (only the source message may be absent)', () => {
-    const minimal: Record<string, unknown> = { ...fullEntry };
-    delete minimal.sourceMessageId;
+    const minimal = withoutKeys(fullEntry, 'sourceMessageId');
     expect(MemoryEntrySchema.safeParse(minimal).success).toBe(true);
     // Keywords may be empty: a fact with no retrieval key is still a memory.
     expect(MemoryEntrySchema.safeParse({ ...minimal, keywords: [] }).success).toBe(true);

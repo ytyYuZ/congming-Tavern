@@ -95,6 +95,18 @@ async function patchManifest(
   );
 }
 
+/**
+ * Write one field into the freshly parsed manifest object.
+ *
+ * `raw` is `Record<string, unknown>` because it is genuinely untyped JSON, and
+ * both spellings of a bare key are unusable on it: `raw.formatVersion` trips
+ * `noPropertyAccessFromIndexSignature`, `raw['formatVersion']` trips Biome's
+ * `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function setField(target: object, key: string, value: unknown): void {
+  (target as Record<string, unknown>)[key] = value;
+}
+
 /* ─────────────────────────────── §12 items ──────────────────────────────── */
 
 describe('docs/04 §12 contract regression', () => {
@@ -138,7 +150,7 @@ describe('docs/04 §12 contract regression', () => {
   it('§12-4 an unknown manifest field still imports (forward compatibility)', async () => {
     const archive = await build();
     const patched = await patchManifest(archive, (raw) => {
-      raw.aFieldFromTheFuture = { nested: [1, 2, 3] };
+      setField(raw, 'aFieldFromTheFuture', { nested: [1, 2, 3] });
     });
 
     const report = await validatePackage(patched);
@@ -149,7 +161,7 @@ describe('docs/04 §12 contract regression', () => {
   it('§12-5 formatVersion 2 is refused with an upgrade hint', async () => {
     const archive = await build();
     const patched = await patchManifest(archive, (raw) => {
-      raw.formatVersion = 2;
+      setField(raw, 'formatVersion', 2);
     });
 
     const report = await validatePackage(patched);

@@ -56,6 +56,19 @@ function expectStrips(schema: Parseable, fixture: Record<string, unknown>) {
   );
 }
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `minimal.repeatEveryMinutes`
+ * trips `noPropertyAccessFromIndexSignature`, and `minimal['repeatEveryMinutes']`
+ * trips Biome's `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /* ───────────────────────────────── tests ─────────────────────────────────── */
 
 describe('agenda entry', () => {
@@ -64,9 +77,7 @@ describe('agenda entry', () => {
   });
 
   it('parses a minimal entry (repeat and result are the only optional fields)', () => {
-    const minimal: Record<string, unknown> = { ...fullEntry };
-    delete minimal.repeatEveryMinutes;
-    delete minimal.resultingMessageId;
+    const minimal = withoutKeys(fullEntry, 'repeatEveryMinutes', 'resultingMessageId');
     expect(AgendaEntrySchema.safeParse(minimal).success).toBe(true);
     // An entry with no actors is legal: "the fog rolls in" involves nobody.
     expect(AgendaEntrySchema.safeParse({ ...minimal, actors: [] }).success).toBe(true);

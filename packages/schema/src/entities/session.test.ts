@@ -95,6 +95,19 @@ function expectStrips(schema: Parseable, fixture: Record<string, unknown>, keys:
   }
 }
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `minimal.rulePack` trips
+ * `noPropertyAccessFromIndexSignature`, and `minimal['rulePack']` trips Biome's
+ * `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /* ───────────────────────────────── tests ─────────────────────────────────── */
 
 describe('session refs', () => {
@@ -103,8 +116,7 @@ describe('session refs', () => {
   });
 
   it('parses a minimal refs block (rulePack is the only optional slot)', () => {
-    const minimal: Record<string, unknown> = { ...fullRefs };
-    delete minimal.rulePack;
+    const minimal = withoutKeys(fullRefs, 'rulePack');
     expect(SessionRefsSchema.safeParse(minimal).success).toBe(true);
     expectRequired(SessionRefsSchema, fullRefs, [
       'world',
@@ -128,9 +140,9 @@ describe('session refs', () => {
   });
 
   it('pins every reference to a version, so a save cannot drift', () => {
-    const unpinned: Record<string, unknown> = { ...fullRefs };
-    delete unpinned.world;
-    unpinned.world = { id: WORLD_ID };
+    // A pin without its `version` must fail: replace the whole `world` slot with
+    // an unpinned one. Building the object this way also keeps `fullRefs` intact.
+    const unpinned = { ...withoutKeys(fullRefs, 'world'), world: { id: WORLD_ID } };
     expect(SessionRefsSchema.safeParse(unpinned).success).toBe(false);
     expect(
       SessionRefsSchema.safeParse({ ...fullRefs, world: { id: WORLD_ID, version: 0 } }).success,
@@ -153,8 +165,7 @@ describe('session refs', () => {
       expect(Object.keys(SessionRefsSchema.shape)).not.toContain(forbidden);
     }
     // A session without a player character is not a session.
-    const broken: Record<string, unknown> = { ...fullRefs };
-    delete broken.playerCharacter;
+    const broken = withoutKeys(fullRefs, 'playerCharacter');
     expect(SessionRefsSchema.safeParse(broken).success).toBe(false);
   });
 
@@ -232,8 +243,7 @@ describe('session', () => {
 describe('deadline', () => {
   it('parses a fully populated deadline and a minimal one', () => {
     expect(DeadlineSchema.safeParse(fullDeadline).success).toBe(true);
-    const minimal = { ...fullDeadline };
-    delete (minimal as Record<string, unknown>).targetId;
+    const minimal = withoutKeys(fullDeadline, 'targetId');
     expect(DeadlineSchema.safeParse(minimal).success).toBe(true);
     expectRequired(DeadlineSchema, fullDeadline, ['id', 'label', 'dueMinute', 'kind', 'status']);
   });

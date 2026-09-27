@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "Typecheck-only project that ADDS this workspace's test files back in.",
+    "`tsconfig.json` excludes `src/**/*.test.ts`, and Vitest only TRANSPILES tests,",
+    "so a type error inside a test used to be invisible until it failed at runtime.",
+    "`pnpm typecheck` runs `tsc -b` and then tools/scripts/typecheck-tests.mjs, which",
+    "checks every workspace that has this file.",
+    "",
+    "It extends the workspace's OWN config on purpose: packages/core extends",
+    "tsconfig.core.json, which removes the DOM lib to keep core browser-free. One",
+    "root-level project would hand core's tests the DOM back.",
+    "",
+    "composite is turned off so this pass can never write build info or declarations —",
+    "a checker that litters is a checker people stop trusting."
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "exclude": []
+}

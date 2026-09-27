@@ -219,6 +219,29 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
    断言检查器确实会报告（以及干净树确实为 0 条）。把检查器里的 `ALLOWED` 表改坏，
    这些测试立刻变红。
 
+### 5.3 测试文件的类型检查（`tsconfig.test.json`）
+
+每个 workspace 的 `tsconfig.json` 都排除了自己的测试文件，而 Vitest 只**转译**测试
+（剥掉类型但不检查），所以测试里的类型错误此前完全不可见 —— 直到它在运行时炸掉。
+`pnpm typecheck` 因此是两步：`tsc -b` 加上 `node tools/scripts/typecheck-tests.mjs`，
+后者按 workspace 运行 `tsconfig.test.json`（继承本包配置并放回测试，`composite: false`
+且永不产出）。
+
+**逐包而不是根级单项目**是刻意的：`packages/core` 继承 `tsconfig.core.json`，那份配置
+**移除了 DOM lib** 以让 core 远离浏览器 API。根级单项目会把 DOM 还给 core 的测试，
+反而削弱它存在的意义。
+
+证实这条规则会红（约 15 秒）：
+
+1. 在任意 `*.test.ts` 里加一行类型错误，例如 `const n: number = 'no';`
+2. 运行 `pnpm typecheck`。预期：退出码非 0，并打印
+   `[types] N test project(s) failed to typecheck:`，随后列出出问题的配置文件。
+3. 删掉该行；同一命令输出 `[types] OK — N test projects typecheck clean.` 并退出 0。
+
+新增 workspace 时记得一并加 `tsconfig.test.json`；如果**一个都没找到**，检查脚本会
+**大声失败**（而不是静默地什么都不查）—— 一个"全绿但其实没检查任何东西"的 job，
+比没有这个 job 更危险。
+
 ---
 
 ## 6. 代码约定 / Code conventions

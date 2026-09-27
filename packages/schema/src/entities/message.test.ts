@@ -70,13 +70,25 @@ function expectStrips(schema: Parseable, fixture: Record<string, unknown>) {
   );
 }
 
+/**
+ * Copy of `source` with `keys` removed.
+ *
+ * Both spellings of a bare key are unusable here: `minimal.result` trips
+ * `noPropertyAccessFromIndexSignature`, and `minimal['result']` trips Biome's
+ * `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function withoutKeys(source: object, ...keys: string[]): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...source };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /* ───────────────────────────────── tests ─────────────────────────────────── */
 
 describe('tool call', () => {
   it('parses a fully populated call and a minimal one (args is required, result is not)', () => {
     expect(ToolCallSchema.safeParse(fullToolCall).success).toBe(true);
-    const minimal = { ...fullToolCall };
-    delete (minimal as Record<string, unknown>).result;
+    const minimal = withoutKeys(fullToolCall, 'result');
     expect(ToolCallSchema.safeParse(minimal).success).toBe(true);
     expectRequired(ToolCallSchema, fullToolCall, ['id', 'name', 'args', 'status', 'source']);
     // `args` accepts any JSON payload: each tool owns its own argument schema.
@@ -131,14 +143,12 @@ describe('message', () => {
   });
 
   it('parses a minimal message (only the optional presentation fields may be absent)', () => {
-    const minimal = {
-      ...fullMessage,
-      parentId: null,
-      meta: {},
-    };
-    delete (minimal as Record<string, unknown>).speakerId;
-    delete (minimal as Record<string, unknown>).emotion;
-    delete (minimal as Record<string, unknown>).toolCalls;
+    const minimal = withoutKeys(
+      { ...fullMessage, parentId: null, meta: {} },
+      'speakerId',
+      'emotion',
+      'toolCalls',
+    );
     expect(MessageSchema.safeParse(minimal).success).toBe(true);
     expectRequired(MessageSchema, fullMessage, [
       'id',
@@ -173,8 +183,7 @@ describe('message', () => {
   it('models the tree: a root message has parentId null, not a missing edge', () => {
     const root = { ...fullMessage, parentId: null };
     expect(MessageSchema.parse(root).parentId).toBeNull();
-    const broken = { ...fullMessage };
-    delete (broken as Record<string, unknown>).parentId;
+    const broken = withoutKeys(fullMessage, 'parentId');
     expect(MessageSchema.safeParse(broken).success).toBe(false);
   });
 

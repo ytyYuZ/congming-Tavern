@@ -11,7 +11,7 @@ function meta(overrides: Partial<AssetMeta> = {}): AssetMeta {
   return {
     id: 'a1',
     hash: fakeSha256(new Uint8Array([1, 2, 3])),
-    kind: 'image',
+    kind: 'sprite',
     mime: 'image/png',
     width: 512,
     height: 512,

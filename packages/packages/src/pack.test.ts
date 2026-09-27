@@ -74,6 +74,18 @@ async function repackWithManifestPatch(
   );
 }
 
+/**
+ * Write one field into the freshly parsed manifest object.
+ *
+ * `raw` is `Record<string, unknown>` because it is genuinely untyped JSON, and
+ * both spellings of a bare key are unusable on it: `raw.someFutureField` trips
+ * `noPropertyAccessFromIndexSignature`, `raw['someFutureField']` trips Biome's
+ * `useLiteralKeys`. Only a parameterised key satisfies both.
+ */
+function setField(target: object, key: string, value: unknown): void {
+  (target as Record<string, unknown>)[key] = value;
+}
+
 /** Rebuild the archive with one payload replaced — the "tampered byte" fixture. */
 async function repackWithPayload(
   archive: Uint8Array,
@@ -206,7 +218,7 @@ describe('validatePackage', () => {
   it('still imports a manifest with an unknown field (docs/04 §12 item 4)', async () => {
     const archive = await pack({ manifest: draft(), files: payload() });
     const patched = await repackWithManifestPatch(archive, (raw) => {
-      raw.someFutureField = { added: 'by a newer writer' };
+      setField(raw, 'someFutureField', { added: 'by a newer writer' });
     });
     const report = await validatePackage(patched);
     expect(report.ok).toBe(true);
@@ -215,7 +227,7 @@ describe('validatePackage', () => {
   it('refuses formatVersion 2 and says to upgrade (docs/04 §12 item 5)', async () => {
     const archive = await pack({ manifest: draft(), files: payload() });
     const patched = await repackWithManifestPatch(archive, (raw) => {
-      raw.formatVersion = 2;
+      setField(raw, 'formatVersion', 2);
     });
 
     const report = await validatePackage(patched);
