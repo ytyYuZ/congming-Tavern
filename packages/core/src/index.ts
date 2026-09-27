@@ -15,3 +15,10 @@
  * docs/02-技术架构.md §11 requires to be unit-testable without any I/O.
  */
 export const CORE_PACKAGE = '@smarttavern/core' as const;
+
+/**
+ * The port contracts (docs/02 §6, §13 #3/#7/#8) and their in-memory test
+ * doubles. Re-exported from the entry point so an adapter package imports one
+ * specifier; `./ports/mock` stays reachable through the barrel for tests.
+ */
+export * from './ports';
