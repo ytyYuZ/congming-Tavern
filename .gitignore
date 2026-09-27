@@ -69,6 +69,10 @@ secrets.json
 # any machine, and this file is where the local exceptions live.
 LOCAL-DEV-NOTES.md
 
+# Host-specific development tooling and caches. The reasons are themselves host
+# specific, so they live in the untracked LOCAL-DEV-NOTES.md rather than here.
+.local-dev/
+
 # --- Stray logs -------------------------------------------------------------
 # Some toolchain crash handlers write `debug.log` into the working directory when
 # their crash database is unavailable. Never commit those.

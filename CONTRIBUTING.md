@@ -262,15 +262,56 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
   `schema ← core ← {providers, storage, rules, packages, importers} ← apps/*`。
   M0-T0 采用较窄的读法：两者是叶子，可以依赖 `schema`/`core`，
   **不允许被下层 import**；`core` 也不得 import 它们。
-- **框架与 Tauri**：`docs/02-技术架构.md` D2 / ADR-005 与 ADR-002 尚未定论，因此
-  `biome.json`、Vite 配置与 `packages/ui` 都不引入任何框架依赖，只留扩展点。
+- **样式方案**：`README.md` 与 `docs/02-技术架构.md` 的技术栈里写着 Tailwind CSS v4，
+  但 M0-T8 的壳（设置 / 会话列表 / 对话三个路由）没有设计系统要承载，因此只写了
+  一份普通 CSS，**没有引入 Tailwind**。M1 做真实 UI 时接上；届时若仍不引入，
+  要改的是文档，而不是让这条差异继续漂着。
 - **`tools/schema-export`**：M0-T0 只占位目录与说明，M0-T2 才加入真正的
   `package.json` 与 JSON Schema 导出脚本。
 - **`tsconfig.base.json` 未开启 `exactOptionalPropertyTypes`**：文档只要求
   `strict` + `noUncheckedIndexedAccess`。该选项与 Zod 的可选字段（`?: T` 与
   `?: T | undefined`）冲突面较大，留到 M0-T1 定义实体 schema 时再评估。
-- **`packages/ui` / `packages/i18n` 目前不引入任何框架依赖**，因此它们的
-  `package.json` 的 `dependencies` 为空；等 ADR-005 定论后再加。
 - **工作区之间靠源码引用（`exports: "./src/index.ts"`）而不是构建产物**：M0 阶段
   包很小、且全部 `private`，这样 `typecheck`/`test` 不需要先 build。等 M0-T3 起
   出现需要独立发布的产物（例如 `tools/stpack-cli`）再引入真正的打包步骤。
+
+---
+
+## 7. 桌面壳（Tauri 2）/ Desktop shell
+
+桌面端**不是**第二套 UI：`apps/desktop` 只做两件事 —— 调用 `apps/web` 导出的
+`mountApp(root, { transport })`，并注入一个由 Rust 承载的 `FetchLike`
+（`src-tauri/` 的 `llm_stream` / `llm_cancel`，见 ADR-025）。UI、状态层与业务逻辑只有一份，
+差别只在注入的那一个参数上，所以 web 端**不需要**到处写 `if (isTauri)`。
+
+```bash
+pnpm --filter @smarttavern/desktop tauri:dev            # 开发（内部会拉起 vite dev server）
+pnpm --filter @smarttavern/desktop tauri:build          # 只出 exe（= tauri build --no-bundle）
+pnpm --filter @smarttavern/desktop tauri build          # 完整打包（msi/nsis…，打包阶段要联网下载工具）
+pnpm --filter @smarttavern/desktop tauri:check          # cargo fmt --check + clippy -D warnings + test
+```
+
+前置条件：Rust 工具链（`rustup` 默认目标即可）与 WebView2 运行时（Windows 10/11 自带）。
+`pnpm install` **不装** Rust 依赖，`cargo` 会自己拉。
+
+**两个会让人白费半小时的坑**（都踩过）：
+
+1. **debug 构建加载的是 `build.devUrl`，不是内嵌的前端产物。** Tauri 在开发模式下故意不打包
+   前端资源，改成直接读 `frontendDist` 目录 / 连 `devUrl`（`tauri/src/app.rs` 的 `#[cfg(dev)]`
+   分支写得很清楚）。所以**直接双击 `target/debug/*.exe` 只会得到一个白窗口** —— 那不代表
+   前端坏了。要么用 `tauri:dev`（它会替你把 vite 起在 1420），要么做 release 构建，
+   那才会把 `dist/` 嵌进去。
+2. **窗口只在 `tauri.conf.json` 里声明，不要在 Rust 里再建一个同 label 的。** `Ready` 事件会
+   先创建配置里的窗口，`setup` 闭包再建一个同名窗口就会撞 label / 撞 WebView2 的初始化。
+
+**这条跨语言边界不允许漂移**：Rust 与 TS 两侧共读同一份夹具
+`apps/desktop/src/transport/fixtures/llm-stream-events.json` —— Rust 侧断言事件枚举序列化成
+夹具里的 JSON，TS 侧把同一份帧喂进假的 channel，断言还原出的 `Response` 的状态码、响应头与
+正文字节一致。**改一侧的形状，另一侧的测试就会红。**（顺带一条 serde 经验：枚举上
+`rename_all` 只重命名**变体**，变体里的字段要靠 `rename_all_fields` —— 这条正是夹具测试抓出来的。）
+
+**Rust 目前不在 CI 里 —— 这是已知缺口，不是疏忽。** 原因：`cargo test` 要编译整棵 `tauri`
+依赖树，Linux runner 还得装 `webkit2gtk-4.1` 一类系统库，冷构建十分钟起步，而 M0 的四个 job
+要保持在"几分钟内给人答案"的量级。因此在桌面端有改动的 PR 上，**`tauri:check` 与
+`tauri:build` 是提交前必须自己跑的一步**，把结果写进 PR 说明。补一个带缓存的 Rust job
+已记在 `docs/06-开发任务拆解.md` 的后续项里。

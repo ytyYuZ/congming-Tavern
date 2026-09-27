@@ -33,7 +33,7 @@
 | 仓库名 | `congming-tavern`（避免与 GitHub 上已存在的同名项目混淆） |
 | 机器标识 | `smarttavern`（已写进冻结的包格式：`format: "smarttavern.package"`、MIME、`extensions.smarttavern`，**不改**） |
 | npm 包名 | `@smarttavern/*`，仅内部 workspace 使用，**不发布公共 registry** |
-| 桌面 bundle id | 待定（M0-T8），倾向拼音形 `app.congmingjiuguan.desktop` |
+| 桌面 bundle id | `app.congmingjiuguan.desktop`（M0-T8 已定，写进 `apps/desktop/src-tauri/tauri.conf.json`） |
 
 品牌表述固定为：**"兼容 SillyTavern 数据格式，但完全独立实现"**（ADR-001）。
 
@@ -78,12 +78,21 @@
 
 ## 当前状态
 
-v0.8：**M0 的契约与骨架已落地** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
+v0.9：**M0 全部完成** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
 （`schema/package-1.json` 与 `schema/tools-1.json` 由 `pnpm schema:export` 生成，有逐字节漂移测试守护）、
 M0-T3 `.stpack` 打包 / 解包 / 校验（自研窄 ZIP + canonical JSON，ADR-018）、M0-T4 包 CLI、
 M0-T5 `core/ports` 核心接口与测试替身、**M0-T9 契约回归套件**（`docs/04` §12 第 1–7 条逐条覆盖）、
 **M0-T6 OpenAI 兼容 Provider**（零依赖 SSE 解析器，密钥脱敏有专门断言）、
-**M0-T7 IndexedDB 存储**（Dexie；集合与索引取自 `core/ports` 的常量，含跨集合事务回滚）
-均已完成；工具链为 **Vite 8.3.1 + Vitest 5.0.2**，`pnpm ci` 四步全绿（50 个测试文件 / 559 个用例）。
+**M0-T7 IndexedDB 存储**（Dexie；集合与索引取自 `core/ports` 的常量，含跨集合事务回滚）、
+**M0-T8 应用骨架**（`apps/web` 的 React 19 壳打通「配置密钥 → 发消息 → 流式渲染 → 落库 → 重启仍在」；
+`apps/desktop` 是 Tauri 2 壳，Rust 侧 `llm_stream` 字节管道绕开 CORS）
+均已完成；工具链为 **Vite 8.3.1 + Vitest 5.0.2 + Rust 1.98 + Tauri 2.12**，
+`pnpm ci:local` 四步全绿（**55 个测试文件 / 633 个用例**），Rust 侧 `fmt` / `clippy -D warnings` /
+`cargo test` 亦全绿。
 
-**下一步**：M0-T8（应用骨架：Web 壳 + 桌面壳；桌面端需 Rust 工具链）。
+> **一处保留**：桌面**窗口**在开发用的受限环境里起不来（事件循环到不了 `Ready`，因此没有窗口被创建），
+> 所以"窗口里显示了界面"需要在正常桌面会话里自行确认；界面与传输逻辑分别有测试覆盖。
+> 详见 `docs/06-开发任务拆解.md` §9.4 的状态块。
+
+**下一步**：M1（MVP 三阶段跑通），入口是 **M1-G1 i18n 骨架**与 **M1-G4 PromptComposer 最小版**；
+动手前建议先收掉 §9.4 记下的 UUIDv7 双实现。

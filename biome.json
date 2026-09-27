@@ -15,6 +15,7 @@
       "!**/.pnpm-store",
       "!**/.npm-cache",
       "!**/.local-appdata",
+      "!**/.local-dev",
       "!**/target",
       "!**/*.stpack",
       "!schema",

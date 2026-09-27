@@ -80,10 +80,10 @@
 | `node` | ✅ v24.17.0（`C:\Program Files\nodejs\node.exe`） |
 | `npm` | ✅ 11.13.0 |
 | `pnpm` | ✅ 12.6.0 |
-| `git` | ✅ 2.45.1.windows.1（**仓库尚未 `git init`**） |
+| `git` | ✅ 2.45.1.windows.1（仓库已 `git init` 并有提交；**推送只能在正常网络下做**） |
 | `python` | ✅ 3.13.3 |
 | `rg` | ✅ 15.2.0 |
-| `cargo` / `rustc` | ❌ **未安装** —— 影响 Tauri 桌面方案，见 §9 |
+| `cargo` / `rustc` | ✅ 1.98.1（`x86_64-pc-windows-msvc`）—— M0-T8 前装好，Tauri 桌面方案因此成立；MSVC BuildTools 2022 与 Windows SDK 10.0.26100 也都在 |
 
 ---
 
@@ -221,8 +221,8 @@ M0-T0 → M0-T1 → M0-T2 → ┬─ M0-T3 → M0-T4 ─┐
 | # | 问题 | 说明 |
 | --- | --- | --- |
 | 1 | **产品正式名称** | `SmartTavern` 是工作区名，可能与既有项目重名 |
-| 2 | 前端框架最终定 | 默认 Svelte 5；若用户更熟 React 则切换（ADR-005 允许） |
-| 3 | 桌面壳方案 | **当前环境没有 Rust**；选 Tauri 需先装 Rust 工具链，否则改 Electron |
+| 2 | 前端框架最终定 | **已定：React 19**（ADR-017，取代 ADR-005） |
+| 3 | 桌面壳方案 | **已定：Tauri 2**（ADR-002）。Rust 工具链已装（1.98.1），**兜底 Electron 未触发** |
 | 4 | 包格式是否还要调整 | **这是最后一次低成本窗口**，动工实现后再改要提 `formatVersion` |
 | 5 | 是否上架应用商店 | 只影响签名分发与 NSFW 策略，不影响架构 |
 
@@ -270,8 +270,8 @@ M0-T0 → M0-T1 → M0-T2 → ┬─ M0-T3 → M0-T4 ─┐
 | # | 事项 | 结论 |
 | --- | --- | --- |
 | 1 | 产品名 | 中文显示名 **聪明酒馆**，英文显示名 SmartTavern；**机器标识保持 `smarttavern` 不变**（已写进冻结包格式，不改）；仓库名建议 `congming-tavern`（GitHub 上 `SmartTavern` 已被 [Lianues/SmartTavern](https://github.com/Lianues/SmartTavern) 占用）；npm 用 `@smarttavern/*` 但仅限内部 workspace，**不发布公共 registry** |
-| 2 | 前端框架 | **React 19**（新增 **ADR-017**，取代 ADR-005）。配套：TanStack Router / Zustand + Dexie liveQuery / `react-hook-form` + `@hookform/resolvers/zod` / Tailwind v4 + Radix Primitives / TanStack Virtual / dnd-kit / react-i18next |
-| 3 | 桌面壳 | **Tauri 2 不变**（ADR-002）。Rust 工具链当前未安装，**推迟到 M0-T8 前安装**（不阻塞 M0-T0 ~ M0-T7）；届时装不上则兜底 Electron + 新增 ADR，`packages/*` 与 `apps/web` 无需改动 |
+| 2 | 前端框架 | **React 19**（新增 **ADR-017**，取代 ADR-005）。配套：TanStack Router / Zustand + Dexie liveQuery / `react-hook-form` + `@hookform/resolvers/zod` / Tailwind v4 + Radix Primitives / TanStack Virtual / dnd-kit / react-i18next（**Tailwind 在 M0-T8 的壳里尚未引入**，理由见 `CONTRIBUTING.md` §6 的待定条目） |
+| 3 | 桌面壳 | **Tauri 2 不变**（ADR-002）。Rust 工具链**已装好**（1.98.1 / MSVC 目标），兜底 Electron **未触发**；桌面端的 HTTP 通道由自建 `llm_stream` 字节管道承载（**ADR-025**），TLS 用 `rustls`（**ADR-026**），`packages/*` 与 `apps/web` 的端口契约一行未改 |
 | 4 | 包格式 | `docs/04` 完成**规范文本消歧 r2**：6 处内部矛盾 / 空缺已修正，**`formatVersion` 仍为 1**，不删字段、不改字段语义、不改必需文件 |
 | 5 | 应用商店 | 未决，不影响架构 |
 
