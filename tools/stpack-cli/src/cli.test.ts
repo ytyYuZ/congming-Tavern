@@ -204,6 +204,15 @@ describe('stpack usage', () => {
     expect(io.out.join('\n')).toContain('stpack validate');
   });
 
+  it('tolerates the literal `--` that pnpm and npm insert when forwarding args', async () => {
+    // `pnpm stpack -- --help` arrives as ['--', '--help']. Without dropping the
+    // separator, parseArgs reads the flag as a positional and `--help` — the
+    // documented way to ask for help — would be unreachable.
+    const io = capture();
+    expect(await main(['--', '--help'], io.io)).toBe(EXIT.ok);
+    expect(io.out.join('\n')).toContain('stpack validate');
+  });
+
   it('exits 2 for an unknown command, a missing file and an unknown flag', async () => {
     for (const argv of [['frobnicate'], ['validate'], ['--nope', 'validate', 'x']]) {
       const io = capture();

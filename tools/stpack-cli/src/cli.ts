@@ -40,9 +40,15 @@ export async function main(argv: readonly string[], io: CliIo = defaultCliIo): P
   let values: { json?: boolean; force?: boolean; help?: boolean };
   let positionals: string[];
 
+  // `pnpm stpack -- <args>` (and npm) forward a LITERAL `--`. Node's parseArgs
+  // treats it as the end-of-options marker, which would turn a following `--help`
+  // into a positional and make help unreachable through the documented
+  // invocation. Drop one leading separator before parsing.
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+
   try {
     const parsed = parseArgs({
-      args: [...argv],
+      args: [...args],
       allowPositionals: true,
       strict: true,
       options: {
