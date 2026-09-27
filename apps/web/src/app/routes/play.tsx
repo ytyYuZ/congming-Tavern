@@ -59,6 +59,23 @@
  * keystroke. React owns it. The same is true of the save-point label, the custom minute
  * amount and the confirmations below: each is one gesture's worth of input, and none of
  * them is conversation state.
+ *
+ * THE MESSAGE TREE'S CONTROLS (M1-S2)
+ * A row is one node, and the four acts docs/06 §2.5 asks for are actions on THAT node:
+ * 编辑 and 删除 replace its text or remove it, 重新生成 asks the model again for the same
+ * prompt (writing a SIBLING, so the answer being replaced stays one arrow away), and 继续写
+ * sits on the last row because a continuation is about the tip of the chain rather than
+ * about a node. Every one of them is a call into `state/chat-store.ts`, which owns the
+ * rules (the tree's shape, which node a regenerate attaches to, what a delete may remove)
+ * and the database; this file decides where the buttons are and what the catalog says.
+ *
+ * WHY THE SIBLING COUNT AND THE ARROWS COME FROM A READ AND NOT FROM THE CHAIN
+ * A branch is a child of a node that the active path does NOT run through, so the chain
+ * literally cannot show that a second answer exists — `db/repository.ts`'s `listChildren`
+ * is the only place those rows are, and `chat/message-tree.ts` turns them into what the
+ * switcher renders. The switch itself is one `setHeadMessageId`: the chain is the walk up
+ * `parentId` from the head, so the other answer (and everything after it) appears without
+ * a single message being copied or rewritten.
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { Checkpoint, Id, Message, Session } from '@smarttavern/schema';
@@ -66,6 +83,7 @@ import { Link } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useState } from 'react';
 import { BUILTIN_HOURS_PER_DAY, BUILTIN_MINUTES_PER_HOUR } from '../../chat/builtin-content';
 import { clockOf, segmentStep, worldClockText } from '../../chat/clock';
+import type { SiblingView } from '../../chat/message-tree';
 import {
   isVariableKind,
   parseVariableInput,
@@ -85,6 +103,7 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
   const messageChain = useChatStore((state) => state.messageChain);
   const checkpoints = useChatStore((state) => state.checkpoints);
   const draft = useChatStore((state) => state.draft);
+  const regenerating = useChatStore((state) => state.regenerating);
   const status = useChatStore((state) => state.status);
   const error = useChatStore((state) => state.error);
   const open = useChatStore((state) => state.open);
@@ -157,7 +176,14 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
 
       <section className="transcript">
         {messageChain.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            isHead={message.id === session?.headMessageId}
+            isLast={message.id === messageChain[messageChain.length - 1]?.id}
+            streaming={streaming}
+            regenerating={regenerating === message.id}
+          />
         ))}
         {streaming ? (
           <div className="bubble bubble-assistant">
@@ -736,9 +762,347 @@ function VariableRow({ name, value }: { name: string; value: VariableValue }) {
   );
 }
 
-/** One stored node. `role` is the frozen wire vocabulary, so the switch is total. */
-function MessageBubble({ message }: { message: Message }) {
+/**
+ * One stored node, with the four acts M1-S2 adds to it (docs/06 §2.5: 流式渲染、swipe
+ * 重生成、编辑、删除、继续写).
+ *
+ * WHY THE ROW IS THE UNIT: every act in the milestone is an act on ONE message — another
+ * answer to it (regenerate), another version of it (edit), or its removal (delete) — and
+ * each one needs the same header (the count of answers, the arrows between them) to say
+ * which node it is about. A floating toolbar somewhere else on the screen would have to
+ * name its target in words; the row already is that name.
+ *
+ * WHY DELETING IS THE ONLY ACT WITH A CONFIRMATION: an edit and a regenerate both ADD a
+ * sibling, so the deleted-looking old text is still one arrow away — undoing either is a
+ * click. A delete removes a row from the database and nothing anywhere can bring it back,
+ * so it takes the save-point panel's two-step shape (arm, then confirm) rather than one
+ * mis-aimed click. The refusal path is the third state: a node with replies cannot be
+ * deleted at all, and the row says so instead of failing silently.
+ */
+function MessageBubble({
+  message,
+  isHead,
+  isLast,
+  streaming,
+  regenerating,
+}: {
+  message: Message;
+  isHead: boolean;
+  isLast: boolean;
+  streaming: boolean;
+  regenerating: boolean;
+}) {
+  const { t } = useTranslation();
+  const editMessage = useChatStore((state) => state.editMessage);
+  const deleteMessage = useChatStore((state) => state.deleteMessage);
+  const regenerate = useChatStore((state) => state.regenerate);
+  const switchBranch = useChatStore((state) => state.switchBranch);
+  const [view, setView] = useState<SiblingView | undefined>(undefined);
+  /**
+   * Whether a message hangs off this one, which is what makes the delete refused (M1-S2's
+   * rule). Read up front rather than discovered after a confirmation, so the row can LABEL
+   * the control instead of failing after two clicks — the write still re-checks it inside
+   * its own transaction, so a value from a moment ago cannot make the delete unsafe. It is
+   * re-read whenever the transcript changes, i.e. whenever a reply could have appeared.
+   */
+  const [hasReplies, setHasReplies] = useState(false);
+  const [editing, setEditing] = useSessionDraft(message.id, false);
+  /** The draft the editor starts from and the user types in; see the render body. */
+  const [draft, setDraft] = useSessionDraft(message.id, message.content);
+  /** Which confirm step the row is in: none, the delete, or the refusal it just reported. */
+  const [pending, setPending] = useSessionDraft<'none' | 'delete' | 'refused'>(message.id, 'none');
+  const [failed, setFailed] = useSessionDraft(message.id, false);
+
+  // A sibling run is a fact about the TABLE, which the chain cannot answer (the branch
+  // that is not active is exactly the one missing from the chain), so it is read through
+  // the state layer (ADR-017 — the view never imports `db/repository.ts`). It is re-read
+  // when the ACTIVE TIP changes, because that is what a branch switch moves: the run itself
+  // is unchanged, but which member the chain runs through (and therefore which arrows are
+  // live) is not. The head is passed to the store rather than compared here, so the view can
+  // never label a run from a head the store has already moved past.
+  const headMessageId = useChatStore((state) => state.session?.headMessageId ?? null);
+  useEffect(() => {
+    let current = true;
+    void useChatStore
+      .getState()
+      .siblingsOf(message.id, headMessageId)
+      .then((next) => {
+        if (current) setView(next);
+      });
+    void useChatStore
+      .getState()
+      .hasReplies(message.id)
+      .then((next) => {
+        if (current) setHasReplies(next);
+      });
+    return () => {
+      current = false;
+    };
+  }, [message.id, headMessageId]);
+
+  // Seed the editor from the row when it OPENS. React's documented "adjust state when a
+  // prop changes" rather than an effect: the row can change under a closed editor (a
+  // rollback, another tab's turn), and a textarea that opened with last render's text
+  // would show something the database does not hold. An OPEN editor is never overwritten —
+  // that would delete what the user is typing.
+  if (!editing && draft !== message.content) setDraft(message.content);
+
   const role = message.role;
   if (role !== 'user' && role !== 'assistant') return null;
-  return <div className={`bubble bubble-${role}`}>{message.content}</div>;
+
+  const onSave = async (): Promise<void> => {
+    if (await editMessage(message.id, draft)) {
+      setEditing(false);
+      setFailed(false);
+    } else {
+      setFailed(true);
+    }
+  };
+
+  const onDelete = async (): Promise<void> => {
+    setPending('none');
+    if (!(await deleteMessage(message.id))) setPending('refused');
+  };
+
+  return (
+    <div
+      className={`bubble bubble-${role}${isHead ? ' bubble-active' : ''}${
+        regenerating ? ' bubble-regenerating' : ''
+      }`}
+      data-message={message.id}
+    >
+      {view === undefined ? null : (
+        <SiblingSwitcher
+          view={view}
+          streaming={streaming}
+          onPick={(siblingId) => {
+            void switchBranch(siblingId);
+          }}
+        />
+      )}
+
+      {editing ? (
+        <MessageEditor
+          messageId={message.id}
+          value={draft}
+          onChange={setDraft}
+          onSave={() => {
+            void onSave();
+          }}
+          onCancel={() => {
+            setDraft(message.content);
+            setEditing(false);
+          }}
+        />
+      ) : (
+        <div className="bubble-text">{message.content}</div>
+      )}
+
+      <div className="bubble-actions">
+        <button
+          className="btn btn-small"
+          type="button"
+          disabled={streaming || editing}
+          onClick={() => setEditing(true)}
+        >
+          {t('play.edit')}
+        </button>
+        {role === 'assistant' && !editing ? (
+          <button
+            className="btn btn-small"
+            type="button"
+            disabled={streaming}
+            onClick={() => {
+              void regenerate(message.id);
+            }}
+          >
+            {t('play.regenerate')}
+          </button>
+        ) : null}
+        {pending === 'delete' ? (
+          <button
+            className="btn btn-small"
+            type="button"
+            onClick={() => {
+              void onDelete();
+            }}
+          >
+            {t('play.deleteConfirm')}
+          </button>
+        ) : (
+          <button
+            className="btn btn-small"
+            type="button"
+            // A node with replies is not deletable (M1-S2's rule), so its control is refused
+            // with the REASON as its tooltip: a button that could only fail after a
+            // confirmation would train the user to confirm without reading.
+            disabled={streaming || hasReplies}
+            title={hasReplies ? t('play.deleteRefused') : undefined}
+            // The label names WHICH message: the row also offers an edit and a regenerate,
+            // so a bare 「删除」 read aloud is the same control on every message in the
+            // transcript. The visible text stays short (`play.delete`); the accessible name
+            // carries the message's own text.
+            aria-label={t('play.deleteLabel', { target: message.content })}
+            onClick={() => setPending('delete')}
+          >
+            {t('play.delete')}
+          </button>
+        )}
+        {isLast && role === 'assistant' && !streaming ? <ContinueButton /> : null}
+      </div>
+
+      {pending === 'refused' ? <p className="bubble-status">{t('play.deleteRefused')}</p> : null}
+      {failed ? <p className="bubble-status">{t('play.editFailed')}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Move between the answers to one prompt (docs/02 §7's 重生成（同父多子）).
+ *
+ * WHY THE SWITCHER REPLACES THE BUBBLE TEXT IN PLACE: every member of a run is an answer
+ * to the SAME question, so showing them side by side would invent a sequence that does not
+ * exist — they are alternatives, not turns. The count (`第 2 / 3 条`) is what tells the
+ * user that the alternatives exist at all; a pair of arrows with no count is a control that
+ * could equally mean "previous message".
+ *
+ * WHY A SWITCH IS ONE `setHeadMessageId` AND NOTHING ELSE: the rendered chain IS the walk
+ * up `parentId` from `Session.headMessageId` (`db/repository.ts`'s `getChain`), so pointing
+ * the head at another member of the run re-renders the other answer — and everything after
+ * it — with no message copied, re-parented or rewritten. That is the milestone's 「切换分支
+ * 内容正确」, and it is why this control needs no confirm: the answer it leaves is one
+ * arrow away.
+ */
+function SiblingSwitcher({
+  view,
+  streaming,
+  onPick,
+}: {
+  view: SiblingView;
+  streaming: boolean;
+  onPick: (siblingId: Id) => void;
+}) {
+  const { t, locale } = useTranslation();
+  // `Intl.NumberFormat` rather than string concatenation: a locale that does not write
+  // Latin digits would otherwise show Arabic numerals beside a translated sentence.
+  const format = new Intl.NumberFormat(locale);
+  /**
+   * Move to the neighbour `offset` places away in the run, or do nothing.
+   *
+   * WHY THE TARGET IS DERIVED HERE AND NOT TAKEN FROM A STORED `previousId`/`nextId`: the
+   * run is read from the table asynchronously, so a value that named its neighbours when the
+   * read resolved can outlive the head move that made it wrong (another tab, a rollback, or
+   * this very screen's own switch). Resolving the neighbour from the run ON EVERY RENDER
+   * means the arrow can only ever name a member of the run the screen is showing; an
+   * out-of-range offset simply does nothing instead of asking the store to point the
+   * transcript at a row that is not in it.
+   */
+  const choose = (offset: number): void => {
+    const target = view.choices[view.index + offset];
+    if (target === undefined) return;
+    onPick(target.id);
+  };
+
+  return (
+    <div className="sibling-switcher">
+      <button
+        className="btn btn-small"
+        type="button"
+        disabled={streaming || view.index === 0}
+        aria-label={t('play.siblingPrevious')}
+        onClick={() => choose(-1)}
+      >
+        ‹
+      </button>
+      <span className="sibling-counter" title={t('play.siblingLabel')}>
+        {t('play.siblingCounter', {
+          position: format.format(view.index + 1),
+          total: format.format(view.choices.length),
+        })}
+      </span>
+      <button
+        className="btn btn-small"
+        type="button"
+        disabled={streaming || view.index === view.choices.length - 1}
+        aria-label={t('play.siblingNext')}
+        onClick={() => choose(1)}
+      >
+        ›
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The in-place editor for one message.
+ *
+ * WHY THE DRAFT IS THE COMPONENT'S OWN STATE AND IS SEEDED WHEN THE EDITOR OPENS: a
+ * half-typed edit is one gesture's worth of input (like the composer's text), so it must
+ * not be persisted and must not be a store field. It IS seeded from the row rather than
+ * from React's first render because the row can change under an open editor — a rollback
+ * or another tab's turn — and the same `message.id`-keyed draft that clears a stale edit
+ * on a branch switch must not keep a stale starting text.
+ */
+function MessageEditor({
+  messageId,
+  value,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  messageId: Id;
+  value: string;
+  onChange: (next: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="bubble-editor">
+      <textarea
+        className="bubble-editor-input"
+        data-edit={messageId}
+        rows={3}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <div className="btn-row">
+        <button className="btn btn-small btn-primary" type="button" onClick={onSave}>
+          {t('play.editSave')}
+        </button>
+        <button className="btn btn-small" type="button" onClick={onCancel}>
+          {t('play.editCancel')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 继续写: ask the model to keep going from the head, with no new user turn.
+ *
+ * WHY IT GOES THROUGH THE EXISTING CONTINUATION PATH AND NOT A NEW WRITE: continuing is
+ * `sendTurn` with the head UNMOVED and an empty input — the same path a second turn already
+ * took (`send-turn.test.ts`'s "chains a continuation onto the stored head"). The store's
+ * `continueWriting` is that call; this component only decides when the control is offered
+ * (the head is an assistant turn, nothing is streaming, and it is the last row on screen)
+ * and renders the banner the store filled when the turn could not start. The `error`
+ * sentence comes from the catalog by code (ADR-019), so this button holds no prose.
+ */
+function ContinueButton() {
+  const { t } = useTranslation();
+  const continueWriting = useChatStore((state) => state.continueWriting);
+  return (
+    <button
+      className="btn btn-small"
+      type="button"
+      onClick={() => {
+        // The store owns the `await`: a rejection here would be an unhandled one, and a
+        // refusal is reported through `error` rather than returned to be printed twice.
+        void continueWriting();
+      }}
+    >
+      {t('play.continue')}
+    </button>
+  );
 }

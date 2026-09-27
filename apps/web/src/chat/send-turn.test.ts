@@ -16,7 +16,7 @@
 import 'fake-indexeddb/auto';
 import { renderParts } from '@smarttavern/core';
 import { createTranslator } from '@smarttavern/i18n';
-import type { PromptPreset } from '@smarttavern/schema';
+import type { Message, PromptPreset } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, resetDatabase } from '../db/database';
 import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
@@ -37,7 +37,7 @@ import { useLocaleStore } from '../state/locale-store';
 import { resetSettingsStore, useSettingsStore } from '../state/settings-store';
 import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
 import { clockOf, composeTurn, promptContext, promptSlots, worldClockText } from './clock';
-import { sendTurn } from './send-turn';
+import { type SendTurnResult, sendTurn } from './send-turn';
 
 /* ─────────────────────────────── the fake wire ───────────────────────────── */
 
@@ -241,6 +241,21 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 
 /* ────────────────────────────────── tests ───────────────────────────────── */
 
+/**
+ * The user row an ORDINARY turn wrote, narrowed once.
+ *
+ * `SendTurnResult.userMessage` became `Message | undefined` in M1-S2: a regeneration and a
+ * continuation re-ask a question already in the chain, so those turns write no user row.
+ * An ordinary turn always writes one — that is a fact about the CALL, not about the type —
+ * so the fact is stated here, once, instead of a `?.` at every field assertion (which would
+ * silently compare `undefined` against the expected value and could not fail).
+ */
+function userRow(result: SendTurnResult): Message {
+  const message = result.userMessage;
+  if (message === undefined) throw new Error('the turn wrote no user row');
+  return message;
+}
+
 describe('sendTurn', () => {
   it('persists the user turn and the assistant turn and advances the head', async () => {
     const session = await createSession({ title: 'test-session' });
@@ -252,12 +267,12 @@ describe('sendTurn', () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.userMessage.role).toBe('user');
-    expect(result.userMessage.content).toBe('第一句');
-    expect(result.userMessage.parentId).toBeNull();
+    expect(userRow(result).role).toBe('user');
+    expect(userRow(result).content).toBe('第一句');
+    expect(userRow(result).parentId).toBeNull();
     expect(result.assistantMessage?.role).toBe('assistant');
     expect(result.assistantMessage?.content).toBe('你好');
-    expect(result.assistantMessage?.parentId).toBe(result.userMessage.id);
+    expect(result.assistantMessage?.parentId).toBe(userRow(result).id);
     expect(result.assistantMessage?.meta.model).toBe(MODEL);
     expect(result.headMessageId).toBe(result.assistantMessage?.id);
     expect(result.aborted).toBe(false);
@@ -377,8 +392,8 @@ describe('sendTurn', () => {
     expect(result.error?.code).toBe('auth');
     expect(result.error?.retryable).toBe(false);
     expect(result.assistantMessage).toBeUndefined();
-    expect(result.headMessageId).toBe(result.userMessage.id);
-    expect((await getSession(session.id))?.headMessageId).toBe(result.userMessage.id);
+    expect(result.headMessageId).toBe(userRow(result).id);
+    expect((await getSession(session.id))?.headMessageId).toBe(userRow(result).id);
 
     const snapshot = await snapshotAllRows(databaseName);
     expect(snapshot).toContain('你好');

@@ -65,6 +65,19 @@ export const PROMPT_BUDGET_CODE = 'prompt_budget_exceeded';
  */
 export const KEY_LOCKED_CODE = 'key_locked';
 
+/**
+ * The code `state/chat-store.ts` sets when a message-tree gesture names a message that is
+ * not on the active chain (M1-S2).
+ *
+ * WHY THIS IS NOT FOLDED INTO `'unknown'`: regenerating, editing or continuing from a
+ * message can fail for a reason the user themselves caused in an ordinary way — they
+ * switched to another branch in a second tab, or rolled a save point back, between the
+ * render and the click. The gesture then has nothing to act on, and "发生未知错误" would
+ * report that as an app fault. Its own code says the honest thing: this node is no longer
+ * where the click thought it was, so reload the branch and try again.
+ */
+export const MESSAGE_MISSING_CODE = 'message_missing';
+
 /** The sentence for anything the table does not know, including `'unknown'`. */
 export const GENERIC_ERROR_KEY: MessageKey = 'error.unknown';
 
@@ -86,6 +99,8 @@ export const ERROR_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
   [PROMPT_BUDGET_CODE]: 'error.promptBudget',
   /** Not an adapter code either: nothing was sent because this tab has not unlocked the key. */
   [KEY_LOCKED_CODE]: 'error.keyLocked',
+  /** Not an adapter code either: the message a tree gesture named is not on the chain. */
+  [MESSAGE_MISSING_CODE]: 'error.messageMissing',
 };
 
 /** The catalog key whose sentence `code` should render. Never `undefined`. */

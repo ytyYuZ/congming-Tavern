@@ -22,7 +22,8 @@
  */
 /** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
-import type { SessionState } from '@smarttavern/schema';
+import type { FetchLike } from '@smarttavern/providers';
+import type { Message, SessionState } from '@smarttavern/schema';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,9 +35,12 @@ import {
   appendMessage,
   createCheckpoint,
   createSession,
+  deleteLeafMessage,
   getChain,
+  getMessage,
   getSession,
   listCheckpoints,
+  listChildren,
   readProviderSettings,
   setHeadMessageId,
   writeLocaleSetting,
@@ -49,6 +53,7 @@ import { translate } from '../../i18n/translate';
 // views read — a test would then seed state, or a database, that nothing renders.
 import {
   closeDatabase,
+  configureChat,
   resetChat,
   resetDatabase,
   resetLocaleStore,
@@ -91,6 +96,10 @@ beforeEach(async () => {
   resetChat();
   resetSettingsStore();
   resetLocaleStore();
+  // Substituted AFTER `resetChat` (which forgets the transport) and BEFORE anything mounts:
+  // every test in this file that does not open the composer gets a transport that fails
+  // loudly, so a turn nobody asked for is an error rather than a silent no-op.
+  configureChat({ transport: forbiddenTransport });
   // This file asserts RENDERED Chinese copy, and the store's documented initial value
   // follows the browser (jsdom reports `en-US`). So the language is pinned by writing the
   // STORED row — the same thing a returning user has — and the shell's own `load()` then
@@ -121,6 +130,17 @@ function deleteDatabase(name: string): Promise<void> {
 }
 
 /* ───────────────────────── the async render helper ───────────────────────── */
+
+/**
+ * The transport a test gets unless it substitutes its own (M1-S2).
+ *
+ * WHY A FAILING DEFAULT AND NOT `undefined`: a test whose turn was never meant to happen
+ * must not silently pass because nothing was wired. `configureChat` is the app's own seam
+ * (`mountApp` calls it), and a rejection here surfaces as the store's error state with the
+ * error's own name in it — visibly, in the test that caused it.
+ */
+const forbiddenTransport: FetchLike = () =>
+  Promise.reject(new Error('no transport was substituted for this test'));
 
 /** Mount the app at `path` and wait for `expected` to appear. Returns the container. */
 async function mountAt(path: string, expected: string): Promise<HTMLElement> {
@@ -998,3 +1018,482 @@ describe('M1-G3: the local key encryption section', () => {
 function buttonLabels(host: HTMLElement): string[] {
   return Array.from(host.querySelectorAll('button')).map((button) => button.textContent ?? '');
 }
+
+/* ──────────────────── M1-S2: the message stream and its tree ──────────────────── */
+
+/**
+ * THE MILESTONE'S ACCEPTANCE IS ABOUT THE TREE AND THE BRANCH SWITCH
+ * docs/06 §2.5: 「消息树（parentId）正确；切换分支内容正确」. So every case below drives the
+ * REAL control in the REAL view and then asserts TWO things: the rendered transcript (the
+ * user's half of the sentence) and the persisted tree (the acceptance's own words). A test
+ * of the store alone could not see the second answer appear where the first one was, and a
+ * test of the repository alone could not see that the arrow wired the switch to it.
+ *
+ * WHY THE WIRE IS A HAND-WRITTEN SSE BODY AND NOT A MOCKED PROVIDER
+ * `send-turn.test.ts` records the argument for the whole app: a mocked `LLMProvider` would
+ * only prove that a function can be called. A regeneration has to go through the same
+ * adapter, the same composer and the same persistence as the answer it replaces, or "another
+ * answer to this prompt" would mean something different from the answer it is replacing.
+ *
+ * WHAT IS SEEDED AND WHAT IS PERFORMED
+ * The rows that would have come from a FIRST turn are seeded through the repository — the
+ * fixture is a transcript that already exists. Everything after that is a gesture: the
+ * regenerate click, the arrow, the edit's save, the delete's confirmation. Seeding is what
+ * makes the assertions literals ("the chain is question, second answer") rather than a
+ * re-derivation of what the app just did.
+ */
+describe('M1-S2: the message stream', () => {
+  /** One SSE body carrying `chunks` and a finish reason, in the provider's own wire format. */
+  function sseResponse(chunks: readonly string[], finishReason = 'stop'): Response {
+    const encoder = new TextEncoder();
+    const payloads = [
+      ...chunks.map(
+        (text) => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`,
+      ),
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finishReason }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const payload of payloads) controller.enqueue(encoder.encode(payload));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  }
+
+  /**
+   * A transport answering the SCRIPTED replies in order, plus the count of requests it got.
+   *
+   * The queue (and not a fixed answer) is what makes "the second answer differs from the
+   * first" observable: a wire answering the same text twice could not tell a real
+   * regeneration from a re-read of the row that was already there.
+   */
+  function scriptedWire(replies: readonly (readonly string[])[]): {
+    fetch: FetchLike;
+    calls: () => number;
+  } {
+    let calls = 0;
+    return {
+      calls: () => calls,
+      fetch: () => {
+        const reply = replies[calls] ?? [];
+        calls += 1;
+        return Promise.resolve(sseResponse(reply));
+      },
+    };
+  }
+
+  /** A stored turn: the user's message and one assistant answer under it. */
+  async function storedTurn(
+    sessionId: string,
+    question: string,
+    answer: string,
+  ): Promise<{ question: Message; answer: Message }> {
+    const asked = await appendMessage({
+      sessionId,
+      parentId: null,
+      role: 'user',
+      content: question,
+    });
+    const answered = await appendMessage({
+      sessionId,
+      parentId: asked.id,
+      role: 'assistant',
+      content: answer,
+    });
+    await setHeadMessageId(sessionId, answered.id);
+    return { question: asked, answer: answered };
+  }
+
+  /** The list of the rendered messages' text, in document order. */
+  function bubbleTexts(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll('.bubble-text')).map((node) => node.textContent ?? '');
+  }
+
+  /** The switcher of ONE rendered message, so a sibling assertion cannot pick the wrong row. */
+  function switcherOf(
+    host: HTMLElement,
+    message: { readonly id: string },
+  ): { counter: string; previous: HTMLButtonElement; next: HTMLButtonElement } {
+    const row = host.querySelector(`[data-message="${message.id}"]`);
+    if (row === null) throw new Error(`message ${message.id} is not rendered`);
+    const previous = row.querySelector('button[aria-label="上一条"]');
+    const next = row.querySelector('button[aria-label="下一条"]');
+    const counter = row.querySelector('.sibling-counter');
+    if (!(previous instanceof HTMLButtonElement)) {
+      throw new Error(`message ${message.id} has no previous arrow`);
+    }
+    if (!(next instanceof HTMLButtonElement)) {
+      throw new Error(`message ${message.id} has no next arrow`);
+    }
+    return { counter: counter?.textContent ?? '', previous, next };
+  }
+
+  /**
+   * Click the button whose label is exactly `label`, INSIDE one message's row.
+   *
+   * A document-wide search would find the first 编辑 / 删除 in the transcript, which is a
+   * different message from the one a test is about — the mistake this scoping removes.
+   */
+  async function clickInMessage(
+    host: HTMLElement,
+    message: { readonly id: string },
+    label: string,
+  ): Promise<void> {
+    const row = host.querySelector(`[data-message="${message.id}"]`);
+    if (row === null) throw new Error(`message ${message.id} is not rendered`);
+    const button = Array.from(row.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent === label,
+    );
+    if (button === undefined) throw new Error(`no button labelled ${label} in ${message.id}`);
+    await act(async () => {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+
+  /**
+   * The switcher of the ACTIVE message — the row the chain currently ends on.
+   *
+   * WHY THE ACTIVE ROW AND NOT A CAPTURED ONE: the switcher reads the run of siblings in an
+   * effect (`play.tsx`'s `MessageBubble`), so between a head change and that read resolving
+   * the row on screen can still show the neighbour list from before. `data-message` plus the
+   * `bubble-active` mark is how the DOM itself says which row the chain runs through, so a
+   * test that clicks the ACTIVE row's arrow is clicking the control a person sees as current.
+   */
+  function activeSwitcher(host: HTMLElement): {
+    previous: HTMLButtonElement;
+    next: HTMLButtonElement;
+  } {
+    const row = host.querySelector('.bubble-active .sibling-switcher');
+    if (row === null) throw new Error('no active message has a sibling switcher');
+    const previous = row.querySelector('button[aria-label="上一条"]');
+    const next = row.querySelector('button[aria-label="下一条"]');
+    if (!(previous instanceof HTMLButtonElement) || !(next instanceof HTMLButtonElement)) {
+      throw new Error('the active switcher has no arrows');
+    }
+    return { previous, next };
+  }
+
+  /**
+   * One message's delete control, found by its accessible name (`play.deleteLabel`).
+   *
+   * The rows also offer 编辑 and 重新生成, and a document-wide 删除 search would find the
+   * first message's control rather than the one under test.
+   */
+  function deleteButtonOf(
+    host: HTMLElement,
+    message: { readonly id: string; readonly content: string },
+  ): HTMLButtonElement {
+    const row = host.querySelector(`[data-message="${message.id}"]`);
+    if (row === null) throw new Error(`message ${message.id} is not rendered`);
+    const button = row.querySelector(`button[aria-label="删除：${message.content}"]`);
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error(`message ${message.id} has no delete control`);
+    }
+    return button;
+  }
+
+  /**
+   * Click a button inside the transcript by its exact label.
+   *
+   * 继续写 belongs to the TIP of the chain rather than to one message's identity, so it has
+   * no single row to scope to the way 编辑 / 删除 do; the transcript is the scope that keeps
+   * it away from the composer's own 发送 / 停止.
+   */
+  async function clickInRowless(host: HTMLElement, label: string): Promise<void> {
+    const button = Array.from(host.querySelectorAll('.transcript button')).find(
+      (candidate) => candidate.textContent === label,
+    );
+    if (button === undefined) throw new Error(`no transcript button labelled ${label}`);
+    if (!(button instanceof HTMLButtonElement)) throw new Error('not a button');
+    await act(async () => {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+
+  /**
+   * Type into a message's edit textarea, the way a browser does.
+   *
+   * The same native-setter trick `typeInto` uses, and for the same reason: React installs
+   * its own value tracker on the textarea prototype, so assigning `.value` directly is
+   * silently ignored and the change handler never fires.
+   */
+  async function typeIntoEditor(
+    host: HTMLElement,
+    message: { readonly id: string },
+    value: string,
+  ): Promise<void> {
+    const input = host.querySelector(`textarea[data-edit="${message.id}"]`);
+    if (!(input instanceof HTMLTextAreaElement)) throw new Error('no edit textarea');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  /**
+   * Wait until the SETTINGS row is loaded, so a turn can be attempted.
+   *
+   * The play view asks for `SettingsState.loaded` and reads the provider row itself, so a
+   * click that arrives before that read settles would be refused by `turnGate` and the test
+   * would be asserting against a banner instead of a branch. Waiting for the store's own
+   * flag is what makes that impossible rather than unlikely.
+   */
+  async function waitForSettings(): Promise<void> {
+    const deadline = Date.now() + 4_000;
+    while (!useSettingsStore.getState().loaded) {
+      if (Date.now() > deadline) throw new Error('settings never loaded');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    }
+  }
+
+  /** Wait until ONE rendered message's switcher says `expected` (e.g. `第 1 / 2 条`). */
+  async function waitForCounter(
+    host: HTMLElement,
+    message: { readonly id: string },
+    expected: string,
+  ): Promise<void> {
+    const deadline = Date.now() + 4_000;
+    for (;;) {
+      const row = host.querySelector(`[data-message="${message.id}"] .sibling-counter`);
+      if ((row?.textContent ?? '') === expected) return;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `timed out waiting for ${expected}; DOM was ${host.querySelector(`[data-message="${message.id}"]`)?.innerHTML ?? ''}`,
+        );
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    }
+  }
+
+  /**
+   * Store the provider configuration and substitute the transport — the two halves of "the
+   * app can send", wired the way `mountApp` and the setup form wire them.
+   */
+  async function armTheProvider(wire: { readonly fetch: FetchLike }): Promise<void> {
+    await writeProviderSettings({
+      baseUrl: BASE_URL,
+      model: MODEL,
+      secret: { kind: 'plaintext', apiKey: API_KEY },
+    });
+    configureChat({ transport: wire.fetch });
+  }
+
+  it('regenerates as a SIBLING of the answer it replaces, and the chain follows the head', async () => {
+    const session = await createSession({ title: 'regen' });
+    const { question, answer } = await storedTurn(session.id, '第一问', '第一个答案');
+    const wire = scriptedWire([['第二个答案']]);
+    await armTheProvider(wire);
+
+    const host = await mountAt(`/play/${session.id}`, '第一个答案');
+    await waitForSettings();
+    // One answer exists, so there is no branch to switch to and no count to print.
+    expect(host.querySelector('.sibling-switcher')).toBeNull();
+
+    await clickInMessage(host, answer, '重新生成');
+    await waitForState(() => useChatStore.getState().messageChain.length === 2);
+    // THE ACCEPTANCE, FIRST HALF: the rendered chain now runs through the NEW answer, and
+    // the answer it replaced is not on it.
+    expect(bubbleTexts(host)).toEqual(['第一问', '第二个答案']);
+
+    // THE ACCEPTANCE, SECOND HALF: the new row is a SIBLING — same `parentId` as the answer
+    // it replaces — so the tree has one question with two answers, and the head is on the
+    // NEW one. This is the assertion a "regenerate appends a child" implementation fails.
+    const siblings = await listChildren(session.id, question.id);
+    expect(siblings.map((message) => message.content)).toEqual(['第一个答案', '第二个答案']);
+    expect(siblings.map((message) => message.parentId)).toEqual([question.id, question.id]);
+    const regenerated = siblings[1];
+    if (regenerated === undefined) throw new Error('the regeneration wrote no row');
+    expect(regenerated.id).not.toBe(answer.id);
+    // The original is untouched — an edit in place would have changed this row.
+    expect((await getMessage(answer.id))?.content).toBe('第一个答案');
+    expect((await getSession(session.id))?.headMessageId).toBe(regenerated.id);
+    // The question was re-asked, and the answer it was asked for was NOT written twice: one
+    // request, one new row (the store moved the head before the turn so `sendTurn` appends
+    // only the assistant half).
+    expect(wire.calls()).toBe(1);
+
+    // The switcher now appears on the answer that is ON the chain and says where the user
+    // is. It deliberately does NOT appear on the answer that was replaced: that row is a
+    // sibling off the active path, so there is no rendered bubble to attach a switcher to —
+    // it is reachable through THIS row's arrow, which is what the count promises.
+    await waitForCounter(host, regenerated, '第 2 / 2 条');
+    expect(host.querySelector(`[data-message="${answer.id}"]`)).toBeNull();
+    // The question has no siblings at all, so nothing about it is a choice.
+    expect(host.querySelector(`[data-message="${question.id}"] .sibling-switcher`)).toBeNull();
+  });
+
+  it('switches between the siblings in both directions, in the DOM and in the row', async () => {
+    const session = await createSession({ title: 'branch-switch' });
+    const { question } = await storedTurn(session.id, '第一问', '第一个答案');
+    // A second answer, written the way a regeneration writes one: same parent, new id.
+    const second = await appendMessage({
+      sessionId: session.id,
+      parentId: question.id,
+      role: 'assistant',
+      content: '第二个答案',
+    });
+    await setHeadMessageId(session.id, second.id);
+    await armTheProvider({ fetch: forbiddenTransport });
+
+    const host = await mountAt(`/play/${session.id}`, '第二个答案');
+    await waitForCounter(host, second, '第 2 / 2 条');
+    // The run is ordered by creation (uuid v7 is time-ordered), so the FIRST answer is the
+    // previous one and there is nothing after the second.
+    expect(switcherOf(host, second).previous.disabled).toBe(false);
+    expect(switcherOf(host, second).next.disabled).toBe(true);
+
+    // BACKWARDS. `switchBranch` is one `setHeadMessageId`, so the render that follows is the
+    // other answer — the acceptance's 「切换分支内容正确」, and the DOM is where it is visible.
+    // The control is re-queried from the ACTIVE bubble (the row the chain currently ends on)
+    // because the switcher learns the run of siblings in an effect of its own, and the click
+    // is dispatched the way a person's click arrives — the polling helper below then lets
+    // React commit under `act`.
+    const first = (await listChildren(session.id, question.id))[0];
+    if (first === undefined) throw new Error('the first answer is missing');
+    activeSwitcher(host).previous.click();
+    await waitForState(() => useChatStore.getState().session?.headMessageId === first.id);
+    expect(bubbleTexts(host)).toEqual(['第一问', '第一个答案']);
+    expect(host.textContent).not.toContain('第二个答案');
+    // The ROW moved: the persisted tip is the first answer, which is what a reload shows.
+    expect((await getSession(session.id))?.headMessageId).toBe(first.id);
+    // …and the arrows have swapped ends, which is the count and the head agreeing.
+    await waitForCounter(host, first, '第 1 / 2 条');
+    expect(activeSwitcher(host).previous.disabled).toBe(true);
+    expect(activeSwitcher(host).next.disabled).toBe(false);
+
+    // FORWARDS: back to the second answer, so the switch is proven in both directions and
+    // not as a one-way mutation of the head.
+    activeSwitcher(host).next.click();
+    await waitForState(() => useChatStore.getState().session?.headMessageId === second.id);
+    expect(bubbleTexts(host)).toEqual(['第一问', '第二个答案']);
+    expect(host.textContent).not.toContain('第一个答案');
+    expect((await getSession(session.id))?.headMessageId).toBe(second.id);
+
+    // The discarded branch was never deleted (ADR-010): both rows are still there, and only
+    // the pointer decided which one is on screen.
+    expect((await listChildren(session.id, question.id)).length).toBe(2);
+  });
+
+  it('appends after a branch as a child of THAT branch’s tip, not of the other sibling', async () => {
+    const session = await createSession({ title: 'cross-branch' });
+    const { question } = await storedTurn(session.id, '第一问', '被放弃的答案');
+    const kept = await appendMessage({
+      sessionId: session.id,
+      parentId: question.id,
+      role: 'assistant',
+      content: '保留的答案',
+    });
+    await setHeadMessageId(session.id, kept.id);
+    const wire = scriptedWire([['续写']]);
+    await armTheProvider(wire);
+
+    const host = await mountAt(`/play/${session.id}`, '保留的答案');
+    await waitForSettings();
+    await clickInRowless(host, '继续写');
+    await waitForState(() => useChatStore.getState().messageChain.length === 3);
+
+    // The new message hangs off the BRANCH TIP, not off the question and not off the
+    // discarded sibling — the tree edge the acceptance is about.
+    const continuation = (await listChildren(session.id, kept.id))[0];
+    if (continuation === undefined) throw new Error('the continuation wrote no row');
+    expect(continuation.content).toBe('续写');
+    expect((await getSession(session.id))?.headMessageId).toBe(continuation.id);
+    // The discarded branch is untouched and still a child of the question: a continuation is
+    // not a re-parent.
+    const siblings = await listChildren(session.id, question.id);
+    expect(siblings.map((message) => message.content)).toEqual(['被放弃的答案', '保留的答案']);
+    // 继续写 asked the same question again with no new user turn: exactly one request, and
+    // the prompt it sent quotes the ACTIVE branch only.
+    expect(wire.calls()).toBe(1);
+    expect(bubbleTexts(host)).toEqual(['第一问', '保留的答案', '续写']);
+  });
+
+  it('edits by writing a NEW SIBLING of the same parent, leaving the original and its replies alone', async () => {
+    const session = await createSession({ title: 'edit' });
+    const { question, answer } = await storedTurn(session.id, '第一问', '原来的答案');
+    await armTheProvider({ fetch: forbiddenTransport });
+
+    const host = await mountAt(`/play/${session.id}`, '原来的答案');
+    await waitForSettings();
+    // The seed: one answer, no branch yet.
+    expect(await listChildren(session.id, question.id)).toHaveLength(1);
+
+    await clickInMessage(host, answer, '编辑');
+    await typeIntoEditor(host, answer, '改过的答案');
+    await clickInMessage(host, answer, '保存修改');
+    await waitForState(() => useChatStore.getState().messageChain.length === 2);
+    await waitForText(host, '改过的答案');
+
+    // THE EDIT RULE: the row being edited is never overwritten. Its replacement is a second
+    // child of the SAME parent, which is the shape docs/02 §7 gives a regeneration — so the
+    // original text and the replies generated from it are still in the tree, and the tree
+    // still says which text produced which reply.
+    const siblings = await listChildren(session.id, question.id);
+    expect(siblings.map((message) => message.content)).toEqual(['原来的答案', '改过的答案']);
+    expect(siblings.map((message) => message.parentId)).toEqual([question.id, question.id]);
+    expect((await getMessage(answer.id))?.content).toBe('原来的答案');
+    // THE HEAD outcome: the new node is the tip, so the edited text is what the next turn
+    // quotes and what the switcher shows.
+    const edited = siblings[1];
+    if (edited === undefined) throw new Error('the edit wrote no row');
+    expect((await getSession(session.id))?.headMessageId).toBe(edited.id);
+    // The rendered chain is the edited branch, and the original is one arrow away — not
+    // deleted, and not silently left on screen beside its replacement.
+    expect(bubbleTexts(host)).toEqual(['第一问', '改过的答案']);
+    expect(host.textContent).not.toContain('原来的答案');
+    await waitForCounter(host, edited, '第 2 / 2 条');
+  });
+
+  it('deletes a leaf after a confirmation, moving the head to its parent', async () => {
+    const session = await createSession({ title: 'delete' });
+    const { question, answer } = await storedTurn(session.id, '第一问', '唯一的答案');
+    await armTheProvider({ fetch: forbiddenTransport });
+
+    const host = await mountAt(`/play/${session.id}`, '唯一的答案');
+    await waitForSettings();
+    await waitForState(() => useChatStore.getState().messageChain.length === 2);
+
+    // A node WITH replies cannot be deleted AT ALL, and the row says so before the click:
+    // the control is refused and carries the reason, so the refusal is an affordance rather
+    // than a confirmation that could only end in a dead end. Nothing is removed.
+    const refused = deleteButtonOf(host, question);
+    expect(refused.disabled).toBe(true);
+    expect(refused.getAttribute('title')).toContain('这条消息后面还有内容');
+    expect(deleteButtonOf(host, answer).disabled).toBe(false);
+    expect(await getMessage(question.id)).toBeDefined();
+    expect(await getMessage(answer.id)).toBeDefined();
+    // The refusal is a DECISION, not a mistake: the repository refuses the same delete, which
+    // is what makes the sentence true rather than merely optimistic — and a caller that got
+    // past the disabled control is still refused.
+    expect(await useChatStore.getState().deleteMessage(question.id)).toBe(false);
+    expect(await deleteLeafMessage(session.id, question.id)).toBe(false);
+    expect(await listChildren(session.id, null)).toHaveLength(1);
+
+    // A LEAF goes, after its own second click.
+    await clickInMessage(host, answer, '删除');
+    await clickInMessage(host, answer, '确认删除');
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+
+    // THE HEAD outcome: it was the deleted leaf, so it moves to the row's own parent — the
+    // position the message was generated from — instead of pointing at a row that is gone.
+    expect(await getMessage(answer.id)).toBeUndefined();
+    expect((await getSession(session.id))?.headMessageId).toBe(question.id);
+    expect(bubbleTexts(host)).toEqual(['第一问']);
+    expect(host.textContent).not.toContain('唯一的答案');
+    // What is left is the whole chain: a delete of the tail leaves a real path, not a head
+    // that resolves nowhere.
+    expect((await getChain(session.id)).map((message) => message.content)).toEqual(['第一问']);
+  });
+});

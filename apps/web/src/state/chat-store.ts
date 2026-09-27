@@ -45,13 +45,29 @@
  * `session.state.vars`, which would then show the value from before the turn. The row is
  * the only copy that cannot be stale (the `advance` failure path resyncs for the same
  * reason), and the same read refreshes the `headMessageId` the turn just moved.
+ *
+ * WHAT M1-S2 ADDED TO THIS STORE, AND WHAT IT DELIBERATELY DID NOT
+ * The message tree's three mutating acts are here — `regenerate`, `editMessage` and
+ * `deleteMessage` — plus `switchBranch`, which is the read-shaped one. Each is a POINTER
+ * MOVE or a single row write, because that is all docs/02 §7's tree needs: a sibling is a
+ * second child of the same parent, a branch switch is `setHeadMessageId`, and an edit is
+ * "write a new sibling, then move the head to it" — never an in-place change of a
+ * `Message`, which would break the lineage ADR-010 pins and make a regenerated answer
+ * indistinguishable from an edited one. The rules themselves are stated on each action and
+ * pinned by `app/routes/routes.test.tsx`.
+ *
+ * `send()` and `regenerate()` share ONE turn path (`runTurn` below) on purpose: a
+ * regeneration must ask the question through the SAME composer and stream through the same
+ * adapter as the first answer, or "another answer to this prompt" would mean something
+ * different from the answer it replaces.
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
 import type { Checkpoint, Id, Message, Session, SessionState } from '@smarttavern/schema';
 import { create } from 'zustand';
 import { advanceState } from '../chat/clock';
-import { sendTurn } from '../chat/send-turn';
+import { promptMessageFor, type SiblingView, siblingViewOf } from '../chat/message-tree';
+import { sendTurn, type TurnAppend } from '../chat/send-turn';
 import {
   deleteVariable as deleteVariableIn,
   setVariable as setVariableIn,
@@ -59,15 +75,20 @@ import {
 } from '../chat/vars';
 import { subscribe } from '../db/database';
 import {
+  appendMessage,
   createCheckpoint as createCheckpointRow,
   createSession,
   deleteCheckpoint as deleteCheckpointRow,
+  deleteLeafMessage,
   getChain,
   getSession,
+  hasChildren,
   listCheckpoints,
+  listChildren,
   readChain,
   readSessions,
   restoreCheckpoint as restoreCheckpointRow,
+  setHeadMessageId,
   writeSessionState,
 } from '../db/repository';
 import { KEY_LOCKED_CODE, messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
@@ -119,6 +140,18 @@ export interface ChatState {
    */
   checkpoints: Checkpoint[];
   draft: StreamingDraft;
+  /**
+   * The message a NEW ANSWER is being generated for (M1-S2), or `null`.
+   *
+   * WHY IT EXISTS AT ALL: a regeneration writes nothing to a branch until the turn ends
+   * (the partial-text policy in `chat/send-turn.ts`), so between the click and the first
+   * delta the chain still holds the answer being replaced. Without this field the screen
+   * cannot tell "the draft at the end belongs to THIS message" from "the user is on
+   * another branch and the draft belongs to the head", and the message under
+   * regeneration would get no mark at all. It is set by `regenerate` and by the branch
+   * switch that gives up on one, and it is cleared the moment the turn settles.
+   */
+  regenerating: Id | null;
   status: ChatStatus;
   error: ChatError | undefined;
 
@@ -129,6 +162,64 @@ export interface ChatState {
   send: (text: string) => Promise<void>;
   abort: () => void;
   dismissError: () => void;
+  /**
+   * The run of siblings `messageId` belongs to, or `undefined` when it has none (M1-S2).
+   * A read: the view asks this to decide whether to render a switcher and to label it.
+   */
+  siblingsOf: (messageId: Id, headMessageId: Id | null) => Promise<SiblingView | undefined>;
+  /**
+   * Make `messageId` the tip of the active chain (M1-S2) — the whole of "switch branch",
+   * because the chain is the walk up `parentId` from `Session.headMessageId`.
+   */
+  switchBranch: (messageId: Id) => Promise<boolean>;
+  /**
+   * Write `content` as a NEW SIBLING of `messageId` and move the head to it (M1-S2).
+   *
+   * THE EDIT RULE: the message being edited is never overwritten. Its replacement is a
+   * second child of the same parent, which is the same shape docs/02 §7 gives a
+   * regeneration (重生成（同父多子）), so the two acts stay one concept and the tree keeps
+   * saying which text produced which reply. The consequence, stated rather than hidden:
+   * a message with replies cannot be redirected to its edited text — the replies stay
+   * children of the ORIGINAL, and the edited node simply becomes a new branch. Editing
+   * that is really "change this and keep everything after it" is a RE-ROLL of the branch,
+   * which is what regenerate plus a new turn already is.
+   */
+  editMessage: (messageId: Id, content: string) => Promise<boolean>;
+  /**
+   * Delete `messageId` when it is a LEAF, and return whether a row was removed (M1-S2).
+   *
+   * THE DELETE RULE: a message with replies is REFUSED (see
+   * `db/repository.ts`'s `deleteLeafMessage` for why a cascade or a re-parent is the wrong
+   * answer). When the deleted leaf WAS the head, the head moves to its parent, so the
+   * chain stays a real path — the same repair a rollback performs — and no message is left
+   * pointing at a row that does not exist. Deleting a leaf that is OFF the active chain
+   * changes nothing about the head, which is the acceptance's "切换分支内容正确" from the
+   * other side: removing a rejected answer must not move the branch the user is reading.
+   */
+  deleteMessage: (messageId: Id) => Promise<boolean>;
+  /**
+   * Whether any message hangs off `messageId` — the read behind the delete control's
+   * affordance (M1-S2). A node with replies is not deletable, and the row says so BEFORE
+   * the click rather than after a confirmation (`state/chat-store.ts`'s `deleteMessage`
+   * still refuses, and the repository re-checks inside its own transaction).
+   */
+  hasReplies: (messageId: Id) => Promise<boolean>;
+  /**
+   * Ask the model again for the answer to `messageId`'s own prompt (M1-S2). The new text
+   * is a SIBLING of `messageId` — same `parentId` — and the head moves to it.
+   *
+   * Resolves to the failure's catalog key, or `undefined` on success. A regenerate is
+   * STARTED by the caller and finishes in the store (`void`-ed by the view) so the button
+   * does not have to hold the promise; this return value is for the caller that wants to
+   * know why it could not start.
+   */
+  regenerate: (messageId: Id) => Promise<MessageKey | undefined>;
+  /**
+   * Continue writing from the CURRENT head through the ordinary turn path (M1-S2), with
+   * no new user message. Answers `undefined` when the turn started, or the catalog key of
+   * the refusal (nothing to continue from, no configuration, a turn already running).
+   */
+  continueWriting: () => Promise<MessageKey | undefined>;
   /**
    * Move the open session's clock by `delta` minutes (M1-T2). Resolves to the new
    * minute, or `undefined` when there is no session or the delta is not a usable
@@ -210,6 +301,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messageChain: [],
   checkpoints: [],
   draft: { ...IDLE_DRAFT },
+  regenerating: null,
   status: 'idle',
   error: undefined,
 
@@ -277,6 +369,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messageChain: [],
       checkpoints: [],
       draft: { ...IDLE_DRAFT },
+      regenerating: null,
       status: 'idle',
       error: undefined,
     });
@@ -288,105 +381,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const trimmed = text.trim();
     if (session === undefined || trimmed === '' || state.status === 'streaming') return;
 
-    /**
-     * Record a failure the user must be told about.
-     *
-     * `message` is the LOG side of `ChatError` (ADR-019 keeps `code` and prose apart).
-     * It is normally the catalog sentence, read through the non-React `translate`, so no
-     * Chinese literal appears in this module. `cause` is the one exception: a local
-     * fault's NAME is the only detail a developer can act on, it is not UI copy, and
-     * `describeThrown` in `chat/send-turn.ts` records the same rule for the same reason.
-     */
-    const fail = (
-      code: string,
-      messageKey: MessageKey,
-      retryable: boolean,
-      cause?: unknown,
-    ): void => {
-      const message =
-        cause instanceof Error && cause.name !== '' ? cause.name : translate(messageKey);
-      set({
-        status: 'error',
-        error: { code, message, retryable, turnText: trimmed },
-      });
-    };
-
-    if (transport === undefined) {
-      // A wiring bug, not a provider failure: nothing was configured to send with.
-      fail('unknown', 'error.notInitialized', false);
-      return;
-    }
-    const settings = useSettingsStore.getState();
-    if (!isProviderReady(settings.provider)) {
-      // Its own code so the banner can name the missing settings instead of the
-      // catch-all (`i18n/error-keys.ts`).
-      fail(NOT_CONFIGURED_CODE, 'error.notConfigured', false);
-      return;
-    }
-    if (settings.locked) {
-      // A key EXISTS and cannot be read (M1-G3). The request must not go out: an omitted
-      // `Authorization` header would come back as `auth`, telling the user their key is
-      // wrong when it is only locked — a wrong explanation of a local fact. Nothing is
-      // sent and the banner names the fix.
-      fail(KEY_LOCKED_CODE, 'error.keyLocked', false);
-      return;
-    }
-    // The key travels in this object and nowhere else. `settings.key` is absent only for
-    // "no key stored", which is the documented way to reach a local Ollama or vLLM:
-    // `OpenAICompatibleOptions.apiKey` documents an empty string as "send no
-    // `Authorization` header", which is exactly what `''` produces here.
-    const config = {
-      baseUrl: settings.provider.baseUrl,
-      apiKey: settings.key ?? '',
-      model: settings.provider.model,
-    };
+    // `turnGate` reports the refusal it just recorded; a turn with no gate runs.
+    if (turnGate(set, trimmed) !== undefined) return;
 
     controller = new AbortController();
-    set({ status: 'streaming', error: undefined, draft: { ...IDLE_DRAFT } });
+    set({ status: 'streaming', error: undefined, draft: { ...IDLE_DRAFT }, regenerating: null });
 
-    try {
-      const result = await sendTurn(
-        {
-          config,
-          transport,
-          // The streaming render: the answer appears as it arrives, because nothing is
-          // persisted until the turn ends (see the partial-text policy in `send-turn`).
-          onDelta: (text) => set({ draft: { text, started: text !== '' } }),
-        },
-        { sessionId: session.id, text: trimmed, signal: controller.signal },
-      );
-      // See the header: the composer may have written variables, and this store's copy of
-      // the session predates that write. Read BEFORE the `set` below so the status bar and
-      // the turn's own status land in one render.
-      const stored = await getSession(session.id);
-      if (stored !== undefined) set({ session: stored });
-      set({
-        draft: { ...IDLE_DRAFT },
-        status: result.error === undefined ? 'idle' : 'error',
-        error:
-          result.error === undefined
-            ? undefined
-            : {
-                code: result.error.code,
-                message: result.error.message,
-                retryable: result.error.retryable,
-                turnText: trimmed,
-                // Present only for a local failure (the composer's budget report);
-                // absent for a provider failure, whose sentence is the vendor's own
-                // text for logs and has no numbers to interpolate.
-                ...(result.error.detail === undefined ? {} : { detail: result.error.detail }),
-              },
-      });
-    } catch (cause) {
-      // A local fault (the database, a React-free bug in this store). The catalog
-      // sentence is the default; the error's own NAME is the useful log detail and
-      // carries no provider prose (see `send-turn.ts`'s `describeThrown`).
-      fail('unknown', 'error.localFailure', false, cause);
-    } finally {
-      // The live query refreshes the chain on its own schedule; this store only
-      // resets the turn's own state.
-      controller = undefined;
-    }
+    // One turn, through the store's `runTurn` below — see the header for why `send` and
+    // `regenerate` must not each grow their own copy of this path. `userText` is what the
+    // banner's 「重试」 resends, and it is the text the user typed.
+    await runTurn(set, {
+      sessionId: session.id,
+      append: undefined,
+      userText: trimmed,
+      prompt: trimmed,
+    });
   },
 
   abort(): void {
@@ -395,6 +404,222 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   dismissError(): void {
     set({ error: undefined, status: 'idle' });
+  },
+
+  /**
+   * The sibling run `messageId` belongs to (M1-S2) — one read, and one answer.
+   *
+   * WHY THE STORE READS THE SIBLINGS AND NOT THE VIEW: the table is the only place a
+   * sibling that is NOT on the active chain exists, and `db/repository.ts` is the only
+   * module that speaks to it (ADR-017). The view therefore asks this question and renders
+   * the answer; it never holds a second, possibly staler, copy of the tree.
+   *
+   * WHY THE HEAD IS AN ARGUMENT: the view already reads the active tip (it needs it to know
+   * when to ask again), and a caller that passes a head the store has moved past would be
+   * labelling a run with a stale "you are here". The two disagreeing is the ordinary
+   * race — another tab, or a rollback — so the honest answer there is `undefined` (render no
+   * switcher) rather than a run labelled with a head the database no longer holds. The next
+   * render passes the current head and the switcher appears.
+   */
+  async siblingsOf(messageId: Id, headMessageId: Id | null): Promise<SiblingView | undefined> {
+    const session = get().session;
+    const current = session?.headMessageId ?? null;
+    if (session === undefined || current !== headMessageId) return undefined;
+    const message = get().messageChain.find((candidate) => candidate.id === messageId);
+    if (message === undefined) return undefined;
+    const siblings = await listChildren(session.id, message.parentId);
+    return siblingViewOf(siblings, messageId, headMessageId);
+  },
+
+  /**
+   * Move the transcript tip to `messageId` (M1-S2).
+   *
+   * WHY THE CHAIN IS RE-READ HERE AND NOT LEFT TO THE SUBSCRIPTION: this is the action the
+   * milestone's acceptance is stated over ("切换分支内容正确"), and a caller — a person, or
+   * the test that pins it — must be able to observe the other branch the moment this
+   * resolves. The `liveQuery` subscription will emit the same chain a moment later; a
+   * screen that showed BOTH chains in between would be the one visible failure of "just
+   * move the pointer", so the re-read is what removes it.
+   *
+   * WHAT IS *NOT* CHECKED HERE, AND WHY THAT IS THE DESIGN
+   * The target is a member of a run of siblings the caller read from the TABLE
+   * (`siblingsOf`), and an off-chain sibling is the whole point of the act — requiring it to
+   * be on the CURRENT chain would refuse exactly the switch this control exists for. What
+   * the write must not do is name a row of another session or a row that does not exist, and
+   * that is checked where the id comes from a stranger: `siblingsOf` reads the children of
+   * THIS session, and a view it refused is never rendered (so no arrow can hold such an id).
+   * If the row is nevertheless gone by the time the click lands, the head points at a
+   * missing row and `getChain` answers a shorter chain — the same recoverable position a
+   * delete of the head produces, and `deleteMessage` repairs that one by construction.
+   */
+  async switchBranch(messageId: Id): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    await setHeadMessageId(session.id, messageId);
+    const messageChain = await getChain(session.id);
+    set({
+      session: { ...session, headMessageId: messageId },
+      messageChain,
+      // A branch switch gives up on any regeneration the previous branch was waiting for.
+      regenerating: null,
+    });
+    return true;
+  },
+
+  /** See the interface's `editMessage` for the rule, and for what it costs. */
+  async editMessage(messageId: Id, content: string): Promise<boolean> {
+    const session = get().session;
+    const edited = content.trim();
+    if (session === undefined || edited === '') return false;
+    const target = get().messageChain.find((message) => message.id === messageId);
+    if (target === undefined) return false;
+
+    const sibling = await appendMessage({
+      sessionId: session.id,
+      // THE EDGE IS REUSED, NOT REPLACED: the replacement hangs off the same parent, which
+      // is what makes the two versions a run of siblings rather than a chain.
+      parentId: target.parentId,
+      role: target.role,
+      content: edited,
+      // The presentation fields travel WITH the text: an edited narration must not become
+      // ordinary dialogue, and a card's line must not lose the card that spoke it. The
+      // debug trail (`meta`, `extensions`) deliberately does NOT: it describes how THESE
+      // bytes were generated, and this text was typed by a person, so inheriting
+      // `meta.model`/`promptSnapshotId` would be a false record.
+      kind: target.kind,
+      ...(target.speakerId === undefined ? {} : { speakerId: target.speakerId }),
+    });
+    await setHeadMessageId(session.id, sibling.id);
+    const messageChain = await getChain(session.id);
+    set({ session: { ...session, headMessageId: sibling.id }, messageChain, regenerating: null });
+    return true;
+  },
+
+  /** See the interface's `deleteMessage` for the rule. */
+  async deleteMessage(messageId: Id): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    const target = get().messageChain.find((message) => message.id === messageId);
+    if (target === undefined) return false;
+
+    const removed = await deleteLeafMessage(session.id, messageId);
+    if (!removed) return false;
+
+    // The head moves ONLY when it named the row that just went, and it moves to that
+    // row's parent — the position the deleted message was generated from.
+    const headMessageId =
+      session.headMessageId === messageId ? target.parentId : session.headMessageId;
+    if (headMessageId !== session.headMessageId) {
+      await setHeadMessageId(session.id, headMessageId);
+    }
+    const messageChain = await getChain(session.id);
+    set({ session: { ...session, headMessageId }, messageChain });
+    return true;
+  },
+
+  /**
+   * Whether any message hangs off `messageId` (M1-S2) — the read behind the delete control's
+   * affordance. A node with replies cannot be deleted, and the row says so BEFORE the click
+   * instead of after a confirmation. Nothing about the write depends on this value: the
+   * repository re-checks the rule inside the delete's own transaction.
+   */
+  async hasReplies(messageId: Id): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    return hasChildren(session.id, messageId);
+  },
+
+  /**
+   * Ask again for the answer to `messageId`'s prompt (M1-S2).
+   *
+   * WHAT MAKES IT A SIBLING AND NOT A CHILD: `sendTurn` appends the user turn it is given
+   * as a child of the CURRENT head. So the head is first moved to `target.parentId` (the
+   * user message the answer being regenerated replies to) and `sendTurn` is given that
+   * user text again — and the new pair lands as another child of the same parent, which is
+   * exactly 「同父多子」 (docs/02 §7). The old answer is untouched and stays the previous
+   * member of the run, so the switcher can go back to it.
+   *
+   * WHY THE ANSWER IS LOCATED BY ROLE AND POSITION RATHER THAN BY THE CLICKED ID: the
+   * clicked message IS the answer, and `promptMessageFor` is what turns it into the
+   * question. A message with no earlier user turn (or one that is not on the active chain,
+   * i.e. a stale click after another tab moved the branch) cannot be regenerated, and the
+   * caller is told why through the banner and the returned catalog key.
+   */
+  async regenerate(messageId: Id): Promise<MessageKey | undefined> {
+    const session = get().session;
+    if (session === undefined) return 'error.messageMissing';
+    const target = get().messageChain.find((message) => message.id === messageId);
+    const prompt =
+      target === undefined ? undefined : promptMessageFor(get().messageChain, messageId);
+    if (target === undefined || prompt === undefined) return 'error.messageMissing';
+
+    // The refusal key is handed back so a caller that shows its own sentence can; the
+    // banner shows it either way (see `turnGate`).
+    const gate = turnGate(set, prompt.content);
+    if (gate !== undefined) return gate;
+
+    // THE HEAD MOVES FIRST, AND IT IS THE WHOLE MECHANISM: with the tip on the answer's own
+    // parent, the turn's assistant row is written as ANOTHER CHILD of that parent — a
+    // sibling (docs/02 §7's 同父多子) — and the request is composed from the chain up to that
+    // parent, i.e. the same history the answer being replaced was given.
+    await setHeadMessageId(session.id, target.parentId);
+    const messageChain = await getChain(session.id);
+    set({
+      session: { ...session, headMessageId: target.parentId },
+      messageChain,
+      status: 'streaming',
+      error: undefined,
+      draft: { ...IDLE_DRAFT },
+      regenerating: messageId,
+    });
+
+    controller = new AbortController();
+    await runTurn(set, {
+      sessionId: session.id,
+      // The question is already in the chain: this turn appends the ANSWER only, under the
+      // head the store just moved to the answer's own parent — which is what makes the two
+      // answers siblings rather than a second exchange.
+      append: { mode: 'assistant' },
+      userText: prompt.content,
+      prompt: prompt.content,
+    });
+    return undefined;
+  },
+
+  /** See the interface's `continueWriting`. */
+  async continueWriting(): Promise<MessageKey | undefined> {
+    const session = get().session;
+    const chain = get().messageChain;
+    const head = chain[chain.length - 1];
+    if (session === undefined) return 'error.messageMissing';
+    // The refusals, in the order a reader would check them. Only an ASSISTANT turn is
+    // continued: a continuation means "keep going from the model's own last sentence",
+    // while a head the USER wrote has nothing to continue (the composer is the way forward)
+    // and an empty transcript has nothing to continue FROM.
+    if (head === undefined || head.id !== session.headMessageId) return 'play.nothingToContinue';
+    if (head.role !== 'assistant') return 'play.continueNeedsAssistant';
+    // A turn already in flight is normally unreachable (the control is disabled while
+    // `status` is `streaming`); this branch covers a programmatic second caller, and it
+    // reports the same "nothing to continue" fact rather than starting a second stream.
+    if (get().status === 'streaming') return 'play.nothingToContinue';
+    // A refusal here has already been recorded in `error` for the banner.
+    const gate = turnGate(set, promptMessageFor(chain, head.id)?.content ?? '');
+    if (gate !== undefined) return gate;
+
+    // THE CONTINUATION IS `sendTurn` WITH THE HEAD UNMOVED: it asks the same question again
+    // with no new user turn, which is exactly the path a second "继续" already took before
+    // this milestone (`send-turn.test.ts` chains onto the stored head).
+    controller = new AbortController();
+    set({ status: 'streaming', error: undefined, draft: { ...IDLE_DRAFT }, regenerating: null });
+    await runTurn(set, {
+      sessionId: session.id,
+      // Nothing is written before the request: the head is the slice of chain to continue,
+      // and the answer lands under it — a CHILD of the current tip.
+      append: { mode: 'none' },
+      userText: promptMessageFor(chain, head.id)?.content ?? '',
+      prompt: '',
+    });
+    return undefined;
   },
 
   /**
@@ -552,6 +777,155 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }));
 
 /**
+ * Refuse a turn when the app cannot send one, and report which fact is missing.
+ *
+ * Returns the CATALOG KEY of the refusal (so `regenerate` and `continueWriting` can hand
+ * it back) or `undefined` when the turn may start, and it puts the failure in `error` so
+ * the banner shows it either way. `turnText` is what 「重试」 resends.
+ *
+ * WHY THE KEY AND NOT THE SENTENCE: `ChatError.message` is the LOG side of the error
+ * (ADR-019 keeps code and prose apart), and this module must not hold UI copy — the key is
+ * resolved through `translate` for the log and through the catalog for the banner.
+ */
+function turnGate(
+  set: (partial: Partial<ChatState>) => void,
+  turnText: string,
+): MessageKey | undefined {
+  const fail = (code: string, messageKey: MessageKey): MessageKey => {
+    set({
+      status: 'error',
+      error: { code, message: translate(messageKey), retryable: false, turnText },
+    });
+    return messageKey;
+  };
+  if (transport === undefined) {
+    // A wiring bug, not a provider failure: nothing was configured to send with.
+    return fail('unknown', 'error.notInitialized');
+  }
+  const settings = useSettingsStore.getState();
+  if (!isProviderReady(settings.provider)) {
+    // Its own code so the banner can name the missing settings instead of the catch-all
+    // (`i18n/error-keys.ts`).
+    return fail(NOT_CONFIGURED_CODE, 'error.notConfigured');
+  }
+  if (settings.locked) {
+    // A key EXISTS and cannot be read (M1-G3). The request must not go out: an omitted
+    // `Authorization` header would come back as `auth`, telling the user their key is
+    // wrong when it is only locked — a wrong explanation of a local fact. Nothing is sent
+    // and the banner names the fix.
+    return fail(KEY_LOCKED_CODE, 'error.keyLocked');
+  }
+  return undefined;
+}
+
+/**
+ * One turn through `chat/send-turn.ts`, from the store that owns the turn's lifecycle.
+ *
+ * WHY THIS IS ONE HELPER FOR THREE GESTURES (M1-S2)
+ * `send`, `regenerate` and `continueWriting` differ only in WHERE the turn attaches and
+ * what prompt text it composes from — the transcript tip before the turn is the same for
+ * all three, because each has already moved the head to the position it means. Everything
+ * after that is identical: gate, stream, report deltas, re-read the row the composer may
+ * have written variables into, and put the store back into a settled state. Three copies of
+ * that would be three chances for 「停止」 or the error banner to behave differently
+ * depending on which button started the turn.
+ *
+ * `params.append` is `undefined` for a REGENERATION or a CONTINUATION, where the question
+ * is already stored and the head is already where it should be; `params.prompt` is the
+ * text the composer is asked about. A continuation passes `''`, which is exactly the
+ * request that asks the model to keep going from the history it is given.
+ */
+interface TurnParams {
+  readonly sessionId: Id;
+  /** What the turn writes before its request; omitted for an ordinary composer turn. */
+  readonly append: TurnAppend | undefined;
+  /** What 「重试」 resends when this turn fails. */
+  readonly userText: string;
+  /** The prompt the composer is asked about; `''` continues from the history. */
+  readonly prompt: string;
+}
+
+async function runTurn(
+  set: (partial: Partial<ChatState>) => void,
+  params: TurnParams,
+): Promise<void> {
+  const session = await getSession(params.sessionId);
+  if (session === undefined) {
+    set({ status: 'error', error: localFailure(new Error('session'), 'unknown turn failure') });
+    return;
+  }
+  const settings = useSettingsStore.getState();
+  // The key travels in this object and nowhere else. `settings.key` is absent only for
+  // "no key stored", which is the documented way to reach a local Ollama or vLLM:
+  // `OpenAICompatibleOptions.apiKey` documents an empty string as "send no
+  // `Authorization` header", which is exactly what `''` produces here.
+  const config = {
+    baseUrl: settings.provider.baseUrl,
+    apiKey: settings.key ?? '',
+    model: settings.provider.model,
+  };
+  const signal = controller?.signal ?? new AbortController().signal;
+  try {
+    const result = await sendTurn(
+      {
+        config,
+        ...(transport === undefined ? {} : { transport }),
+        // The streaming render: the answer appears as it arrives, because nothing is
+        // persisted until the turn ends (see the partial-text policy in `send-turn`).
+        onDelta: (text) => set({ draft: { text, started: text !== '' } }),
+      },
+      {
+        sessionId: params.sessionId,
+        text: params.prompt,
+        signal,
+        ...(params.append === undefined ? {} : { append: params.append }),
+      },
+    );
+    // See the header: the composer may have written variables, and this store's copy of
+    // the session predates that write. Read BEFORE the `set` below so the status bar and
+    // the turn's own status land in one render.
+    const stored = await getSession(params.sessionId);
+    set({
+      draft: { ...IDLE_DRAFT },
+      regenerating: null,
+      ...(stored === undefined ? {} : { session: stored }),
+      status: result.error === undefined ? 'idle' : 'error',
+      error:
+        result.error === undefined
+          ? undefined
+          : {
+              code: result.error.code,
+              message: result.error.message,
+              retryable: result.error.retryable,
+              turnText: params.userText,
+              // Present only for a local failure (the composer's budget report); absent for
+              // a provider failure, whose sentence is the vendor's own text for logs and
+              // has no numbers to interpolate.
+              ...(result.error.detail === undefined ? {} : { detail: result.error.detail }),
+            },
+    });
+  } catch (cause) {
+    // A local fault (the database, a React-free bug in the store). The error's own NAME is
+    // the useful log detail and carries no provider prose (`send-turn.ts`'s `describeThrown`).
+    set({
+      draft: { ...IDLE_DRAFT },
+      regenerating: null,
+      status: 'error',
+      error: {
+        code: 'unknown',
+        message: writeErrorName(cause, 'error.localFailure'),
+        retryable: false,
+        turnText: params.userText,
+      },
+    });
+  } finally {
+    // The live query refreshes the chain on its own schedule; this store only resets the
+    // turn's own state.
+    controller = undefined;
+  }
+}
+
+/**
  * Persist one pure session-state transition and mirror it in the store (M1-S6).
  *
  * Shared by the two variable actions because they differ only in the transition they
@@ -616,6 +990,7 @@ export function resetChat(): void {
     messageChain: [],
     checkpoints: [],
     draft: { ...IDLE_DRAFT },
+    regenerating: null,
     status: 'idle',
     error: undefined,
   });

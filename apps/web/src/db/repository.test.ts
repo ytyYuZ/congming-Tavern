@@ -29,10 +29,14 @@ import {
   createCheckpoint,
   createSession,
   deleteCheckpoint,
+  deleteLeafMessage,
   getChain,
   getCheckpoint,
+  getMessage,
   getSession,
+  hasChildren,
   listCheckpoints,
+  listChildren,
   listSessions,
   readChain,
   readProviderSettings,
@@ -627,6 +631,141 @@ describe('db/repository — checkpoints (M1-M1, M1-T4)', () => {
     expect(await createCheckpoint({ sessionId: 'no-such-session', label: 'x' })).toBeUndefined();
     expect(await restoreCheckpoint('no-such-checkpoint')).toBeUndefined();
     expect(await listCheckpoints('no-such-session')).toEqual([]);
+  });
+});
+
+/* ────────────────── M1-S2: the message tree's rows and its delete rule ────────────────── */
+
+/**
+ * WHAT THIS SUITE PINS, AND WHY IT IS AT THE ROW LEVEL
+ * The two rules the milestone adds to the tree are "the siblings of a node are every child
+ * of its parent, including the ones the active chain does not run through" and "a node with
+ * children cannot be deleted". Both are properties of the TABLE — the chain cannot show
+ * either one (it holds exactly one path, and it never holds a row that is gone) — so they
+ * are asserted here, against real rows, before any screen asks about them.
+ *
+ * The rules' USER-FACING halves (which control is offered, what the head does afterwards)
+ * live in `app/routes/routes.test.tsx`, where the gesture can be performed.
+ */
+describe('db/repository — the message tree (M1-S2)', () => {
+  /** One stored turn: a user message with `answers` assistant siblings under it. */
+  async function turnWithAnswers(
+    sessionId: string,
+    question: string,
+    answers: readonly string[],
+  ): Promise<{ question: Message; answers: Message[] }> {
+    const asked = await appendMessage({
+      sessionId,
+      parentId: null,
+      role: 'user',
+      content: question,
+    });
+    const stored: Message[] = [];
+    for (const content of answers) {
+      stored.push(
+        await appendMessage({ sessionId, parentId: asked.id, role: 'assistant', content }),
+      );
+    }
+    return { question: asked, answers: stored };
+  }
+
+  it('lists every child of a parent, including the branch the chain does not run through', async () => {
+    const session = await createSession({ title: 'siblings' });
+    const { question, answers } = await turnWithAnswers(session.id, '问题', [
+      '第一个答案',
+      '第二个答案',
+    ]);
+    const first = answers[0];
+    const second = answers[1];
+    if (first === undefined || second === undefined) throw new Error('fixture is incomplete');
+    // Only the second answer is on the active chain; the first is the discarded branch.
+    await setHeadMessageId(session.id, second.id);
+    expect((await getChain(session.id)).map((row) => row.content)).toEqual(['问题', '第二个答案']);
+
+    const siblings = await listChildren(session.id, question.id);
+    // Both, in id order (uuid v7 is time-ordered, so this is also creation order). A
+    // `listChildren` that read the chain would answer ONE row — the bug this asserts against.
+    expect(siblings.map((row) => row.content)).toEqual(['第一个答案', '第二个答案']);
+    expect(siblings.map((row) => row.parentId)).toEqual([question.id, question.id]);
+
+    // The ROOT case: the first message's own "siblings" are the session's other roots, and
+    // `null` is the key it is asked with (`Message.parentId` is nullable).
+    expect((await listChildren(session.id, null)).map((row) => row.content)).toEqual(['问题']);
+    // A session with no such parent answers empty rather than every row in the database.
+    expect(await listChildren(session.id, 'no-such-parent')).toEqual([]);
+  });
+
+  it('reports whether a node has children, through the same edges', async () => {
+    const session = await createSession({ title: 'children' });
+    const { question, answers } = await turnWithAnswers(session.id, '问题', ['答案']);
+    const answer = answers[0];
+    if (answer === undefined) throw new Error('fixture is incomplete');
+
+    expect(await hasChildren(session.id, question.id)).toBe(true);
+    expect(await hasChildren(session.id, answer.id)).toBe(false);
+    expect(await hasChildren(session.id, 'no-such-message')).toBe(false);
+  });
+
+  it('deletes a LEAF and leaves no row behind', async () => {
+    const session = await createSession({ title: 'delete-leaf' });
+    const { question, answers } = await turnWithAnswers(session.id, '问题', ['答案']);
+    const answer = answers[0];
+    if (answer === undefined) throw new Error('fixture is incomplete');
+    await setHeadMessageId(session.id, answer.id);
+
+    expect(await deleteLeafMessage(session.id, answer.id)).toBe(true);
+    expect(await readTable(COLLECTIONS.messages).count()).toBe(1);
+    expect(await getMessage(answer.id)).toBeUndefined();
+    // The parent is untouched, and the chain now ends at it — the walk from the head ran
+    // into the missing row and stopped, which is why the CALLER must repair the pointer
+    // (`state/chat-store.ts`'s `deleteMessage` moves it to the parent). Asserted here so the
+    // repair's necessity is a recorded fact and not a surprise.
+    expect(await getMessage(question.id)).toBeDefined();
+    expect((await getSession(session.id))?.headMessageId).toBe(answer.id);
+    expect(await getChain(session.id)).toEqual([]);
+  });
+
+  it('refuses to delete a node that has replies, and removes nothing', async () => {
+    const session = await createSession({ title: 'delete-refused' });
+    const { question, answers } = await turnWithAnswers(session.id, '问题', ['答案']);
+    const answer = answers[0];
+    if (answer === undefined) throw new Error('fixture is incomplete');
+    await setHeadMessageId(session.id, answer.id);
+
+    // The refusal is the RULE, not an error: `false` and an untouched database.
+    expect(await deleteLeafMessage(session.id, question.id)).toBe(false);
+    expect(await deleteLeafMessage(session.id, answer.id)).toBe(true);
+    // Having removed the reply, the same call now succeeds — which is what makes the
+    // refusal "delete the replies first" rather than "this node can never go".
+    expect(await deleteLeafMessage(session.id, question.id)).toBe(true);
+    expect(await readTable(COLLECTIONS.messages).count()).toBe(0);
+  });
+
+  it('does not mistake another session’s child for this one’s', async () => {
+    // The siblings query is per SESSION: two sessions can legitimately hold a message with
+    // the same id only by corruption, but a `listChildren` that ignored `sessionId` would
+    // splice another transcript's rows into this one's run — the shape of failure the
+    // acceptance ("消息树（parentId）正确") is about.
+    const mine = await createSession({ title: 'mine' });
+    const theirs = await createSession({ title: 'theirs' });
+    const myQuestion = await appendMessage({
+      sessionId: mine.id,
+      parentId: null,
+      role: 'user',
+      content: '我的问题',
+    });
+    await appendMessage({
+      sessionId: theirs.id,
+      parentId: null,
+      role: 'user',
+      content: '别人的问题',
+    });
+
+    expect((await listChildren(mine.id, null)).map((row) => row.content)).toEqual(['我的问题']);
+    expect((await listChildren(theirs.id, null)).map((row) => row.content)).toEqual(['别人的问题']);
+    // And a delete in one session cannot see the other's rows.
+    expect(await deleteLeafMessage(theirs.id, myQuestion.id)).toBe(true);
+    expect(await getMessage(myQuestion.id)).toBeUndefined();
   });
 });
 

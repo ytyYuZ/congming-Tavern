@@ -579,6 +579,14 @@ export async function appendMessage(input: {
   parentId: Id | null;
   role: Message['role'];
   content: string;
+  /**
+   * The presentation kind, for the callers that HAVE one (M1-S2's edit, which must not
+   * relabel a narration as ordinary dialogue). Omitted means `'dialogue'`, which is what
+   * every turn written so far is.
+   */
+  kind?: Message['kind'];
+  /** Which card spoke, when the caller knows (an edited message keeps its speaker). */
+  speakerId?: Message['speakerId'];
   meta?: Message['meta'];
   extensions?: Message['extensions'];
 }): Promise<Message> {
@@ -587,7 +595,8 @@ export async function appendMessage(input: {
     sessionId: input.sessionId,
     parentId: input.parentId,
     role: input.role,
-    kind: 'dialogue',
+    ...(input.speakerId === undefined ? {} : { speakerId: input.speakerId }),
+    kind: input.kind ?? 'dialogue',
     content: input.content,
     meta: input.meta ?? {},
     createdAt: Date.now(),
@@ -607,6 +616,20 @@ export async function getMessage(messageId: Id): Promise<Message | undefined> {
 }
 
 /**
+ * Whether `messageId` has a child, i.e. whether it is the LEAF of its branch (M1-S2).
+ *
+ * WHY IT EXISTS BESIDE `deleteLeafMessage`: the delete's rule and the delete's AFFORDANCE
+ * are two facts, and the second one is wanted before the click. A row that can tell its user
+ * "there is more after this" up front does not have to be told after a confirmation, and the
+ * write itself still re-checks inside its own transaction — a UI that read this a moment ago
+ * cannot make the write unsafe. This is the read `play.tsx`'s `MessageBubble` uses to label
+ * the delete control.
+ */
+export async function hasChildren(sessionId: Id, messageId: Id): Promise<boolean> {
+  return (await listChildren(sessionId, messageId)).length > 0;
+}
+
+/**
  * Advance the transcript tip. `null` means "the transcript is empty again".
  *
  * The row is completed through `completeState` first, exactly like `writeSessionState`:
@@ -620,6 +643,81 @@ export async function setHeadMessageId(sessionId: Id, headMessageId: Id | null):
     if (row === undefined) return;
     const session = SessionSchema.parse({ ...row, state: completeState(row) });
     await sessionsOf(tx).put({ ...session, headMessageId, updatedAt: Date.now() });
+  });
+}
+
+/**
+ * The children of one node — the SIBLINGS a message is chosen among (M1-S2).
+ *
+ * WHY THIS READS THE TABLE AND NOT THE CHAIN: the chain is ONE path from the head to a
+ * root, so it can never hold two messages with the same `parentId` — the sibling that is
+ * NOT on the active path is precisely the one the user wants to switch to, and it exists
+ * only in the table.
+ *
+ * WHY THE SCAN IS NARROWED BY `sessionId` AND THEN FILTERED, INSTEAD OF USING THE
+ * `(sessionId, parentId)` INDEX DIRECTLY: the port's `Query.where` is an equality map on
+ * the fields of ONE index, and `messages_sessionId_parentId` is compound — a query naming
+ * only `parentId` would have to be answered by a full table scan, and a query naming both
+ * could not express the ROOT case (`parentId: null`), which is a real query the switcher
+ * asks (the siblings of the first message).
+ *
+ * WHY `null` IS READ WITHOUT ANY INDEX AT ALL, MEASURED RATHER THAN ASSUMED: a row whose
+ * `parentId` is `null` is absent from the compound index — an indexed scan narrowed by
+ * `sessionId` returns the OTHER rows of the session and silently drops the root, which is
+ * the worst shape of bug (a query that answers "no roots" for a session that has one). So
+ * the root case scans the table, and the in-memory filter is what decides, always. A
+ * dedicated single-field `parentId` index would make both cases a range scan and would need
+ * a schema version bump in `packages/core`'s index table, which is not this task's file to
+ * change; recorded here so the trade is visible rather than guessed at.
+ *
+ * The rows are parsed on the way in like every other reader (ADR-016).
+ */
+export async function listChildren(sessionId: Id, parentId: Id | null): Promise<Message[]> {
+  const rows = await readTable<Message>(COLLECTIONS.messages).toArray();
+  return rows
+    .filter((row) => row.sessionId === sessionId && row.parentId === parentId)
+    .map((row) => MessageSchema.parse(row));
+}
+
+/**
+ * Remove ONE message row (M1-S2).
+ *
+ * WHY THE CALLER MUST HAVE ESTABLISHED THAT IT IS A LEAF, AND WHY THAT IS NOT CHECKED HERE
+ * This function is the raw row removal; `deleteLeafMessage` below is the RULE. The two are
+ * separate because the rule can then be TESTED as a rule (a table of child/no-child cases)
+ * rather than only through the database, and because the one caller that needs the answer
+ * to be atomic (the delete path) gets it from the combined function below. It is
+ * idempotent, as `Collection.remove` documents, so a double-click is not an error.
+ */
+export async function removeMessage(messageId: Id): Promise<void> {
+  await write(async (tx) => {
+    await messagesOf(tx).remove(messageId);
+  });
+}
+
+/**
+ * Delete a message that is a LEAF, and report whether anything was removed (M1-S2).
+ *
+ * THE DELETE RULE, IN ONE PLACE
+ * A message that has children is REFUSED (`false`): deleting it would either orphan its
+ * replies or rewrite their `parentId`, and docs/02 §7 defines this tree as the record of
+ * what was generated from what — a "delete the middle of a branch" that promotes the
+ * children silently re-parents every one of them, which is a shape no screen can show and
+ * no reader can predict. A leaf has no such consequence: the row goes, the tree stays a
+ * tree, and nothing else points at it (`Message.parentId` is the tree's only edge; a
+ * `Session.headMessageId` or `Checkpoint.messageId` that names it is a POINTER, and
+ * repairing that is the caller's move — see `state/chat-store.ts`'s `deleteMessage`).
+ *
+ * The check and the removal happen in ONE transaction so the answer cannot be stale: two
+ * tabs deleting the last two children of a node at the same moment must not both be told
+ * they removed a leaf.
+ */
+export async function deleteLeafMessage(sessionId: Id, messageId: Id): Promise<boolean> {
+  return write(async (tx) => {
+    const rows = await messagesOf(tx).list({ where: { sessionId } }, 'messages_sessionId_parentId');
+    if (rows.some((row) => row.parentId === messageId)) return false;
+    await messagesOf(tx).remove(messageId);
+    return true;
   });
 }
 

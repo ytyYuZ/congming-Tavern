@@ -281,6 +281,55 @@ export const zhCN = {
   /** Text the chosen kind cannot hold (a non-number for 数值, or a blank name). */
   'play.variableInvalid': '请输入该类型的一个有效值',
 
+  /*
+   * THE MESSAGE-STREAM CONTROLS (M1-S2) — one label per act on a message.
+   *
+   * WHY THE BRANCH SWITCHER SAYS 「第 1 / 2 条」 AND NOT AN ARROW ONLY: an arrow pair with
+   * no count is a control that cannot tell the user whether a second answer EXISTS, which
+   * is the one thing this feature is about (docs/02 §7: 重生成（同父多子）). The count is
+   * also the acceptance made visible: after a regenerate there are two answers to the same
+   * prompt, and the sentence says so before anything is clicked.
+   */
+  'play.siblingCounter': '第 {position} / {total} 条',
+  'play.siblingPrevious': '上一条',
+  'play.siblingNext': '下一条',
+  /** The switcher's accessible name: the buttons are read aloud with it, the count is not. */
+  'play.siblingLabel': '本轮的多个回答',
+  'play.continue': '继续写',
+  'play.regenerate': '重新生成',
+  'play.edit': '编辑',
+  'play.editSave': '保存修改',
+  'play.editCancel': '取消',
+  'play.delete': '删除',
+  /**
+   * The delete button's ACCESSIBLE name: `{target}` is the message's own text, so a screen
+   * reader says which row the destructive control belongs to. The visible label stays short
+   * (`play.delete`), because a full sentence on every row would bury the text it acts on.
+   */
+  'play.deleteLabel': '删除：{target}',
+  /**
+   * The delete's second step. A message delete is NOT recoverable (unlike a regenerate,
+   * which only adds a sibling), so it takes the save-point panel's two-step shape.
+   */
+  'play.deleteConfirm': '确认删除',
+  /**
+   * WHY THE DELETE OF A NODE WITH REPLIES IS A REFUSAL AND NOT A CASCADE: the tree records
+   * what was generated from what (docs/02 §7), so deleting a middle node would either orphan
+   * its replies or silently re-parent them. The sentence names the way forward — delete the
+   * replies (or the branch point) first — instead of destroying them under one click.
+   */
+  'play.deleteRefused': '这条消息后面还有内容，请先删除它之后的消息',
+  /*
+   * 继续写 refusals. Three DIFFERENT facts, so three sentences: an empty transcript, a head
+   * the user themselves wrote, and a turn already in flight. Collapsing them into one
+   * message ("cannot continue") would leave the user unable to tell which control to reach
+   * for instead — the composer, or 「停止」.
+   */
+  'play.nothingToContinue': '还没有可续写的内容',
+  'play.continueNeedsAssistant': '只能在角色发言之后续写',
+  /** An edit that the store refused — a message that left the active branch meanwhile. */
+  'play.editFailed': '未能保存这条修改，请刷新后重试',
+
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
    * THE FIRST SIX KEYS MIRROR `LLM_ERROR_CODES` (packages/providers/
@@ -329,6 +378,13 @@ export const zhCN = {
    * request, so nothing is sent).
    */
   'error.keyLocked': '密钥已加密且处于锁定状态，请到「设置」解锁后再发送',
+  /*
+   * SHOWN (M1-S2). A regenerate / edit / continue names a message the user could see a
+   * moment ago; another tab — or a save-point rollback — can move the branch in between.
+   * The sentence says what happened and what fixes it, because "发生未知错误" would report
+   * an ordinary stale click as an app fault.
+   */
+  'error.messageMissing': '这条消息已不在当前分支上，请刷新后重试',
 };
 
 /** Every key that must exist in every catalog, derived from the source of truth. */
@@ -476,6 +532,22 @@ export const en: Messages = {
   'play.variableSaved': 'Variable saved',
   'play.variableAdded': 'Variable added',
   'play.variableInvalid': 'Enter a valid value for that type',
+  'play.siblingCounter': 'Answer {position} of {total}',
+  'play.siblingPrevious': 'Previous',
+  'play.siblingNext': 'Next',
+  'play.siblingLabel': 'The answers to this turn',
+  'play.continue': 'Continue',
+  'play.regenerate': 'Regenerate',
+  'play.edit': 'Edit',
+  'play.editSave': 'Save changes',
+  'play.editCancel': 'Cancel',
+  'play.delete': 'Delete',
+  'play.deleteLabel': 'Delete: {target}',
+  'play.deleteConfirm': 'Confirm delete',
+  'play.deleteRefused': 'There is more after this message. Delete what follows it first.',
+  'play.nothingToContinue': 'There is nothing to continue yet',
+  'play.continueNeedsAssistant': 'You can continue only after a character has spoken',
+  'play.editFailed': 'That change was not saved. Refresh and try again.',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',
@@ -490,6 +562,7 @@ export const en: Messages = {
   'error.localFailure': 'Unknown local error.',
   'error.promptBudget': 'This request is over the model budget, so it was not sent. {detail}',
   'error.keyLocked': 'The key is encrypted and locked. Unlock it in Settings before sending.',
+  'error.messageMissing': 'That message is no longer on the active branch. Refresh and try again.',
 };
 
 /**

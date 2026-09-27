@@ -320,6 +320,85 @@ body {
   max-width: var(--message-width, 85%);
 }
 
+/* --- the message-tree controls (M1-S2) ------------------------------------ */
+
+/*
+ * A bubble is now a COLUMN: the sibling switcher, the text (or the editor) and the action
+ * row. The `.bubble` rule above still owns the box, so a message with a switcher and one
+ * without are the same object to the transcript's layout — which is what keeps the list
+ * from jumping when a regenerate adds the second answer.
+ */
+.bubble-active {
+  /* The tip of the active chain. A left border rather than a background change, because the
+     assistant bubble's background is already the surface colour and the user's is the
+     accent: only an edge can read the same on both. */
+  border-left: 3px solid var(--accent);
+  padding-left: 0.65rem;
+}
+
+/* While another answer is being generated for this node: dimmed, not hidden — the text the
+   user is replacing stays readable, and it stays reachable through the switcher. */
+.bubble-regenerating {
+  opacity: 0.55;
+}
+
+.bubble-text {
+  white-space: pre-wrap;
+}
+
+.sibling-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+}
+
+/* Tabular figures so the counter does not jitter as the position changes. */
+.sibling-counter {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+
+.bubble-actions .btn {
+  /* The rows are compact, so the controls are too; `btn-small` also keeps four of them on
+     one line in a narrow column. */
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.bubble-status {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.bubble-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.bubble-editor-input {
+  font: inherit;
+  width: 100%;
+  min-height: 3rem;
+  resize: vertical;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
 .composer {
   display: flex;
   gap: 0.5rem;

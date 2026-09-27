@@ -112,8 +112,13 @@ export interface SendTurnDeps {
  * below is the post-turn tip, and the chain itself is refreshed by the live query.
  */
 export interface SendTurnResult {
-  /** The stored user message (always written, even when the request failed). */
-  userMessage: Message;
+  /**
+   * The stored user message, or `undefined` when this turn wrote none (M1-S2: a
+   * regeneration and a continuation re-ask a question that is already in the chain, so
+   * there is no new user row to hand back). An ordinary composer turn always writes one,
+   * even when the request then fails.
+   */
+  userMessage: Message | undefined;
   /** The stored assistant message, or `undefined` when the partial-text policy dropped it. */
   assistantMessage: Message | undefined;
   /** `Session.headMessageId` after the turn. */
@@ -223,13 +228,41 @@ function budgetFailure(error: {
 }
 
 /**
+ * What this turn must write before the request goes out.
+ *
+ * WHY `'none'` IS SPELLED OUT RATHER THAN AN ABSENT `append`
+ * A regeneration and a continuation ask a question that is ALREADY in the chain, so the
+ * turn must write no user message at all — and an optional field cannot say that: an
+ * absent field is also what a caller that forgot to pass one looks like, and the fallback
+ * it invites ("then ask `params.text` as the user turn") is exactly the bug that makes a
+ * regeneration append a SECOND copy of the question instead of a sibling answer. So the
+ * three cases are nameable at the call site:
+ * - omitted            — an ordinary turn: write `params.text` as a user row under the head.
+ * - `{mode: 'none'}`   — a CONTINUATION: write nothing, the head is the chain to continue.
+ * - `{mode: 'assistant'}` — a REGENERATION: write the answer only, under the head the store
+ *   has already moved to the answer's own parent, which is what makes it a sibling (docs/02
+ *   §7's 同父多子).
+ */
+export type TurnAppend = { readonly mode: 'none' } | { readonly mode: 'assistant' };
+
+/**
  * Run one turn. Never throws for a provider-side failure: every failure is either
  * an `error` event turned into `result.error` or — only for a bug in this app — a
  * thrown error that the caller's `try` should surface.
+ *
+ * WHO OWNS `Session.headMessageId` AT ENTRY IS THE CALLER'S DECISION (M1-S2)
+ * `params.append` names the position this turn attaches to, and the caller has already put
+ * the head there (or is relying on it being where the last turn left it). An OMITTED
+ * `append` is the ordinary composer turn and writes the user row itself.
  */
 export async function sendTurn(
   deps: SendTurnDeps,
-  params: { sessionId: Id; text: string; signal: AbortSignal },
+  params: {
+    sessionId: Id;
+    text: string;
+    signal: AbortSignal;
+    append?: TurnAppend;
+  },
 ): Promise<SendTurnResult> {
   const session = await getSession(params.sessionId);
   if (session === undefined) throw new Error(`sendTurn: no session ${params.sessionId}`);
@@ -239,13 +272,19 @@ export async function sendTurn(
   const chain = await getChain(params.sessionId);
   const composed = composeRequest(deps, session, chain, params.text);
 
-  const userMessage = await appendMessage({
-    sessionId: session.id,
-    parentId: session.headMessageId,
-    role: 'user',
-    content: params.text,
-  });
-  await setHeadMessageId(session.id, userMessage.id);
+  // The user turn written before the request. `'none'` and `'assistant'` must NOT invent a
+  // user row, because a question that is already in the chain would then be asked twice —
+  // see `TurnAppend`.
+  const asked =
+    params.append === undefined
+      ? await appendMessage({
+          sessionId: session.id,
+          parentId: session.headMessageId,
+          role: 'user',
+          content: params.text,
+        })
+      : undefined;
+  if (asked !== undefined) await setHeadMessageId(session.id, asked.id);
   await recordSessionModel(session.id, {
     provider: PROVIDER_ID,
     model: deps.config.model,
@@ -259,13 +298,15 @@ export async function sendTurn(
   if (nextState !== session.state) await writeSessionState(session.id, nextState);
 
   if (!composed.ok) {
-    // Nothing was sent, so there is no draft and no assistant row. The user's own
-    // message stays persisted: it is what they typed, and the banner is attached to
-    // the live turn, not to a row.
+    // Nothing was sent, so there is no draft and no assistant row. A user message this turn
+    // wrote stays persisted — it is what they typed, and the banner is attached to the live
+    // turn, not to a row. When this turn wrote NO user row (a regeneration or a continuation
+    // whose composition failed), the tip is still whatever the caller left it at, which is
+    // the position that was asked about.
     return {
-      userMessage,
+      userMessage: asked,
       assistantMessage: undefined,
-      headMessageId: userMessage.id,
+      headMessageId: asked?.id ?? (await getSession(session.id))?.headMessageId ?? null,
       error: composed.error,
       aborted: false,
     };
@@ -305,7 +346,7 @@ export async function sendTurn(
     };
   }
 
-  return recordOutcome(deps, session.id, userMessage, draft, params.signal.aborted);
+  return recordOutcome(deps, session.id, asked, draft, params.signal.aborted);
 }
 
 /** The provider id recorded on the session. `OpenAICompatibleProvider.id` is per-host. */
@@ -358,22 +399,36 @@ function applyEvent(draft: TurnDraft, event: StreamEvent): void {
  * `sessionId` rather than the whole `Session`: the read at the start of the turn is
  * stale by now (two writes have happened), so passing only the id removes the
  * temptation to read anything else off it.
+ *
+ * `asked` is the user message THIS turn wrote, or `undefined` when the mode was `'none'` or
+ * `'assistant'` (a regeneration or a continuation — see `sendTurn`). The answer hangs off
+ * the head in that case, which is the parent the answer being regenerated already shares —
+ * that is the whole mechanism by which a regeneration produces a SIBLING rather than a child.
  */
 async function recordOutcome(
   deps: SendTurnDeps,
   sessionId: Id,
-  userMessage: Message,
+  asked: Message | undefined,
   draft: TurnDraft,
   aborted: boolean,
 ): Promise<SendTurnResult> {
   const failed = draft.error !== undefined;
   const keepPartial = !failed && draft.text !== '';
 
+  /**
+   * The tip when nothing was appended. When this turn DID ask, the tip is the row it wrote;
+   * when it did not, the answer hangs under the session's current head — read on demand,
+   * because the caller may have moved it (a regeneration does, before calling) and a copy
+   * taken at the start of the turn would be the pre-move value.
+   */
+  const tip = async (): Promise<Id | null> =>
+    asked?.id ?? (await getSession(sessionId))?.headMessageId ?? null;
+
   if (!keepPartial) {
     return {
-      userMessage,
+      userMessage: asked,
       assistantMessage: undefined,
-      headMessageId: userMessage.id,
+      headMessageId: await tip(),
       error: draft.error,
       aborted,
     };
@@ -381,7 +436,7 @@ async function recordOutcome(
 
   const assistantMessage = await appendMessage({
     sessionId,
-    parentId: userMessage.id,
+    parentId: await tip(),
     role: 'assistant',
     content: draft.text,
     // `model` is the id the user configured — a label, never a credential
@@ -400,7 +455,7 @@ async function recordOutcome(
   await setHeadMessageId(sessionId, assistantMessage.id);
 
   return {
-    userMessage,
+    userMessage: asked,
     assistantMessage,
     headMessageId: assistantMessage.id,
     error: draft.error,
