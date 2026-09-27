@@ -27,14 +27,45 @@ import { readZip, type ZipReadEntry } from './zip/read';
 
 export type ValidationSeverity = 'error' | 'warning';
 
+/**
+ * Every code this validator can emit. A union rather than `string` on purpose:
+ * `ports.ts` maps each one onto the `PackageFindingCode` vocabulary of
+ * `@smarttavern/core`, and that mapping is a `Record` over THIS type — so adding a
+ * code here is a compile error until somebody decides what it means to a caller.
+ */
+export type ValidationFindingCode =
+  | 'zip-rejected'
+  | 'manifest-not-first'
+  | 'manifest-missing'
+  | 'manifest-unparsable'
+  | 'manifest-json-limit'
+  | 'format-version-unsupported'
+  | 'manifest-schema'
+  | 'manifest-inconsistent'
+  | 'entry-missing'
+  | 'entry-size'
+  | 'entry-hash'
+  | 'entry-undeclared'
+  | 'payload-json-invalid'
+  | 'payload-json-limit'
+  | 'payload-newer-than-build'
+  | 'payload-migration-needed';
+
 /** One thing wrong (or worth knowing) about a package. */
 export interface ValidationFinding {
   readonly severity: ValidationSeverity;
   /** Stable identifier, for tests and for UI filtering. */
-  readonly code: string;
+  readonly code: ValidationFindingCode;
   readonly message: string;
   /** The file the finding is about, when it is about one. */
   readonly path?: string;
+  /**
+   * Free-form locator *inside* the target: the ZIP rejection rule for a container
+   * finding (`encrypted`, `path-traversal`, …), or the dotted field path for a
+   * manifest-shape finding. Kept apart from `path` because "which file" and "what
+   * about it" are different questions — and a rule name is not a path.
+   */
+  readonly where?: string;
 }
 
 export interface ValidationReport {
@@ -65,8 +96,19 @@ export async function validatePackage(
     entries,
     ...(manifest === undefined ? {} : { manifest }),
   });
-  const fail = (code: string, message: string, path?: string): void => {
-    findings.push({ severity: 'error', code, message, ...(path === undefined ? {} : { path }) });
+  const fail = (
+    code: ValidationFindingCode,
+    message: string,
+    path?: string,
+    where?: string,
+  ): void => {
+    findings.push({
+      severity: 'error',
+      code,
+      message,
+      ...(path === undefined ? {} : { path }),
+      ...(where === undefined ? {} : { where }),
+    });
   };
 
   /* ── step 1: it has to be a ZIP we accept (docs/04 §9) ── */
@@ -74,7 +116,8 @@ export async function validatePackage(
     entries = await readZip(bytes, resolved);
   } catch (cause) {
     const rule = cause instanceof ZipError ? cause.context?.rule : undefined;
-    fail('zip-rejected', cause instanceof Error ? cause.message : String(cause), rule);
+    const rejectPath = cause instanceof ZipError ? cause.context?.path : undefined;
+    fail('zip-rejected', cause instanceof Error ? cause.message : String(cause), rejectPath, rule);
     return report();
   }
 
@@ -127,6 +170,8 @@ export async function validatePackage(
       fail(
         'manifest-schema',
         `${MANIFEST_ENTRY_PATH}${issue.path.length > 0 ? `.${issue.path.join('.')}` : ''}: ${issue.message}`,
+        undefined,
+        issue.path.join('.'),
       );
     }
     return report();

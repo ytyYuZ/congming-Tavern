@@ -22,6 +22,7 @@ export * from './canonical-json';
 export * from './limits';
 export * from './manifest';
 export * from './pack';
+export * from './ports';
 export * from './unpack';
 export * from './validate';
 export * from './zip/errors';
