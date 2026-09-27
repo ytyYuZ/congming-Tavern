@@ -43,6 +43,79 @@ export const UUID_V7_PATTERN =
 export const UuidV7Schema = z.string().regex(UUID_V7_PATTERN);
 export type UuidV7 = z.infer<typeof UuidV7Schema>;
 
+/**
+ * Where a fresh id's randomness comes from: `crypto.getRandomValues` when the platform
+ * has it (every supported Node and every browser), `Math.random` otherwise.
+ *
+ * The fallback is a deliberate degrade rather than a throw: this module is bundled into
+ * browsers and imported by tooling, and "an id that is merely less random" beats "the
+ * caller cannot create a row at all". It is two lines and it is the only place the two
+ * entropy sources differ.
+ */
+function defaultEntropy(): Uint8Array {
+  const bytes = new Uint8Array(16);
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.getRandomValues === 'function') cryptoApi.getRandomValues(bytes);
+  else
+    for (let index = 0; index < bytes.length; index += 1)
+      bytes[index] = Math.floor(Math.random() * 256);
+  return bytes;
+}
+
+/** State of the counter that orders two ids minted inside the same millisecond. */
+let lastMintedAt = -1;
+let sequence = 0;
+
+/**
+ * Mint a UUIDv7 — `docs/04` §4's rule that minted ids are time-ordered, so an id sort
+ * is a creation-order sort.
+ *
+ * WHY THE MINTER LIVES NEXT TO THE PATTERN. The pattern, the `UuidV7` type and the
+ * minter are three statements of one rule. They had drifted into two implementations —
+ * `packages/packages` minted manifest ids from `Math.random`, `apps/web` minted row ids
+ * from `crypto.getRandomValues` — so two ids in one database could have different
+ * entropy guarantees. This is the extraction the repository's "extract it when the
+ * second implementation appears" rule asks for.
+ *
+ * MONOTONIC WITHIN A MILLISECOND: 12 of the 74 non-timestamp bits carry a sequence
+ * (RFC 9562's "monotonic random" method), so ids minted in the same millisecond still
+ * sort in creation order. That is the guarantee, and it stops there: a clock that goes
+ * BACKWARDS (NTP correction, a checkpoint rollback) starts a new millisecond's sequence,
+ * so an id minted after the correction sorts BELOW one minted before it — the alternative
+ * would be an id claiming a time the clock never reported. After 4096 ids in one
+ * millisecond the sequence wraps; nothing here mints at that rate, and the 62 remaining
+ * random bits still make a collision vanishingly unlikely.
+ *
+ * Both inputs are injectable so a test can be exact: `now` fixes the clock and
+ * `entropy` fixes the 16 random bytes. Production passes neither.
+ */
+export function mintUuidV7(
+  now: () => Date = () => new Date(),
+  entropy: () => Uint8Array = defaultEntropy,
+): UuidV7 {
+  const timestamp = now().getTime();
+  if (timestamp === lastMintedAt) sequence = (sequence + 1) & 0x0fff;
+  else {
+    lastMintedAt = timestamp;
+    sequence = 0;
+  }
+
+  const bytes = entropy();
+  const hex = (value: number): string => value.toString(16).padStart(2, '0');
+  // 48-bit big-endian milliseconds, built by division and not by shifting: JavaScript's
+  // bitwise operators are 32-bit and would silently truncate a millisecond timestamp.
+  let stamp = '';
+  for (let shift = 5; shift >= 0; shift -= 1) {
+    stamp += hex(Math.trunc(timestamp / 2 ** (shift * 8)) % 256);
+  }
+  // Group 4 is the variant nibble (10xx) plus 3 hex of entropy; group 5 is 12 more.
+  let tail = '';
+  for (let index = 0; index < 8; index += 1) tail += hex(bytes[index] ?? 0);
+  const variant = (0x8 + ((bytes[8] ?? 0) & 0x3)).toString(16);
+
+  return `${stamp.slice(0, 8)}-${stamp.slice(8, 12)}-7${sequence.toString(16).padStart(3, '0')}-${variant}${tail.slice(0, 3)}-${tail.slice(3, 15)}`;
+}
+
 /* ──────────────────────────────── time ───────────────────────────────────── */
 
 /**

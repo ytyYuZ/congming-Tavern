@@ -43,6 +43,7 @@ import {
   type JsonValue,
   type Message,
   MessageSchema,
+  mintUuidV7,
   type Session,
   SessionSchema,
 } from '@smarttavern/schema';
@@ -50,43 +51,11 @@ import { readTable, write } from './database';
 
 /* ─────────────────────────────── identifiers ─────────────────────────────── */
 
-let lastTimestamp = 0;
-let lastSequence = 0;
-
-/**
- * Mint a UUIDv7 (docs/04 §4: ids are time-ordered).
- *
- * Hand-rolled rather than taken from a dependency for two reasons: `crypto.
- * randomUUID` produces v4, which is not time-ordered, and this workspace is
- * allowed no new dependency (M0-T8 constraint). `crypto.getRandomValues` is used
- * when the platform has it and `Math.random` otherwise, so the function still
- * answers in a bare Node test process. The monotonic sequence keeps two ids minted
- * inside the same millisecond distinct.
- */
-export function newId(): Id {
-  const now = Date.now();
-  if (now === lastTimestamp) lastSequence += 1;
-  else {
-    lastTimestamp = now;
-    lastSequence = 0;
-  }
-  const bytes = new Uint8Array(16);
-  const cryptoApi = globalThis.crypto;
-  if (typeof cryptoApi?.getRandomValues === 'function') cryptoApi.getRandomValues(bytes);
-  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.random() * 256;
-
-  // 48 bits of big-endian milliseconds, then version 7 and the variant bits, then
-  // the monotonic sequence. Packed as hex before formatting into 8-4-4-4-12.
-  const hex = (value: number): string => Math.trunc(value).toString(16).padStart(2, '0');
-  let packed = '';
-  for (let shift = 5; shift >= 0; shift -= 1) packed += hex((now / 2 ** (shift * 8)) % 256);
-  packed += '7';
-  packed += hex(((lastSequence >> 8) & 0x0f) | 0x80);
-  packed += hex(lastSequence % 256);
-  let tail = '';
-  for (let index = 8; index < 16; index += 1) tail += hex(bytes[index] ?? 0);
-  return `${packed.slice(0, 8)}-${packed.slice(8, 12)}-${packed.slice(12, 16)}-${tail.slice(0, 4)}-${tail.slice(4, 16)}`;
-}
+// A hand-rolled UUIDv7 minter used to live here — `crypto.randomUUID` yields v4, which is
+// not time-ordered, and M0-T8 allowed no new dependency. It moved to
+// `@smarttavern/schema`'s `mintUuidV7` once `packages/packages` turned out to have minted
+// manifest ids with its own copy and a different entropy source: one rule (docs/04 §4),
+// one implementation.
 
 /* ───────────────────────────── settings rows ─────────────────────────────── */
 
@@ -208,7 +177,7 @@ const NEW_SESSION_TITLE = '新会话';
 export async function createSession(options: { title?: string } = {}): Promise<Session> {
   const timestamp = Date.now();
   const session: Session = {
-    id: newId(),
+    id: mintUuidV7(),
     title: options.title ?? NEW_SESSION_TITLE,
     refs: {
       world: { ...PLACEHOLDER_PIN },
@@ -304,7 +273,7 @@ export async function appendMessage(input: {
   extensions?: Message['extensions'];
 }): Promise<Message> {
   const message: Message = {
-    id: newId(),
+    id: mintUuidV7(),
     sessionId: input.sessionId,
     parentId: input.parentId,
     role: input.role,

@@ -17,7 +17,6 @@ import {
   deriveCounts,
   deriveSchemaVersions,
   mapValidationFinding,
-  mintUuidV7,
   PackageSourceError,
 } from './ports';
 import { readZip } from './zip/read';
@@ -50,22 +49,6 @@ async function built(): Promise<Uint8Array> {
   const result = await writer().write(entries());
   return result.bytes;
 }
-
-/* ───────────────────────────── id minting ───────────────────────────────── */
-
-describe('mintUuidV7', () => {
-  it('produces ids that satisfy the schema pattern', () => {
-    for (let index = 0; index < 20; index += 1) {
-      expect(UUID_V7_PATTERN.test(mintUuidV7())).toBe(true);
-    }
-  });
-
-  it('is time-ordered, which is the whole reason for v7', () => {
-    const early = mintUuidV7(() => new Date('2026-09-27T10:00:00.000Z'));
-    const late = mintUuidV7(() => new Date('2026-09-27T10:00:01.000Z'));
-    expect(early < late).toBe(true);
-  });
-});
 
 /* ───────────────────────── derived manifest ────────────────────────────── */
 

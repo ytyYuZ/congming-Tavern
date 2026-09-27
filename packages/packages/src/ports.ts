@@ -44,6 +44,7 @@ import type {
 import {
   CURRENT_SCHEMA_VERSIONS,
   MANIFEST_DATA_FILES,
+  mintUuidV7,
   PACKAGE_COUNT_KEYS,
   type PackageCountKey,
   type PackageCounts,
@@ -87,24 +88,6 @@ export const bytesOnlyLoader: PackageLoader = async (source) => {
 };
 
 /* ─────────────────────────────── writer ────────────────────────────────── */
-
-/**
- * Mint a UUIDv7 (`docs/04` §4: time-ordered, so ids sort by creation). Injectable
- * for deterministic tests and for a shell that has a better entropy source.
- */
-export function mintUuidV7(
-  now: () => Date = () => new Date(),
-  random: () => number = () => Math.random(),
-): UuidV7 {
-  const hex = (length: number): string => {
-    let out = '';
-    while (out.length < length) out += Math.floor(random() * 16).toString(16);
-    return out.slice(0, length);
-  };
-  const stamp = now().getTime().toString(16).padStart(12, '0').slice(-12);
-  const variant = ['8', '9', 'a', 'b'][Math.floor(random() * 4)] ?? '8';
-  return `${stamp.slice(0, 8)}-${stamp.slice(8, 12)}-7${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
-}
 
 /** Which count key each entity's payload file feeds (`PACKAGE_COUNT_KEYS` names). */
 const ENTITY_COUNT_KEY: Record<PackageSchemaVersionKey, PackageCountKey | undefined> = {

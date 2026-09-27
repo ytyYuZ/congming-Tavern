@@ -24,6 +24,7 @@ import {
   type Character,
   CharacterSchema,
   type Id,
+  mintUuidV7,
   UUID_V7_PATTERN,
   type World,
   WorldSchema,
@@ -35,22 +36,8 @@ import { createIndexedDbStorage, IndexedDbRowMissingError, IndexedDbStorageError
 
 /* ─────────────────────────────── fixtures ────────────────────────────────── */
 
-let uuidCounter = 0;
-
-/**
- * Mint a legal UUIDv7. `packages/schema/src/common.ts` exports the *pattern* but
- * no minter, so the fixture builds one: a millisecond timestamp prefix (what
- * makes v7 time-ordered) plus a counter, so two fixtures in the same millisecond
- * never collide. `UUID_V7_PATTERN` is asserted below so the fixture cannot drift
- * away from the frozen id shape the entity schemas validate against.
- */
-function uuid(): Id {
-  uuidCounter += 1;
-  const stamp = Date.now().toString(16).padStart(12, '0').slice(-12);
-  const counter = uuidCounter.toString(16).padStart(20, '0').slice(-20);
-  const hex = `${stamp}${counter}`;
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
+/** Fixture ids. The shared minter, aliased because every use here is "a fresh row id". */
+const uuid = (): Id => mintUuidV7();
 
 const NAMED_INDEX = 'messages_sessionId_parentId';
 const RANGE_INDEX = 'messages_createdAt';
