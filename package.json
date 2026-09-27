@@ -8,7 +8,6 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "packageManager": "pnpm@12.6.0",
   "scripts": {
     "lint": "biome check . && node tools/scripts/check-dependency-direction.mjs",
     "lint:fix": "biome check --write .",
@@ -17,7 +16,7 @@
     "test": "vitest run --pool=threads",
     "test:watch": "vitest --pool=threads",
     "check:deps": "node tools/scripts/check-dependency-direction.mjs",
-    "build": "tsc -b --noCheck --noEmit false && pnpm -r --filter \"./apps/*\" build",
+    "build": "tsc -b --noCheck --noEmit false && pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" build",
     "ci": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "ci:local": "node tools/scripts/run-ci-local.mjs"
   },

@@ -28,7 +28,7 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
 
 ### 沙箱 / 受限主机上的本地跑法
 
-以下两点只影响**某些受限主机**（例如禁止子进程管道通信的沙箱），CI 不需要：
+以下三点只影响**某些受限主机**（例如禁止子进程管道通信的沙箱），CI 不需要：
 
 1. **pnpm 的用户级目录必须在工作区内。** pnpm 12 会在
    `%LOCALAPPDATA%\pnpm-store-operation-locks\all-stores.lock` 上取全局操作锁；
@@ -55,6 +55,21 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
    其它 spawn 全部原样透传），包装脚本见 `tools/scripts/run-ci-local.mjs`。
    这两者都是**本地跑法**，`pnpm ci` / CI 完全不使用它们。
 
+3. **某些主机上的 pnpm 建不出隔离式软链树。** 症状是安装看似"成功"，随后
+   `@vitest/utils` 一类依赖解析失败；或安装直接报
+   `ERR_PNPM_SYMLINK_FAILED [symlinkAllModules] Maximum call stack size exceeded`。
+   这类主机改用 hoisted 链接器安装（**只影响本地**，CI 仍用默认的隔离式布局）：
+
+   ```powershell
+   pnpm install --node-linker=hoisted --no-frozen-lockfile
+   ```
+
+   另外：本机自带的 pnpm 是 **11.8.0**，而根 `package.json` 曾把 `packageManager`
+   钉在 `pnpm@12.6.0`，于是 pnpm 会先把 12.6.0 自装进 store 再 re-exec；在禁止
+   写入该目录的主机上这一步会失败并留下一个空的包目录，导致**此后每次 `pnpm`
+   调用都指向不存在的二进制**。因此该字段已移除，版本改由
+   `.github/workflows/ci.yml` 的 `pnpm/action-setup` 显式钉住 —— CI 行为不变。
+
 ### 关于 `vite` 的 override（rolldown-vite）
 
 `pnpm-workspace.yaml` 里有一行 `overrides: vite: npm:rolldown-vite@^7.3.1`。
@@ -62,7 +77,12 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
 而上述受限主机禁止这种 spawn，于是任何 TypeScript 文件都无法转译，
 `pnpm test` 与 `pnpm build` 一起失效。`rolldown-vite` 是同一套 Vite 7 API
 换用原生、进程内的打包器，因此 `vite.config.ts` 与 CI 命令都不变。
-等所有开发者主机都能 spawn 管道子进程后，删掉这一行即可回到标准 `vite`。
+
+> **⚠️ 该包已在 registry 被标记为 deprecated（2026-09-27 记录）。**
+> 弃用语的含义是"用它从 Vite 7 迁移到 Vite 8"——即 Rolldown 已并入 Vite 8 本体。
+> **待办（独立于契约工作，不要与 M0-T1/T2 混做）**：整体升级到 Vite 8，并同步升级
+> Vitest（Vitest 3 依赖 Vite 7）；升级后删掉这行 override，同时保留"不依赖
+> esbuild 管道"这一收益。
 
 ### `.npmrc`
 

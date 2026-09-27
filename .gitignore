@@ -63,3 +63,8 @@ stpack-out/
 *.local
 *.pem
 secrets.json
+
+# --- Stray logs -------------------------------------------------------------
+# The Electron/pnpm crash handler writes `debug.log` into the working directory
+# when a sandbox denies its crash-database path. Never commit those.
+*.log

@@ -26,6 +26,11 @@ packages:
 # (and CI sandboxes) deny writes to the user-level pnpm/npm directories.
 cacheDir: .npm-cache
 
+# Hoisted linker, deliberately — see the comment block in .npmrc for the reason
+# and the cost. Mirrored here because pnpm 12 reads settings from this file while
+# pnpm 11 reads them from .npmrc; keeping both in sync keeps one tree shape.
+nodeLinker: hoisted
+
 # Vite 7 on Rolldown (`rolldown-vite`, the Vite team's in-process native bundler).
 #
 # This override applies to EVERY install — CI runners included — so treat it as a
