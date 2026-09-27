@@ -67,6 +67,7 @@ import {
   INDEXES,
   type Collection as PortCollection,
   type Query,
+  RANGE_BOUND_NOT_COMPARABLE_MESSAGE,
   RANGE_FIELD_REQUIRED_MESSAGE,
   type RowBase,
   type StorageAdapter,
@@ -294,6 +295,17 @@ class IndexedDbCollection<T extends RowBase> implements PortCollection<T> {
     const rangeField = query?.field;
     if (query !== undefined && bounds && rangeField === undefined) {
       throw new StorageQueryError(RANGE_FIELD_REQUIRED_MESSAGE, query);
+    }
+    // A bound that cannot be compared is refused, not guessed: `compare` answers 0
+    // ("equal") for anything that is not a number or a string, so a `Date` bound
+    // matched EVERY row and the query silently returned the whole table — the same
+    // class of wrong answer ADR-023 outlawed, one field over (ADR-024).
+    if (query !== undefined && bounds) {
+      for (const bound of [query.from, query.to]) {
+        if (bound !== undefined && typeof bound !== 'number' && typeof bound !== 'string') {
+          throw new StorageQueryError(RANGE_BOUND_NOT_COMPARABLE_MESSAGE, query);
+        }
+      }
     }
 
     return rows.filter((row) => {

@@ -13,7 +13,13 @@
  * `fake-indexeddb/auto` polyfills `globalThis.indexedDB`; no jsdom is involved.
  */
 import 'fake-indexeddb/auto';
-import { COLLECTIONS, RANGE_FIELD_REQUIRED_MESSAGE, StorageQueryError } from '@smarttavern/core';
+import {
+  COLLECTIONS,
+  type Query,
+  RANGE_BOUND_NOT_COMPARABLE_MESSAGE,
+  RANGE_FIELD_REQUIRED_MESSAGE,
+  StorageQueryError,
+} from '@smarttavern/core';
 import {
   type Character,
   CharacterSchema,
@@ -434,6 +440,38 @@ describe('createIndexedDbStorage', () => {
       tx.collection<MessageRow>(COLLECTIONS.messages).list({ where: { content: 'hi' } }),
     );
     expect(rows.map((row) => row.id).sort()).toEqual(['m1', 'm2']);
+  });
+
+  it('refuses a range bound that cannot be compared, instead of matching every row (ADR-024)', async () => {
+    const storage = createIndexedDbStorage({ name: dbName });
+    await storage.transaction((tx) =>
+      tx.collection<SessionRow>(COLLECTIONS.sessions).putMany([
+        { id: 's1', title: 'one', createdAt: 10 },
+        { id: 's2', title: 'two', createdAt: 20 },
+      ]),
+    );
+
+    await storage.transaction(async (tx) => {
+      const sessions = tx.collection<SessionRow>(COLLECTIONS.sessions);
+      // `compare` answers 0 ("equal") for anything that is not a number or a string,
+      // so before this refusal a `Date` bound MATCHED EVERY ROW: the query answered
+      // the whole table instead of complaining. Same silent wrong answer ADR-023
+      // outlawed, one field over — and this is why the type is `number | string`
+      // now, with a runtime refusal behind it for casts and plain JS callers.
+      // @ts-expect-error a Date is not a comparable bound (ADR-024)
+      const dateBound: Query<SessionRow> = { field: 'createdAt', from: new Date(0) };
+      await expect(sessions.list(dateBound)).rejects.toBeInstanceOf(StorageQueryError);
+      await expect(sessions.list(dateBound)).rejects.toThrow(RANGE_BOUND_NOT_COMPARABLE_MESSAGE);
+      // `count` shares the select path, so it refuses too.
+      // @ts-expect-error a Date is not a comparable bound (ADR-024)
+      const dateCeiling: Query<SessionRow> = { field: 'createdAt', to: new Date() };
+      await expect(sessions.count(dateCeiling)).rejects.toBeInstanceOf(StorageQueryError);
+
+      // Scalars keep working, unchanged.
+      expect(
+        (await sessions.list({ field: 'createdAt', from: 1, to: 15 })).map((row) => row.id),
+      ).toEqual(['s1']);
+    });
   });
 
   it('refuses a range query that does not name its `field` instead of guessing (ADR-023)', async () => {

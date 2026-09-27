@@ -197,10 +197,16 @@ export interface Query<TRow> {
    * (ADR-023).
    */
   field?: keyof TRow & string;
-  /** Inclusive lower bound on `field` (range scans). */
-  from?: unknown;
-  /** Inclusive upper bound on `field`. */
-  to?: unknown;
+  /**
+   * Inclusive lower bound on `field` (range scans). Scalar on purpose (ADR-024):
+   * a `Date` or any other object used to compare as "equal" and match every row,
+   * and the runtime refuses one with `RANGE_BOUND_NOT_COMPARABLE_MESSAGE` even
+   * though the type already forbids it — a cast or a plain JS caller can still
+   * produce one.
+   */
+  from?: number | string;
+  /** Inclusive upper bound on `field` — see `from`. */
+  to?: number | string;
   /** Descending when `'desc'`. Default ascending. */
   order?: 'asc' | 'desc';
   limit?: number;
@@ -233,6 +239,19 @@ export class StorageQueryError<TRow = unknown> extends Error {
  */
 export const RANGE_FIELD_REQUIRED_MESSAGE =
   'a range query must name `field`: bounds without it are ambiguous (ADR-023)';
+
+/**
+ * The refusal sentence for a range bound that cannot be compared, exported for the
+ * same reason as the one above: one string, three packages (ADR-024).
+ *
+ * A bound that is not a `number` or a `string` used to compare as "equal" — so a
+ * `Date` bound matched EVERY row and the query quietly answered the whole table,
+ * which is the same class of silent wrong answer ADR-023 outlawed. `docs/02` §7
+ * already fixes the unit ("timestamps are milliseconds"), so a `Date` here is a
+ * caller error, not a missing feature.
+ */
+export const RANGE_BOUND_NOT_COMPARABLE_MESSAGE =
+  'range bounds must be a number or a string: anything else compares as equal and would match every row (ADR-024)';
 
 /** Write shape: `id` may be omitted only when the store mints it (`put`). */
 export type RowPatch<T> = Partial<T>;

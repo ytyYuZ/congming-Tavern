@@ -22,6 +22,7 @@ import {
   type Collection,
   type CollectionName,
   type Query,
+  RANGE_BOUND_NOT_COMPARABLE_MESSAGE,
   RANGE_FIELD_REQUIRED_MESSAGE,
   type RowBase,
   type StorageAdapter,
@@ -130,6 +131,15 @@ class MockCollection<T extends RowBase> implements Collection<T> {
     }
 
     if (query?.from !== undefined || query?.to !== undefined) {
+      // A bound that cannot be compared is refused, not guessed: `compareValues`
+      // answers `0` ("equal") for anything that is not a number or a string, so a
+      // `Date` bound would match EVERY row and the query would quietly return the
+      // whole table (ADR-024).
+      for (const bound of [query.from, query.to]) {
+        if (bound !== undefined && typeof bound !== 'number' && typeof bound !== 'string') {
+          throw new StorageQueryError(RANGE_BOUND_NOT_COMPARABLE_MESSAGE, query);
+        }
+      }
       // A range needs its field named. The old behaviour guessed — the first
       // `where` key, else `id` — which silently range-scanned the wrong column and
       // could answer an empty array for a reasonable-looking query. ADR-023 turns
