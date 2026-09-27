@@ -399,17 +399,32 @@ describe('db/repository — checkpoints (M1-M1, M1-T4)', () => {
     expect(listed.map((row) => row.id)).toEqual([stored.id]);
   });
 
-  it('refuses a save point before the first message (CheckpointSchema.messageId is non-empty)', async () => {
+  it('round-trips a save point taken before the first message (messageId: null)', async () => {
     const session = await createSession({ title: 'test-session' });
-    // The frozen schema has `messageId: IdSchema` — a NON-EMPTY string — and the schema
-    // test pins every field as required, so "saved before the first message" has no
-    // spelling. The repository answers `undefined` rather than writing a row the schema
-    // would refuse; `play.checkpointNeedsMessage` is what the screen says instead.
-    expect(await createCheckpoint({ sessionId: session.id, label: '开场前' })).toBeUndefined();
-    expect(await listCheckpoints(session.id)).toEqual([]);
-    expect(await readTable(COLLECTIONS.checkpoints).count()).toBe(0);
+    // A session starts with no messages and `Session.headMessageId` is already `null`
+    // (ADR-032). `CheckpointSchema.messageId` mirrors it, so minute zero HAS a spelling —
+    // this is the act the panel used to refuse, and the state at that moment (clock, scene,
+    // vars) is exactly what a save point is for.
+    const stored = await savePoint(session.id, '开场前');
+    expect(stored.messageId).toBeNull();
+    expect(stored.state.clock).toBe(0);
 
-    // Once a message exists, the same call succeeds and names that message.
+    // Read back through the schema-parsing reader: `null` survives the round trip, and it
+    // is not an absent field (`CheckpointSchema` still requires `messageId`).
+    const readBack = await getCheckpoint(stored.id);
+    expect(readBack?.messageId).toBeNull();
+
+    // Restoring answers the nullable head verbatim and puts the session back at "no
+    // transcript" — not at a message id the checkpoint never named.
+    expect(await restoreCheckpoint(stored.id)).toEqual({
+      sessionId: session.id,
+      headMessageId: null,
+    });
+    expect((await getSession(session.id))?.headMessageId).toBeNull();
+    expect(await getChain(session.id)).toEqual([]);
+
+    // One message later the same call still names that message: a nullable field is not a
+    // field that stopped being written.
     const first = await appendMessage({
       sessionId: session.id,
       parentId: null,
@@ -417,9 +432,9 @@ describe('db/repository — checkpoints (M1-M1, M1-T4)', () => {
       content: '第一句',
     });
     await setHeadMessageId(session.id, first.id);
-    const stored = await savePoint(session.id, '开场前');
-    expect(stored.messageId).toBe(first.id);
-    expect(await restoreCheckpoint(stored.id)).toEqual({
+    const later = await savePoint(session.id, '第一句之后');
+    expect(later.messageId).toBe(first.id);
+    expect(await restoreCheckpoint(later.id)).toEqual({
       sessionId: session.id,
       headMessageId: first.id,
     });

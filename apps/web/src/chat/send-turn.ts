@@ -38,8 +38,27 @@
  * never a credential. A failure is reported as `code` + `message` + `retryable`
  * (the port's vocabulary), so the UI reads a stable code instead of parsing a
  * vendor sentence.
+ *
+ * WHY THE COMPOSER'S VARIABLE LOG IS APPLIED HERE AND NOT INSIDE THE COMPOSER (M1-S6,
+ * ADR-031)
+ * `{{setvar}}` and `{{addvar}}` are the one part of a prompt that changes the world, and
+ * `compose` is a PURE function: it cannot write anything, so it RETURNS the changes it
+ * performed (`ComposeSuccess.variableChanges`) instead of mutating a state it does not
+ * own. This module is the layer that owns persistence, so the log crosses that boundary
+ * here: `chat/vars.ts`'s `applyVariableChanges` computes `old state + change -> new state`
+ * and the row is written with one `writeSessionState`. That split is exactly what ADR-031
+ * buys — the writer never mutates in place, so a state already snapshotted into a
+ * checkpoint cannot move under it, and the AI channel (`update_state`, deferred to M2+)
+ * can later produce the same value and have it declined. Two consequences are recorded
+ * rather than hidden: the log is applied ONCE PER COMPOSITION (the moment the user's
+ * message enters the transcript), not once per answer, so a `setvar` in the user's own
+ * text applies even when the provider then refuses the turn — the directive is a local
+ * effect of the text, like the persisted user message; and a manual retry of that text
+ * applies it again, which is idempotent for `setvar` (assign) and would double-count an
+ * `addvar`. Making that idempotent needs an identity a macro text does not carry, and
+ * that belongs to the deferred proposal flow, not here.
  */
-import type { ChatMessage, PromptBudget, StreamEvent } from '@smarttavern/core';
+import type { ChatMessage, PromptBudget, StreamEvent, VariableChange } from '@smarttavern/core';
 import { type FetchLike, LLM_ERROR_CODES, OpenAICompatibleProvider } from '@smarttavern/providers';
 import type { Id, Message, PromptPreset, Session } from '@smarttavern/schema';
 import {
@@ -48,10 +67,12 @@ import {
   getSession,
   recordSessionModel,
   setHeadMessageId,
+  writeSessionState,
 } from '../db/repository';
 import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
 import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
 import { clockOf, composeTurn, promptContext, promptSlots } from './clock';
+import { applyVariableChanges } from './vars';
 
 /** Everything one turn needs, injected — this module reaches for no singleton. */
 export interface SendTurnDeps {
@@ -137,10 +158,21 @@ function turnRequest(model: string, messages: readonly ChatMessage[]) {
  * The outcome of composing one turn's request — either the messages to send or the
  * user-facing refusal. A named union rather than an inline object so `sendTurn`'s
  * early return is checked by the compiler.
+ *
+ * `changes` is on BOTH branches on purpose: the composer records a `{{setvar}}` whichever
+ * way the assembly ends, and `sendTurn` applies the log on every path (see the header).
  */
 type Composed =
-  | { readonly ok: true; readonly messages: readonly ChatMessage[] }
-  | { readonly ok: false; readonly error: SendTurnError };
+  | {
+      readonly ok: true;
+      readonly messages: readonly ChatMessage[];
+      readonly changes: readonly VariableChange[];
+    }
+  | {
+      readonly ok: false;
+      readonly error: SendTurnError;
+      readonly changes: readonly VariableChange[];
+    };
 
 /**
  * Build this turn's request through the prompt engine.
@@ -162,8 +194,8 @@ function composeRequest(
     deps.budget ?? BUILTIN_BUDGET,
     promptSlots(session),
   );
-  if (result.ok) return { ok: true, messages: result.messages };
-  return { ok: false, error: budgetFailure(result.error) };
+  if (result.ok) return { ok: true, messages: result.messages, changes: result.variableChanges };
+  return { ok: false, error: budgetFailure(result.error), changes: result.variableChanges };
 }
 
 /**
@@ -218,6 +250,13 @@ export async function sendTurn(
     provider: PROVIDER_ID,
     model: deps.config.model,
   });
+
+  // THE COMPOSER'S VARIABLE LOG, APPLIED ONCE (M1-S6, ADR-031; see the header)
+  // `applyVariableChanges` is pure and answers the SAME state object for an empty log, so
+  // a turn that wrote no variable does not touch the session row a second time — and the
+  // built-in preset contains no write directive at all, which is the common case.
+  const nextState = applyVariableChanges(session.state, composed.changes);
+  if (nextState !== session.state) await writeSessionState(session.id, nextState);
 
   if (!composed.ok) {
     // Nothing was sent, so there is no draft and no assistant row. The user's own

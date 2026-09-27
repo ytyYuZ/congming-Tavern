@@ -424,7 +424,8 @@ body {
 
 /* What the last press did. Not `role="status"`: see the world clock's note. */
 .time-status,
-.checkpoint-status {
+.checkpoint-status,
+.variable-status {
   margin: 0.5rem 0 0;
   font-size: 0.9rem;
   color: var(--muted);
@@ -487,4 +488,68 @@ body {
 
 .checkpoint-label {
   font-weight: 600;
+}
+
+/*
+ * The status bar (M1-S6). Same shape as the save-point panel above — a rule rather than a
+ * wrapper element — and the same `flex-wrap` reasoning: a variable's name and value are
+ * user text of unbounded length, so a row that could not wrap would push the delete button
+ * out of reach.
+ */
+.variables {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.variable-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.6rem 0;
+}
+
+.variable-add input,
+.variable-edit input,
+.variable-edit select {
+  font: inherit;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.variable-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.variable-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.variable-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.variable-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }

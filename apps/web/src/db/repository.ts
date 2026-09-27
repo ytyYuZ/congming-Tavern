@@ -785,18 +785,15 @@ function snapshotOf(
  * unknown — the same silent no-op `writeSessionState` and `setHeadMessageId` perform,
  * and the honest answer for "there is nothing to snapshot".
  *
- * WHY AN EMPTY TRANSCRIPT ALSO ANSWERS `undefined` (a missing field, reported)
- * `CheckpointSchema.messageId` is `IdSchema` (`z.string().min(1)`), NOT nullable, and
- * `packages/schema/src/entities/checkpoint.test.ts` pins that every field of the row is
- * required. So the schema as frozen CANNOT express "saved before the first message": there
- * is no message id to put in the field, and `''` is refused by `IdSchema` (measured — the
- * first version of this function stored `''` and threw). The two ways out are a schema
- * change (`messageId: IdSchema.nullable()`, matching `Session.headMessageId`, which is the
- * shape the frozen test would also have to change) or a workaround here. This module takes
- * the SECOND and reports the first, because a schema edit is the orchestrator's to land:
- * until then a save point is "a position in a transcript" and there is no transcript yet.
- * The play screen says so (`play.checkpointNeedsMessage`) rather than offering a button
- * that cannot work.
+ * A SAVE POINT BEFORE THE FIRST MESSAGE IS A SAVE POINT (the nullable `messageId`)
+ * `CheckpointSchema.messageId` is `IdSchema.nullable()`, mirroring `Session.headMessageId`
+ * (ADR-032): a session begins with no messages, and "let me put a save point at minute
+ * zero" is an ordinary act — the state (clock, scene, vars) is already worth snapshotting
+ * even when the transcript is empty. So the snapshot's null head is stored as `null`
+ * rather than refused, and restoring it moves the head back to `null` (an empty chain),
+ * which is the position the checkpoint names. It was a non-empty `Id` for one milestone
+ * and could not express that act at all; `''` was never an alternative — `IdSchema`
+ * refuses it, and a reader would then have two spellings of "no message".
  */
 export async function createCheckpoint(input: {
   sessionId: Id;
@@ -806,7 +803,7 @@ export async function createCheckpoint(input: {
   return write(async (tx) => {
     const row = await sessionsOf(tx).get(input.sessionId);
     const snapshot = snapshotOf(row === undefined ? undefined : { ...row });
-    if (snapshot === undefined || snapshot.headMessageId === null) return undefined;
+    if (snapshot === undefined) return undefined;
     const stored: CheckpointRow = {
       id: mintUuidV7(),
       sessionId: input.sessionId,
@@ -897,9 +894,10 @@ export async function deleteCheckpoint(checkpointId: Id): Promise<void> {
  * other writer does it, and the checkpoint is parsed on the way out so a malformed row
  * is refused instead of half-applied.
  *
- * The message position is a plain `Id` now that `createCheckpoint` refuses an empty
- * transcript, so nothing here has to map `''` back to `null`; `headMessageId` is still the
- * nullable field on the session side, because "no messages" is a legal SESSION state.
+ * The message position is `Id | null` on BOTH sides now (`CheckpointSchema.messageId` and
+ * `Session.headMessageId`), so nothing here maps an empty string back to `null` and
+ * nothing refuses a save point taken before the first message: a rollback to "no
+ * messages" is the empty chain the head already expresses.
  */
 export async function restoreCheckpoint(
   checkpointId: Id,

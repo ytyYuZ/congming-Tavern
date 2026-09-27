@@ -252,8 +252,15 @@ export function toWireMessages(chain: readonly Message[]): ChatMessage[] {
  * 决定 1). A macro that cannot be resolved must stay unresolved (a deliberate rule
  * in `engine/prompt/macros.ts`), and leaving `{{char}}` raw in a system prompt is
  * worse than the id, so the id is supplied as the name until M1-W1 resolves it.
- * `variables` is empty because M1-S6 owns session variables: `{{getvar::x}}` then
- * stays unresolved and appears in `unresolvedMacros` instead of substituting ''.
+ *
+ * `variables` IS `session.state.vars` (M1-S6, ADR-031): the session's live variable
+ * table is what a `{{getvar::hp}}` reads, and it is passed in here rather than looked
+ * up again so the value the prompt substitutes is the value the status bar shows. An
+ * undefined variable still stays VERBATIM in the text and is reported through
+ * `unresolvedMacros` — never silently empty. The composer also records every
+ * `{{setvar}}` / `{{addvar}}` it performs into `variableChanges`, which is a LOG and
+ * not a write: `compose` is pure, and `chat/send-turn.ts` (the layer that owns
+ * persistence) applies it to the state afterwards.
  */
 export function promptContext(
   session: Session,
@@ -270,7 +277,7 @@ export function promptContext(
     history,
     input: { role: 'user', content: input },
     clock,
-    variables: {},
+    variables: session.state.vars,
   };
 }
 

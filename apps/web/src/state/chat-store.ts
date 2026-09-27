@@ -37,13 +37,26 @@
  * thrown error here would otherwise reject a fire-and-forget click handler and
  * leave `status` stuck on `'streaming'` — a composer with a permanently disabled
  * send button. So the failure is surfaced as `status: 'error'`.
+ *
+ * WHY THE SESSION ROW IS RE-READ AFTER A TURN (M1-S6)
+ * A turn can write VARIABLES: the composer records every `{{setvar}}` / `{{addvar}}` it
+ * performs and `chat/send-turn.ts` applies the log (ADR-031). This store's `session` was
+ * read at the START of the turn, so it predates that write — and the status bar renders
+ * `session.state.vars`, which would then show the value from before the turn. The row is
+ * the only copy that cannot be stale (the `advance` failure path resyncs for the same
+ * reason), and the same read refreshes the `headMessageId` the turn just moved.
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
-import type { Checkpoint, Id, Message, Session } from '@smarttavern/schema';
+import type { Checkpoint, Id, Message, Session, SessionState } from '@smarttavern/schema';
 import { create } from 'zustand';
 import { advanceState } from '../chat/clock';
 import { sendTurn } from '../chat/send-turn';
+import {
+  deleteVariable as deleteVariableIn,
+  setVariable as setVariableIn,
+  type VariableValue,
+} from '../chat/vars';
 import { subscribe } from '../db/database';
 import {
   createCheckpoint as createCheckpointRow,
@@ -122,6 +135,14 @@ export interface ChatState {
    * whole number of minutes.
    */
   advance: (delta: number) => Promise<number | undefined>;
+  /**
+   * Assign one free variable of the open session and persist it (M1-S6, ADR-031).
+   * Resolves to `true` only when the row was written; a name no macro can address is
+   * refused by the pure transition (`chat/vars.ts`) and answers `false`.
+   */
+  setVariable: (name: string, value: VariableValue) => Promise<boolean>;
+  /** Remove one free variable of the open session and persist it (M1-S6). */
+  deleteVariable: (name: string) => Promise<boolean>;
   /** Save the current instant under `label` (M1-M1). Resolves to the stored row. */
   saveCheckpoint: (label: string) => Promise<Checkpoint | undefined>;
   /** Roll the session back to a save point (M1-M1 / M1-T4). */
@@ -334,6 +355,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
         { sessionId: session.id, text: trimmed, signal: controller.signal },
       );
+      // See the header: the composer may have written variables, and this store's copy of
+      // the session predates that write. Read BEFORE the `set` below so the status bar and
+      // the turn's own status land in one render.
+      const stored = await getSession(session.id);
+      if (stored !== undefined) set({ session: stored });
       set({
         draft: { ...IDLE_DRAFT },
         status: result.error === undefined ? 'idle' : 'error',
@@ -417,6 +443,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   /**
+   * Write one variable through the pure transition and persist it (M1-S6, ADR-031).
+   *
+   * WHY THE WRITE IS AWAITED BEFORE THE STATE MOVES — THE OPPOSITE OF `advance`
+   * An advance is a request whose result the user watches, so the screen leads and the row
+   * follows. A variable edit is a form submission, and the save point the user may take
+   * next reads the ROW inside its own transaction (`createCheckpoint`): if the store
+   * claimed a value the row did not hold yet, a checkpoint taken immediately afterwards
+   * would snapshot the old variables, and the milestone's acceptance sentence ("variables
+   * are saved and restored with the save point") would fail on a race rather than on a
+   * design. So the row is written first and the in-memory session is derived from the very
+   * value that was written — never re-read, which is also what removes the race with the
+   * live query.
+   *
+   * WHAT A REFUSAL IS: `chat/vars.ts` answers `undefined` for a name no macro can address
+   * (blank after trimming) or for a delete of something that is not there. That is a
+   * `false` here and nothing is written — the view says so instead of reporting a save
+   * that did not happen. A STORAGE failure is reported through the banner with the error's
+   * NAME only (`writeErrorName`'s rule) after the state is resynced from the row.
+   */
+  async setVariable(name: string, value: VariableValue): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    const next = setVariableIn(session.state, name, value);
+    if (next === undefined) return false;
+    return commitState(set, session, next, 'unknown variable write failure');
+  },
+
+  async deleteVariable(name: string): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    const next = deleteVariableIn(session.state, name);
+    if (next === undefined) return false;
+    return commitState(set, session, next, 'unknown variable write failure');
+  },
+
+  /**
    * Save the current instant under `label` (M1-M1).
    *
    * THE SNAPSHOT IS TAKEN BY THE REPOSITORY, not from `get().session`: `createCheckpoint`
@@ -488,6 +550,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 }));
+
+/**
+ * Persist one pure session-state transition and mirror it in the store (M1-S6).
+ *
+ * Shared by the two variable actions because they differ only in the transition they
+ * computed: both write the row BEFORE the store claims the new value (see `setVariable`
+ * for why that order matters here) and both recover from a storage failure the same way.
+ * Returns `true` only when the row was written, so a caller can tell a save from a
+ * refusal without inspecting state.
+ *
+ * `set` is typed as the narrow slice this helper uses rather than as Zustand's whole
+ * setter: the store's `setState` accepts `Partial<ChatState>`, so it is assignable, and
+ * this signature documents that the helper only ever merges fields.
+ */
+async function commitState(
+  set: (partial: Partial<ChatState>) => void,
+  session: Session,
+  next: SessionState,
+  whenUnknown: string,
+): Promise<boolean> {
+  try {
+    await writeSessionState(session.id, next);
+    set({ session: { ...session, state: next }, error: undefined });
+    return true;
+  } catch (cause) {
+    set({ error: localFailure(cause, whenUnknown) });
+    // The in-memory value is not on disk, so the two disagree; the row is the copy that
+    // cannot be stale (`advance`'s failure path resyncs for the same reason). No rollback
+    // to the value this action read: another write may have landed while this one failed.
+    const stored = await getSession(session.id);
+    if (stored !== undefined) set({ session: stored });
+    return false;
+  }
+}
 
 /**
  * A storage failure as a `ChatError`.

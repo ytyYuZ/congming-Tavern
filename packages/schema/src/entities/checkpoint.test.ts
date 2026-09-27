@@ -121,6 +121,8 @@ describe('checkpoint', () => {
       'id',
       'sessionId',
       'label',
+      // Required AND nullable: deleting it is still a parse failure (this driver), while
+      // `messageId: null` is a value — see the minute-zero case below.
       'messageId',
       'auto',
       'state',
@@ -130,6 +132,20 @@ describe('checkpoint', () => {
       'createdAt',
     ]);
     expect(CheckpointSchema.safeParse({ ...fullCheckpoint, label: '' }).success).toBe(false);
+  });
+
+  it('accepts a null messageId — the save point taken before the first message', () => {
+    // A session starts with no messages (`Session.headMessageId` is `IdSchema.nullable()`
+    // for the same reason), so a checkpoint has to be able to say "at the start of an
+    // empty transcript". `null` is that one spelling.
+    expect(CheckpointSchema.safeParse({ ...fullCheckpoint, messageId: null }).success).toBe(true);
+    expect(CheckpointSchema.parse({ ...fullCheckpoint, messageId: null }).messageId).toBeNull();
+    // `''` is NOT a second spelling: `IdSchema` refuses it, so a reader never has to treat
+    // an empty id as a third case.
+    expect(CheckpointSchema.safeParse({ ...fullCheckpoint, messageId: '' }).success).toBe(false);
+    // And `null` survives the JSON round trip a stored row performs.
+    const once = JSON.stringify(CheckpointSchema.parse({ ...fullCheckpoint, messageId: null }));
+    expect(JSON.stringify(CheckpointSchema.parse(JSON.parse(once)))).toBe(once);
   });
 
   it('carries the full clock snapshot, so loading a save never replays messages', () => {

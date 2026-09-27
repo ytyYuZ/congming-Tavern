@@ -16,6 +16,7 @@
 import 'fake-indexeddb/auto';
 import { renderParts } from '@smarttavern/core';
 import { createTranslator } from '@smarttavern/i18n';
+import type { PromptPreset } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, resetDatabase } from '../db/database';
 import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
@@ -28,6 +29,7 @@ import {
   readProviderSettings,
   setHeadMessageId,
   writeProviderSettings,
+  writeSessionState,
 } from '../db/repository';
 import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
 import { errorSentence } from '../state/chat-store';
@@ -592,6 +594,108 @@ describe('the engines are wired in', () => {
 
     expect(worldClockText(reading, createTranslator('zh-CN').t)).toBe(`当前 ${date}（晨）`);
     expect(worldClockText(reading, createTranslator('en').t)).toBe(`Now ${date} (晨)`);
+  });
+});
+
+/* ─────────────────── M1-S6: the session variables, end to end ─────────────────── */
+
+/**
+ * WHY THE PRESET IS OVERRIDDEN HERE
+ * The built-in content contains no `{{getvar}}` and no write directive (it is the app's
+ * shipped default, `chat/builtin-content.ts`), so the only way to drive the variable path
+ * through a REAL turn is the documented `preset` seam. These tests are therefore about the
+ * app's wiring — `promptContext` passing `session.state.vars` and `sendTurn` persisting the
+ * composer's change log — not about the macro engine, which has its own tests in
+ * `packages/core`.
+ */
+describe('M1-S6: variables through a turn', () => {
+  /** A one-block preset, so the assembled prompt is exactly the content under test. */
+  function presetWith(content: string): PromptPreset {
+    return {
+      id: 'test-vars-preset',
+      name: 'test',
+      version: 1,
+      blocks: [
+        {
+          id: 'test-vars-block',
+          name: 'test',
+          role: 'system',
+          content,
+          enabled: true,
+          position: 'pre_history',
+          order: 0,
+          budget: { priority: 'required' },
+        },
+      ],
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+
+  /** Every `system` message of the last request, joined — what the model was told. */
+  function systemOf(wire: FakeWire): string {
+    return (wire.lastBody()?.messages ?? [])
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+  }
+
+  it('reads the session variables a getvar asks for, and leaves an undefined one verbatim', async () => {
+    const session = await createSession({ title: 'vars-session' });
+    await writeSessionState(session.id, {
+      ...session.state,
+      vars: { hp: 12, weather: 'snow' },
+    });
+
+    const wire = fakeWire(() => sseResponse(['好']));
+    await sendTurn(
+      {
+        config: CONFIG,
+        transport: wire.fetch,
+        preset: presetWith('hp={{getvar::hp}} weather={{getvar::weather}} x={{getvar::missing}}'),
+      },
+      { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
+    );
+
+    // The VALUE the session row holds is in the request. This is the assertion that makes
+    // `promptContext`'s `variables: session.state.vars` real: an empty object would leave
+    // the token unresolved instead.
+    const system = systemOf(wire);
+    expect(system).toContain('hp=12');
+    expect(system).toContain('weather=snow');
+    // An undefined variable stays VERBATIM (ADR-031): silently substituting '' would delete a
+    // sentence fragment and nobody would notice.
+    expect(system).toContain('x={{getvar::missing}}');
+  });
+
+  it('persists the composer’s setvar log, and the next turn reads the written value', async () => {
+    const session = await createSession({ title: 'setvar-session' });
+
+    const first = fakeWire(() => sseResponse(['好']));
+    await sendTurn(
+      {
+        config: CONFIG,
+        transport: first.fetch,
+        preset: presetWith('{{setvar::hp::7}}'),
+      },
+      { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
+    );
+
+    // The directive is not text: the block expands to an empty string...
+    expect(systemOf(first)).toBe('');
+    // ...and the change the composer RECORDED is a persisted row. It is the STRING "7"
+    // because a macro substitutes into text; the typed NUMBER is the status bar's to write.
+    expect((await getSession(session.id))?.state.vars).toEqual({ hp: '7' });
+
+    // The next turn reads what the previous one wrote — the loop ADR-031's contract implies.
+    const second = fakeWire(() => sseResponse(['好']));
+    await sendTurn(
+      { config: CONFIG, transport: second.fetch, preset: presetWith('hp={{getvar::hp}}') },
+      { sessionId: session.id, text: '第二句', signal: new AbortController().signal },
+    );
+    expect(systemOf(second)).toContain('hp=7');
+    // No second change was recorded, so the row still holds exactly the one variable.
+    expect((await getSession(session.id))?.state.vars).toEqual({ hp: '7' });
   });
 });
 

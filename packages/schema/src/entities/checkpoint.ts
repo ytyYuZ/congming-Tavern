@@ -46,8 +46,20 @@ export const CheckpointSchema = z.object({
   id: IdSchema,
   sessionId: IdSchema,
   label: z.string().min(1),
-  /** The message this save point sits at; the read path starts here. */
-  messageId: IdSchema,
+  /**
+   * The message this save point sits at; the read path starts here.
+   *
+   * NULLABLE, AND IT MIRRORS `Session.headMessageId` (ADR-032). A session starts with
+   * no messages — that field is `IdSchema.nullable()` for exactly that reason — so
+   * "save a point before the first message" is a legal act and `null` is its ONE
+   * spelling. It was a non-empty `Id` until this field's first real consumer measured
+   * it: there is no message id to name at minute zero and `''` is refused by
+   * `IdSchema`, so the act had no representation rather than being forbidden by design.
+   *
+   * REQUIRED all the same (`nullable()` is not `optional()`): a checkpoint always says
+   * WHERE it is, and "no message" is a position, not an absent field.
+   */
+  messageId: IdSchema.nullable(),
   /** True when the engine wrote it (before/after a time advance), not the user. */
   auto: z.boolean(),
   /** The whole mutable world: clock, inner clock, vars, sheets, deadlines. */

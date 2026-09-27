@@ -236,16 +236,6 @@ export const zhCN = {
     '存档会记下当前的消息位置、时钟、变量与卡司状态。读档会把会话整体回滚到那一刻：不会删除任何消息，也不会改变世界、角色与预设的绑定。',
   'play.checkpointLabelPlaceholder': '存档名称，例如：进城前',
   'play.checkpointSave': '保存存档点',
-  /**
-   * Shown INSTEAD of saving when the transcript is still empty.
-   *
-   * `CheckpointSchema.messageId` is `IdSchema` — a non-empty string — and the schema test
-   * pins every field as required, so a save point cannot be written before the first
-   * message exists (the repository reports this as a missing nullable field; the workaround
-   * is `db/repository.ts`'s `createCheckpoint`). The screen says so rather than offering a
-   * button that would do nothing.
-   */
-  'play.checkpointNeedsMessage': '先发出一句话，才有可保存的消息位置',
   'play.checkpointEmpty': '还没有存档点。',
   'play.checkpointSaved': '已保存存档点',
   'play.checkpointRestored': '已读档回滚到该存档点',
@@ -256,6 +246,40 @@ export const zhCN = {
   'play.checkpointDelete': '删除',
   /** The second step of a delete, shown only after 「删除」 was pressed. */
   'play.checkpointDeleteConfirm': '确认删除',
+  /*
+   * THE STATUS BAR (M1-S6, ADR-031) — the open session's free variables.
+   *
+   * WHY THE HINT NAMES THE MACROS: this panel is the HUMAN half of the variable system, and
+   * the same table is what `{{getvar}}` reads and `{{setvar}}` / `{{addvar}}` write
+   * (ADR-031). A user who can read the macro names can connect the two without a manual.
+   *
+   * WHY THE DOUBLE BRACES SURVIVE `t(...)`: `translate.ts` fills `{name}` from the
+   * params it is given, and this sentence is rendered with NO params, so the macro names
+   * are documented verbatim. They are the macro language being named, not placeholders.
+   *
+   * A save point taken before the first message needs no sentence any more: `messageId` is
+   * nullable (a checkpoint mirrors `Session.headMessageId`), so the act is simply allowed.
+   */
+  'play.variablesTitle': '状态栏',
+  'play.variablesHint':
+    '会话级自由变量：{{getvar}} 读取它，{{setvar}} 赋值、{{addvar}} 做增量；布尔值写 true 或 false。',
+  'play.variablesEmpty': '还没有变量。',
+  'play.variableNameLabel': '变量名',
+  /** An EXAMPLE name, not copy — the value the user replaces. */
+  'play.variableNamePlaceholder': '变量名，例如 hp',
+  'play.variableKindLabel': '类型',
+  'play.variableKindString': '文本',
+  'play.variableKindNumber': '数值',
+  'play.variableKindBoolean': '布尔',
+  'play.variableValueLabel': '值',
+  /** An EXAMPLE value per kind — data the user replaces, not interface copy. */
+  'play.variableValuePlaceholder': '值，例如 10、暴雪 或 true',
+  'play.variableAdd': '添加变量',
+  'play.variableDelete': '删除',
+  'play.variableSaved': '已保存变量',
+  'play.variableAdded': '已添加变量',
+  /** Text the chosen kind cannot hold (a non-number for 数值, or a blank name). */
+  'play.variableInvalid': '请输入该类型的一个有效值',
 
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
@@ -428,7 +452,6 @@ export const en: Messages = {
     'A save point records the current message position, clock, variables and cast state. Loading one rolls the whole session back to that moment: it deletes no messages and changes no world, character or preset binding.',
   'play.checkpointLabelPlaceholder': 'Save-point name, e.g. before entering the town',
   'play.checkpointSave': 'Save a save point',
-  'play.checkpointNeedsMessage': 'Send a message first — a save point needs a message position',
   'play.checkpointEmpty': 'No save points yet.',
   'play.checkpointSaved': 'Save point stored',
   'play.checkpointRestored': 'Rolled back to that save point',
@@ -436,6 +459,23 @@ export const en: Messages = {
   'play.checkpointRestoreConfirm': 'Confirm rollback',
   'play.checkpointDelete': 'Delete',
   'play.checkpointDeleteConfirm': 'Confirm delete',
+  'play.variablesTitle': 'Status bar',
+  'play.variablesHint':
+    'Session-scoped free variables: {{getvar}} reads one, {{setvar}} assigns and {{addvar}} increments; a boolean is written true or false.',
+  'play.variablesEmpty': 'No variables yet.',
+  'play.variableNameLabel': 'Variable name',
+  'play.variableNamePlaceholder': 'Variable name, e.g. hp',
+  'play.variableKindLabel': 'Type',
+  'play.variableKindString': 'Text',
+  'play.variableKindNumber': 'Number',
+  'play.variableKindBoolean': 'Boolean',
+  'play.variableValueLabel': 'Value',
+  'play.variableValuePlaceholder': 'A value, e.g. 10, snow or true',
+  'play.variableAdd': 'Add variable',
+  'play.variableDelete': 'Delete',
+  'play.variableSaved': 'Variable saved',
+  'play.variableAdded': 'Variable added',
+  'play.variableInvalid': 'Enter a valid value for that type',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',

@@ -1033,7 +1033,11 @@ function rewriteCheckpoint(checkpoint: Checkpoint, maps: CheckpointMaps): Checkp
   return {
     ...checkpoint,
     sessionId: rewire(checkpoint.sessionId, maps.sessionRemap),
-    messageId: rewire(checkpoint.messageId, maps.messageRemap),
+    // `messageId` is NULLABLE (`CheckpointSchema` mirrors `Session.headMessageId`, ADR-032),
+    // and a save point taken before the first message holds `null` — there is no message id
+    // to remap, and `null` must stay `null` rather than become an empty or invented one.
+    messageId:
+      checkpoint.messageId === null ? null : rewire(checkpoint.messageId, maps.messageRemap),
     state: rewriteState(checkpoint.state, maps),
     agendaStatus: checkpoint.agendaStatus.map((entry) => ({
       ...entry,

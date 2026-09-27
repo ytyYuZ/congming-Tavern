@@ -22,6 +22,7 @@
  */
 /** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
+import type { SessionState } from '@smarttavern/schema';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -215,6 +216,43 @@ async function clickButton(host: HTMLElement, label: string): Promise<void> {
     button.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
+}
+
+/**
+ * Click one button inside a VARIABLE's row (its own 保存 / 删除).
+ *
+ * Scoped to the row because the status bar renders one save button per variable, so a
+ * whole-document search would have to guess which one belongs to the value under test.
+ */
+async function clickInRow(host: HTMLElement, variable: string, label: string): Promise<void> {
+  const row = host.querySelector(`[data-variable="${variable}"]`);
+  if (row === null) throw new Error(`no variable row ${variable}`);
+  const button = Array.from(row.querySelectorAll('button')).find(
+    (candidate) => candidate.textContent === label,
+  );
+  if (button === undefined) throw new Error(`no button labelled ${label} in row ${variable}`);
+  await act(async () => {
+    button.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
+/**
+ * One variable, read through a PARAMETERISED key.
+ *
+ * `noPropertyAccessFromIndexSignature` rejects `state.vars.hp` and Biome's `useLiteralKeys`
+ * rejects `state.vars['hp']`; a parameterised key is the spelling both accept, and it keeps
+ * every assertion below readable. The argument is a `SessionState`, a session row or a
+ * checkpoint row — every shape that carries the live state — because the assertions below
+ * make the same point about all three (`ADR-032`: one state value, in one place).
+ */
+function variableOf(
+  source: SessionState | { readonly state: SessionState } | undefined,
+  name: string,
+): string | number | boolean | undefined {
+  if (source === undefined) return undefined;
+  const state = 'state' in source ? source.state : source;
+  return state.vars[name];
 }
 
 /**
@@ -569,27 +607,23 @@ describe('M1-M1 / M1-T4: the save-point panel', () => {
     expect(await getChain(session.id)).toHaveLength(1);
   });
 
-  it('will not offer to save before there is a message position to save', async () => {
-    // `CheckpointSchema.messageId` is a NON-EMPTY `Id` (the schema test pins every field as
-    // required), so "saved before the first message" has no spelling in a checkpoint row.
-    // The panel therefore says so and disables the control instead of offering a button
-    // whose click would write nothing — a fresh session is the normal case, not an error
-    // path, so it gets a sentence rather than a failure.
+  it('saves before the first message: a checkpoint at minute zero round-trips', async () => {
+    // `CheckpointSchema.messageId` is `IdSchema.nullable()` and mirrors `Session.headMessageId`
+    // (ADR-032), so "save a point before the first message" is a position — `null` — instead of
+    // an act the schema cannot spell. A fresh session is the NORMAL case, not an error path.
     const session = await createSession({ title: 'test-session' });
-    const host = await mountAt(`/play/${session.id}`, '发送');
+    const host = await mountAt(`/play/${session.id}`, '保存存档点');
 
-    expect(host.textContent).toContain('先发出一句话');
-    const save = Array.from(host.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent === '保存存档点',
-    );
-    expect(save?.disabled).toBe(true);
-    expect((host.querySelector('#checkpoint-label') as HTMLInputElement | null)?.disabled).toBe(
-      true,
-    );
-    expect(await listCheckpoints(session.id)).toEqual([]);
+    await typeInto(host, '#checkpoint-label', '开场前');
+    await clickButton(host, '保存存档点');
+    await waitForText(host, '已保存存档点');
+    const saved = await listCheckpoints(session.id);
+    expect(saved.map((row) => row.label)).toEqual(['开场前']);
+    expect(saved[0]?.messageId).toBeNull();
+    expect(saved[0]?.state.clock).toBe(0);
 
-    // One message later the same control works: the gate is about the message position, not
-    // about a session that has to be recreated.
+    // Playing on and then restoring puts the session back at "no transcript" rather than at a
+    // message id the checkpoint never named.
     const first = await appendMessage({
       sessionId: session.id,
       parentId: null,
@@ -598,26 +632,18 @@ describe('M1-M1 / M1-T4: the save-point panel', () => {
     });
     await setHeadMessageId(session.id, first.id);
     await waitForState(() => useChatStore.getState().messageChain.length === 1);
-    expect(host.textContent).not.toContain('先发出一句话');
-    expect(
-      Array.from(host.querySelectorAll('button')).find(
-        (candidate) => candidate.textContent === '保存存档点',
-      )?.disabled,
-    ).toBe(false);
 
-    await typeInto(host, '#checkpoint-label', '现在可以了');
-    await clickButton(host, '保存存档点');
-    await waitForText(host, '已保存存档点');
-    // Exactly ONE row and ONE list entry: a double write would show up as a duplicate key in
-    // React's own warning, which a count taken after the fact could miss.
-    expect((await listCheckpoints(session.id)).length).toBe(1);
-    expect(useChatStore.getState().checkpoints.length).toBe(1);
+    await clickButton(host, '读档');
+    await clickButton(host, '确认回滚');
+    await waitForText(host, '已读档回滚到该存档点');
+    expect((await getSession(session.id))?.headMessageId).toBeNull();
+    expect(useChatStore.getState().messageChain).toEqual([]);
   });
 
   it('blocks a restore until it is confirmed, and deletes only on a second click', async () => {
     const session = await createSession({ title: 'test-session' });
-    // A save point needs a message position (the panel says so before the first message),
-    // so this test's session has one: the confirmations below are about save points.
+    // A message is stored first so the restore below has a position to move back to; the
+    // confirmations under test are about the two-step actions, not about a save point.
     const first = await appendMessage({
       sessionId: session.id,
       parentId: null,
@@ -664,6 +690,100 @@ describe('M1-M1 / M1-T4: the save-point panel', () => {
     expect(await useChatStore.getState().restoreCheckpoint(foreign?.id ?? '')).toBe(false);
     expect((await getSession(mine.id))?.headMessageId).toBeNull();
     expect((await getSession(theirs.id))?.headMessageId).toBeNull();
+  });
+});
+
+/* ────────────────────────── M1-S6: the status bar ────────────────────────── */
+
+/**
+ * THE MILESTONE'S ACCEPTANCE IS A TRANSITION, NOT A FIELD (docs/06 §2.5, ADR-031)
+ * "变量随存档保存与恢复" is proven by: change a variable, take a save point, change it again,
+ * restore, and find the checkpointed value back — IN THE SAME ACT that brings the clock back,
+ * because ADR-032 made both one `SessionState` value. Asserting the panel's inputs or the
+ * rows would pass for an implementation that saved nothing.
+ */
+describe('M1-S6: the status bar', () => {
+  it('edits a typed variable and rolls it back with the clock in one restore', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '状态栏');
+    expect(host.textContent).toContain('还没有变量。');
+
+    // ADD, through the typed editor: the kind select is what makes this the NUMBER 10 rather
+    // than the string "10", and the row is written to the session row (not just to React).
+    await typeInto(host, '#variable-name', 'hp');
+    await chooseIn(host, '#variable-kind', 'number');
+    await typeInto(host, '#variable-value', '10');
+    await clickButton(host, '添加变量');
+    await waitForState(() => variableOf(useChatStore.getState().session, 'hp') === 10);
+    expect(variableOf(await getSession(session.id), 'hp')).toBe(10);
+    expect(host.textContent).toContain('已添加变量');
+
+    // THE SAVE POINT, taken at that instant (the clock is still the session's origin, 0).
+    await typeInto(host, '#checkpoint-label', '打点之前');
+    await clickButton(host, '保存存档点');
+    await waitForText(host, '已保存存档点');
+    const saved = await listCheckpoints(session.id);
+    expect(variableOf(saved[0]?.state, 'hp')).toBe(10);
+    expect(saved[0]?.state.clock).toBe(0);
+
+    // PLAY ON: the clock moves a day and the SAME variable is edited to another value.
+    await clickButton(host, '+1 天');
+    const day = BUILTIN_HOURS_PER_DAY * BUILTIN_MINUTES_PER_HOUR;
+    await waitForState(() => useChatStore.getState().session?.state.clock === day);
+    await typeInto(host, '[data-variable="hp"] .variable-value', '3');
+    await clickInRow(host, 'hp', '保存');
+    await waitForState(() => variableOf(useChatStore.getState().session, 'hp') === 3);
+    expect(variableOf(await getSession(session.id), 'hp')).toBe(3);
+
+    // THE ACCEPTANCE, M1-S6 AND M1-T4 IN ONE ACT: restoring moves the variable AND the clock
+    // back to the checkpointed instant — they are one state value, so they cannot come apart.
+    await clickButton(host, '读档');
+    await clickButton(host, '确认回滚');
+    await waitForText(host, '已读档回滚到该存档点');
+
+    const rolled = await getSession(session.id);
+    expect(variableOf(rolled, 'hp')).toBe(10);
+    expect(rolled?.state.clock).toBe(0);
+    expect(rolled?.state).toEqual(saved[0]?.state);
+    expect(variableOf(useChatStore.getState().session, 'hp')).toBe(10);
+    // …and the SCREEN shows the checkpointed value, not the one that was rolled away: the
+    // row's draft is reseeded from the restored state.
+    expect(
+      (host.querySelector('[data-variable="hp"] .variable-value') as HTMLInputElement | null)
+        ?.value,
+    ).toBe('10');
+  });
+
+  it('adds a text variable, refuses text a kind cannot hold, and deletes one row', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '状态栏');
+
+    await typeInto(host, '#variable-name', 'weather');
+    await typeInto(host, '#variable-value', 'snow');
+    await clickButton(host, '添加变量');
+    await waitForState(() => variableOf(useChatStore.getState().session, 'weather') === 'snow');
+    expect(variableOf(await getSession(session.id), 'weather')).toBe('snow');
+
+    // A NUMBER that is not one is REFUSED with a sentence, and nothing is written: coercing it
+    // (`Number('')` is 0) would store a value nobody typed.
+    await typeInto(host, '#variable-name', 'danger');
+    await chooseIn(host, '#variable-kind', 'number');
+    await typeInto(host, '#variable-value', 'not-a-number');
+    await clickButton(host, '添加变量');
+    await waitForText(host, '请输入该类型的一个有效值');
+    expect(variableOf(await getSession(session.id), 'danger')).toBeUndefined();
+
+    // A blank name is refused too — no macro could address such a key.
+    await typeInto(host, '#variable-name', '   ');
+    await typeInto(host, '#variable-value', '1');
+    await clickButton(host, '添加变量');
+    expect((await getSession(session.id))?.state.vars).toEqual({ weather: 'snow' });
+
+    // DELETE is one click here (a variable is a row the user can retype, unlike a save point).
+    await clickInRow(host, 'weather', '删除');
+    await waitForState(() => variableOf(useChatStore.getState().session, 'weather') === undefined);
+    expect((await getSession(session.id))?.state.vars).toEqual({});
+    expect(host.textContent).toContain('还没有变量。');
   });
 });
 
