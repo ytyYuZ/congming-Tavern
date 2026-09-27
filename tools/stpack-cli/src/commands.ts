@@ -1,27 +1,48 @@
 /**
- * The three subcommands (`docs/06-开发任务拆解.md` §8.3).
+ * The four subcommands (`docs/06-开发任务拆解.md` §8.3, M1-M3 for `import`).
  *
  * This file is argument plumbing, exit codes and output only. Every decision
- * about what a `.stpack` may contain lives in `@smarttavern/packages`; a CLI that
- * re-decided any of it would be a second implementation of the format.
+ * about what a `.stpack` may contain lives in `@smarttavern/packages`, and every
+ * decision about what an IMPORT does (identity reuse vs remap, reference
+ * rewriting, the report) lives in `@smarttavern/importers`; a CLI that re-decided
+ * any of it would be a second implementation of the format.
+ *
+ * `import` is where the M1-M3 acceptance clause "导入报告可见" becomes visible while
+ * there is no UI for it: the report a person reads here is the same
+ * `ImportReport` object the app will render.
  *
  * EXIT CODES ARE PART OF THE CONTRACT (`§8.3`: "非法包的退出码与提示可预测"):
- *   0  the package is fine (for `unpack`: the files were written)
- *   1  the package is invalid — the findings say why
+ *   0  the package is fine (for `unpack`: the files were written; for `import`:
+ *      the rows were written, or a dry run showed they would be)
+ *   1  the package is invalid, or the import was refused — the findings say why
  *   2  usage error (unknown command, missing argument, bad flag)
- *   3  I/O error (unreadable input, unwritable target, refusing to overwrite)
+ *   3  I/O error (unreadable input, unwritable target/library, refusing to overwrite)
  */
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
-import { unpackPackage, validatePackage } from '@smarttavern/packages';
+import {
+  type ImportReport,
+  importPackage,
+  PAYLOAD_CATEGORIES,
+  type PayloadCategory,
+} from '@smarttavern/importers';
+import {
+  createPackageReader,
+  createPackageValidator,
+  unpackPackage,
+  validatePackage,
+} from '@smarttavern/packages';
 import {
   type CliIo,
   formatCounts,
   formatEntries,
   formatFindings,
+  formatImportReport,
+  formatLibrarySizes,
   summarizeManifest,
   toJson,
 } from './format';
+import { JsonLibraryStorage } from './library';
 
 export const EXIT = { ok: 0, invalid: 1, usage: 2, io: 3 } as const;
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
@@ -203,4 +224,113 @@ export async function runUnpack(
     for (const plannedFile of planned) io.out(`  ${plannedFile.path}`);
   }
   return EXIT.ok;
+}
+
+/* ───────────────────────────────── import ───────────────────────────────── */
+
+export interface ImportOptions extends CommonOptions {
+  /** Validate and report, but never write the library file. */
+  readonly dryRun: boolean;
+  /** Categories to import; everything else is reported as skipped. */
+  readonly only?: readonly string[];
+}
+
+/**
+ * Turn `--select a,b` into the importer's selection map.
+ *
+ * The importer's map is "false means skip", so an allow-list is expressed by
+ * setting every OTHER category to `false`: that keeps one meaning of the map
+ * (`undefined`/`true` = import) instead of two conventions to get wrong. An
+ * unknown name returns `undefined`, which the caller reports as a usage error.
+ */
+export function parseSelection(
+  only: readonly string[] | undefined,
+): Partial<Record<PayloadCategory, boolean>> | undefined {
+  if (only === undefined || only.length === 0) return {};
+  const wanted = new Set(only);
+  for (const name of wanted) {
+    if (!(PAYLOAD_CATEGORIES as readonly string[]).includes(name)) return undefined;
+  }
+  const selection: Partial<Record<PayloadCategory, boolean>> = {};
+  for (const category of PAYLOAD_CATEGORIES) selection[category] = wanted.has(category);
+  return selection;
+}
+
+/**
+ * Import a package into a JSON library, then print the report (`docs/04` §7 steps
+ * 7–9). The library is loaded, imported into memory and only written on success —
+ * so a refused package or a failed write leaves the file exactly as it was.
+ */
+export async function runImport(
+  file: string,
+  libraryPath: string,
+  options: ImportOptions,
+  io: CliIo,
+): Promise<number> {
+  const bytes = await readArchive(file, io);
+  if (bytes === undefined) return EXIT.io;
+
+  const selection = parseSelection(options.only);
+  if (selection === undefined) {
+    io.err(`stpack: --select must name payload categories: ${PAYLOAD_CATEGORIES.join(', ')}`);
+    return EXIT.usage;
+  }
+
+  let library: JsonLibraryStorage;
+  try {
+    library = await JsonLibraryStorage.load(libraryPath);
+  } catch (cause) {
+    io.err(`stpack: cannot read ${libraryPath}: ${messageOf(cause)}`);
+    return EXIT.io;
+  }
+
+  let report: ImportReport;
+  try {
+    report = await importPackage(bytes, {
+      // The wiring this package cannot do for itself: the real container lives in
+      // `@smarttavern/packages` and `@smarttavern/importers` may not import it.
+      reader: createPackageReader(),
+      validator: createPackageValidator(),
+      storage: library,
+      select: selection,
+    });
+  } catch (cause) {
+    // A storage failure is I/O, not a package finding; the transaction rolled back.
+    io.err(`stpack: import failed, ${libraryPath} was not modified: ${messageOf(cause)}`);
+    return EXIT.io;
+  }
+
+  if (report.ok && !options.dryRun) {
+    try {
+      await library.save(libraryPath);
+    } catch (cause) {
+      io.err(`stpack: cannot write ${libraryPath}: ${messageOf(cause)}`);
+      return EXIT.io;
+    }
+  }
+
+  if (options.json) {
+    io.out(
+      toJson({
+        file,
+        library: libraryPath,
+        dryRun: options.dryRun,
+        ok: report.ok,
+        package: report.package,
+        counts: report.counts,
+        entities: report.entities,
+        findings: report.findings,
+        librarySizes: library.sizes(),
+      }),
+    );
+    return report.ok ? EXIT.ok : EXIT.invalid;
+  }
+
+  for (const line of formatImportReport(report, file, libraryPath, options.dryRun)) io.out(line);
+  if (!options.dryRun && report.ok) {
+    io.out('');
+    io.out(`library contents (${libraryPath}):`);
+    for (const line of formatLibrarySizes(library.sizes())) io.out(line);
+  }
+  return report.ok ? EXIT.ok : EXIT.invalid;
 }

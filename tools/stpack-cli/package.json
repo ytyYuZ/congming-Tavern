@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "stpack command line tool: validate / inspect / unpack .stpack files.",
+  "description": "stpack command line tool: validate / inspect / unpack / import .stpack files.",
   "license": "AGPL-3.0-only",
   "exports": {
     ".": "./src/index.ts"
@@ -20,6 +20,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@smarttavern/core": "workspace:*",
+    "@smarttavern/importers": "workspace:*",
     "@smarttavern/packages": "workspace:*",
     "@smarttavern/schema": "workspace:*"
   }

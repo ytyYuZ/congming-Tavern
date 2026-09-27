@@ -11,6 +11,8 @@ import { parseArgs } from 'node:util';
 import {
   type CommonOptions,
   EXIT,
+  type ImportOptions,
+  runImport,
   runInspect,
   runUnpack,
   runValidate,
@@ -18,26 +20,44 @@ import {
 } from './commands';
 import { type CliIo, defaultCliIo } from './format';
 
-export const USAGE = `stpack — inspect, validate and unpack .stpack packages
+export const USAGE = `stpack — inspect, validate, unpack and import .stpack packages
 
 Usage:
   stpack validate <file>          check a package, exit 1 if it is not importable
   stpack inspect  <file>          print the manifest summary and the content list
   stpack unpack   <file> <dir>    extract a package into <dir> (manifest first)
+  stpack import   <file> <lib>    import into a JSON library and print the report
 
 Options:
-  --json     machine-readable output on stdout
-  --force    unpack: overwrite files that already exist
-  -h, --help show this message
+  --json          machine-readable output on stdout
+  --force         unpack: overwrite files that already exist
+  --dry-run       import: report what would happen, write nothing
+  --select a,b    import: only these payload categories (worlds, characters, …)
+  -h, --help      show this message
 
-Exit codes: 0 ok · 1 invalid package · 2 usage · 3 I/O`;
+Exit codes: 0 ok · 1 invalid package / refused import · 2 usage · 3 I/O`;
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/** `--select worlds,characters` → `['worlds', 'characters']`; repeated flags add up. */
+function splitList(values: readonly string[] | undefined): string[] | undefined {
+  if (values === undefined || values.length === 0) return undefined;
+  return values
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim())
+    .filter((value) => value !== '');
+}
+
 export async function main(argv: readonly string[], io: CliIo = defaultCliIo): Promise<number> {
-  let values: { json?: boolean; force?: boolean; help?: boolean };
+  let values: {
+    json?: boolean;
+    force?: boolean;
+    help?: boolean;
+    'dry-run'?: boolean;
+    select?: string[];
+  };
   let positionals: string[];
 
   // `pnpm stpack -- <args>` (and npm) forward a LITERAL `--`. Node's parseArgs
@@ -55,6 +75,8 @@ export async function main(argv: readonly string[], io: CliIo = defaultCliIo): P
         json: { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
         help: { type: 'boolean', short: 'h', default: false },
+        'dry-run': { type: 'boolean', default: false },
+        select: { type: 'string', multiple: true },
       },
     });
     values = parsed.values;
@@ -102,6 +124,20 @@ export async function main(argv: readonly string[], io: CliIo = defaultCliIo): P
       }
       const unpackOptions: UnpackOptions = { ...options, force: values.force === true };
       return runUnpack(file, target, unpackOptions, io);
+    }
+    case 'import': {
+      const library = positionals[2];
+      if (file === undefined || library === undefined) {
+        io.err('stpack: import needs a <file> and a <library>');
+        return EXIT.usage;
+      }
+      const only = splitList(values.select);
+      const importOptions: ImportOptions = {
+        ...options,
+        dryRun: values['dry-run'] === true,
+        ...(only === undefined ? {} : { only }),
+      };
+      return runImport(file, library, importOptions, io);
     }
     default: {
       io.err(`stpack: unknown command ${JSON.stringify(command)}`);
