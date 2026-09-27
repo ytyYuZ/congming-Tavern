@@ -274,12 +274,20 @@ describe('stpack import', () => {
 
 describe('contracts only a tool workspace can check', () => {
   it('the importer and @smarttavern/packages produce the same canonical JSON bytes', () => {
+    // Non-ASCII on purpose: docs/04 §11 rule 3 says characters ≥ U+0080 stay literal
+    // instead of becoming `\uXXXX`, and that is exactly where two implementations
+    // drift apart.
     const fixture = {
       zebra: 1,
-      alpha: { nested: ['b', 'a'], Ä: 'umlaut stays literal', deep: { y: 1, x: 2 } },
+      alpha: {
+        nested: ['b', 'a'],
+        Ä: 'umlaut stays literal',
+        '·': 'middle dot',
+        deep: { y: 1, x: 2 },
+      },
       empty: {},
       array: [{ b: 1, a: 2 }, null, true, -0.5],
-      text: '银松镇 · dusk\n',
+      text: 'Zürich · dusk\n',
     };
 
     expect(Array.from(importerCanonicalJson(fixture))).toEqual(

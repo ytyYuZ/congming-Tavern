@@ -50,7 +50,7 @@ import {
  * without this module depending on any particular storage implementation.
  */
 export interface SeedTarget {
-  seed(name: CollectionName, rows: readonly RowBase[]): void;
+  seed<TRow extends RowBase>(name: CollectionName, rows: readonly TRow[]): void;
 }
 
 /** Fixed ids so expectations are literals a person can check by eye. */

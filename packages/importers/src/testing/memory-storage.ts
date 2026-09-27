@@ -220,8 +220,12 @@ export class MemoryStorageAdapter implements StorageAdapter {
     this.failOn = undefined;
   }
 
-  /** Seeded rows for a fixture; bypasses `failOn` on purpose. */
-  seed(name: CollectionName, rows: readonly RowBase[]): void {
+  /**
+   * Seeded rows for a fixture; bypasses `failOn` on purpose. Generic in the row
+   * type so a caller can seed a `settings` row (`{id, value}`) or any other
+   * shape a test needs, not just the entities the ports name.
+   */
+  seed<TRow extends RowBase>(name: CollectionName, rows: readonly TRow[]): void {
     for (const row of rows) this.rowsOf(name).set(row.id, clone(row));
   }
 

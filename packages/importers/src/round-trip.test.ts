@@ -16,6 +16,7 @@
 import { COLLECTIONS } from '@smarttavern/core';
 import type {
   CharacterVersion,
+  Checkpoint,
   Session,
   World,
   WorldbookEntry,
@@ -239,7 +240,7 @@ describe('export → import → export', () => {
     expect(report.ok).toBe(true);
     expect(report.findings.map((finding) => finding.code)).toEqual(['import-state-mismatch']);
     // docs/04 §6: a checkpoint carries the full state snapshot, so it is the source.
-    const checkpoint = target.peek<{ state: { clock: number } }>(COLLECTIONS.checkpoints)[0];
+    const checkpoint = target.peek<Checkpoint>(COLLECTIONS.checkpoints)[0];
     expect(checkpoint?.state.clock).toBe(1120);
   });
 
