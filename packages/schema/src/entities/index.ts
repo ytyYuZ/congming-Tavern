@@ -11,6 +11,7 @@ export * from './character';
 export * from './checkpoint';
 export * from './memory';
 export * from './message';
+export * from './prompt';
 export * from './session';
 export * from './turn';
 export * from './world';
