@@ -4,6 +4,26 @@
 > 以「**创建世界 → 创建角色 → 开始扮演**」三段式组织整个流程，兼容 SillyTavern
 > 的角色卡 / 世界书 / 预设等生态数据格式。
 
+## 关于本项目的生成方式（AI 生成声明）
+
+**本项目的绝大部分内容由 AI 生成。** 说清楚具体是哪些部分：
+
+- **代码**：`packages/*`、`apps/*`、`tools/*` 下的实现与测试，主体由 AI 编写；人类负责提出需求、
+  拍板设计决策、审阅产出并验收。
+- **文档**：`README.md`、`HANDOFF.md`、`docs/01`–`docs/06` 同样以 AI 起草为主，经人类审阅、修正与定稿。
+- **设计决策**：`docs/05-决策记录.md` 里的 ADR 由**人类最终拍板**（采纳哪一条、优先级、取舍），
+  AI 负责记录理由与后果。
+- **质量保证方式**：AI 生成的代码不靠"看起来对"来交付，而靠机械化的证据 —— 单元测试、
+  产物与源码的**逐字节漂移测试**、契约回归套件（`docs/04` §12），以及 CI 四步
+  `lint → typecheck → test → build`。已知的宿主环境绕行都写在 `CONTRIBUTING.md` 里，不隐晦。
+
+**使用者应当知道**：AI 生成的代码可能存在与人类直觉不同的写法，也可能存在未被发现的缺陷。
+本项目按 **AGPL-3.0** 提供，**不附带任何担保**。用于重要场景前请自行审阅关键路径 ——
+尤其是处理不可信输入的部分（包解析与安全校验，见 `docs/04` §9 与 `packages/packages/src/zip/`）。
+
+**贡献者注意**：提交信息、代码注释与测试同样可能是 AI 起草的，这不影响审阅标准 ——
+**以测试与 CI 的绿灯为准**，约定见 `CONTRIBUTING.md`。
+
 ## 名称约定
 
 | 用途 | 取值 |
@@ -58,10 +78,10 @@
 
 ## 当前状态
 
-v0.6：**M0 的契约与骨架已基本落地** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
-（`schema/package-1.json` 与 `schema/tools-1.json` 由 `pnpm schema:export` 生成，有漂移测试守护）、
-M0-T3 `.stpack` 打包 / 解包 / 校验（自研窄 ZIP + canonical JSON，ADR-018）、
-M0-T4 包 CLI（`pnpm stpack -- validate|inspect|unpack`）、M0-T5 `core/ports` 核心接口与测试替身
-均已完成，`pnpm ci:local` 四步全绿。
+v0.7：**M0 的契约与骨架已落地** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
+（`schema/package-1.json` 与 `schema/tools-1.json` 由 `pnpm schema:export` 生成，有逐字节漂移测试守护）、
+M0-T3 `.stpack` 打包 / 解包 / 校验（自研窄 ZIP + canonical JSON，ADR-018）、M0-T4 包 CLI、
+M0-T5 `core/ports` 核心接口与测试替身、**M0-T9 契约回归套件**（`docs/04` §12 第 1–7 条逐条覆盖）
+均已完成；工具链升到 **Vite 8.3.1 + Vitest 5.0.2**，`pnpm ci:local` 四步全绿（44 个测试文件 / 440 个用例）。
 
-**下一步**：M0-T6（OpenAI 兼容 Provider）、M0-T7（IndexedDB 存储）、M0-T8（应用骨架；桌面端需先装 Rust 工具链）。
+**下一步**：M0-T6（OpenAI 兼容 Provider）、M0-T7（IndexedDB 存储）、M0-T8（应用骨架；桌面端需 Rust 工具链）。
