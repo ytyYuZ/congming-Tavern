@@ -189,6 +189,12 @@ importers:
 
   tools/stpack-cli:
     dependencies:
+      '@smarttavern/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@smarttavern/importers':
+        specifier: workspace:*
+        version: link:../../packages/importers
       '@smarttavern/packages':
         specifier: workspace:*
         version: link:../../packages/packages
