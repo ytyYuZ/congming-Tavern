@@ -20,6 +20,17 @@ packages:
   # Developer tooling and build scripts.
   - "tools/*"
 
+# Vite 8 depends on esbuild, whose postinstall links its platform binary. pnpm blocks
+# dependency build scripts by default and treats "ignored builds" as a HARD ERROR, which
+# makes `pnpm install` exit 1 — and because every `pnpm run` performs a dependency check
+# first, that error then blocks lint/typecheck/test as well.
+#
+# The shape is a MAP of package -> boolean; a list is rejected outright, and pnpm's own
+# placeholder value ("set this to true or false") is a string, which counts as "not
+# approved". Keyed by package name so the entry does not rot on an esbuild upgrade.
+allowBuilds:
+  esbuild: true
+
 # ── pnpm settings (pnpm 12 reads these from THIS file, not from .npmrc) ───────
 # `cacheDir` and `storeDir` live here rather than in .npmrc: pnpm 12 only honours
 # them in this file. Both point inside the workspace because some developer hosts
@@ -31,19 +42,21 @@ cacheDir: .npm-cache
 # pnpm 11 reads them from .npmrc; keeping both in sync keeps one tree shape.
 nodeLinker: hoisted
 
-# Vite 7 on Rolldown (`rolldown-vite`, the Vite team's in-process native bundler).
-#
-# This override applies to EVERY install — CI runners included — so treat it as a
-# project-level toolchain choice, not a local hack. Two reasons it is here:
-#   1. plain `vite` pulls in esbuild, whose JS API needs a child process with
-#      piped stdio; hosts that deny that (`spawnSync(...) -> EPERM`, including the
-#      sandbox this scaffold was built in) cannot transform a single TypeScript
-#      file, which takes `pnpm test` and `pnpm build` down with it;
-#   2. it drops the esbuild native binary and is the direction Vite itself is
-#      moving, so a greenfield project pays no migration cost.
-# Same Vite 7 API: every vite.config.ts and every CI command is unchanged.
-# To go back to plain `vite`, delete the override below and re-run `pnpm install`;
-# on hosts that deny piped child processes, local `pnpm test` / `pnpm build` then
-# need tools/scripts/vite-sandbox-probe-shim.mjs plus an unrestricted sandbox.
-overrides:
-  vite: npm:rolldown-vite@^7.3.1
+# Only materialise optional native binaries for the platform we are actually on.
+# esbuild, rollup and rolldown each publish a dozen per-OS/per-CPU packages; without
+# this, every install tries to fetch all of them (android, win32-ia32, every linux
+# libc variant), which is slow everywhere and fails outright on restricted networks.
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+  libc:
+    - current
+
+# Do NOT let `pnpm run`/`pnpm test`/`pnpm exec` run a dependency check that performs an
+# install first. On a host that denies spawned child processes, the approved esbuild
+# postinstall then crashes the check with `spawn EPERM`, which fails every script before
+# it starts (lint/typecheck/test alike) even though the tree is complete. CI installs
+# explicitly, so it never needs this check either.
+verifyDepsBeforeRun: false

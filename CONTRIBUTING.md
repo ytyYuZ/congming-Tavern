@@ -64,25 +64,33 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
    pnpm install --node-linker=hoisted --no-frozen-lockfile
    ```
 
-   另外：本机自带的 pnpm 是 **11.8.0**，而根 `package.json` 曾把 `packageManager`
-   钉在 `pnpm@12.6.0`，于是 pnpm 会先把 12.6.0 自装进 store 再 re-exec；在禁止
-   写入该目录的主机上这一步会失败并留下一个空的包目录，导致**此后每次 `pnpm`
-   调用都指向不存在的二进制**。因此该字段已移除，版本改由
-   `.github/workflows/ci.yml` 的 `pnpm/action-setup` 显式钉住 —— CI 行为不变。
+   另外：本机**装不"干净"**。esbuild 的 postinstall 需要 spawn 子进程，而这类主机禁止
+   （`spawn EPERM`），所以 `pnpm install` 在本机必然以非零退出：不批准构建脚本会报
+   `ERR_PNPM_IGNORED_BUILDS`，批准了又会在运行脚本时崩。因此 `pnpm-workspace.yaml` 里
+   设了 `verifyDepsBeforeRun: false`，避免每个 `pnpm run` / `pnpm test` 之前的依赖检查
+   触发一次失败安装、连带把 lint / typecheck / test 全部挡掉。CI 显式安装，不需要这个检查。
 
-### 关于 `vite` 的 override（rolldown-vite）
+   还有一处同样的取舍：**hoisted 链接器不把 `vite` 链进各个 app**（它被提到仓库根），
+   而 `apps/*` 的 `build` 脚本写的是标准 `vite build`（CI 的隔离式链接器能解析到）。
+   所以 `pnpm ci:local` 的 build 步骤改为直接调用根二进制构建两个 app —— 这是**唯一**
+   一处在本地包装脚本里复刻 CI 步骤的地方，动机写在 `tools/scripts/run-ci-local.mjs` 的注释里。
 
-`pnpm-workspace.yaml` 里有一行 `overrides: vite: npm:rolldown-vite@^7.3.1`。
-原因：esbuild 的 JavaScript API 要通过**管道**和一个常驻子进程通信，
-而上述受限主机禁止这种 spawn，于是任何 TypeScript 文件都无法转译，
-`pnpm test` 与 `pnpm build` 一起失效。`rolldown-vite` 是同一套 Vite 7 API
-换用原生、进程内的打包器，因此 `vite.config.ts` 与 CI 命令都不变。
+### Vite 8 / Vitest 5（已不再使用 rolldown-vite）
 
-> **⚠️ 该包已在 registry 被标记为 deprecated（2026-09-27 记录）。**
-> 弃用语的含义是"用它从 Vite 7 迁移到 Vite 8"——即 Rolldown 已并入 Vite 8 本体。
-> **待办（独立于契约工作，不要与 M0-T1/T2 混做）**：整体升级到 Vite 8，并同步升级
-> Vitest（Vitest 3 依赖 Vite 7）；升级后删掉这行 override，同时保留"不依赖
-> esbuild 管道"这一收益。
+M0-T5 之后按计划完成升级：**`vite` 8.3.1 + `vitest` 5.0.2**，并删掉了此前
+`overrides: vite: npm:rolldown-vite@^7.3.1` 那一行。原因：`rolldown-vite` 已被 registry
+标记 deprecated（弃用语是"用它从 Vite 7 迁移到 Vite 8"），Rolldown 已并入 Vite 8 本体 ——
+所以"不依赖 esbuild 转换管道"这一收益由 Vite 8 直接继承，不再需要一行 override。
+
+**esbuild 仍在依赖树里**（Vite 8 依赖它），因此 `pnpm-workspace.yaml` 里有一项
+`allowBuilds: esbuild: true`。三个坑都值得记住：
+
+1. 它必须是**映射**（`包名: 布尔`）。写成列表会被 pnpm 当作配置错误，整个安装直接失败。
+2. pnpm 在检测到被忽略的构建脚本时会**自己往 `pnpm-workspace.yaml` 里插一个占位项**，
+   值是字符串 `set this to true or false`；字符串不等于 `true`，所以照原样保留等于没批准。
+3. 不批准时 pnpm 让安装以 `ERR_PNPM_IGNORED_BUILDS` 失败（在 pnpm 11.8.0 上是硬错误，
+   不是警告），而每个 `pnpm run` / `pnpm test` 之前的依赖检查又会触发一次安装 ——
+   于是这个错误会**连带挡掉** lint / typecheck / test。
 
 ### `.npmrc`
 
@@ -263,9 +271,9 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 - **`tsconfig.base.json` 未开启 `exactOptionalPropertyTypes`**：文档只要求
   `strict` + `noUncheckedIndexedAccess`。该选项与 Zod 的可选字段（`?: T` 与
   `?: T | undefined`）冲突面较大，留到 M0-T1 定义实体 schema 时再评估。
-- **`vite` 换成 `rolldown-vite`**（见 §1"关于 `vite` 的 override"）：这是
-  `pnpm-workspace.yaml` 中唯一一处偏离文档字面写法的地方，动机是让受限主机也能
-  跑通 `test` / `build`；API 与 CI 命令完全不变，回退只需删一行。
+- **本地用 hoisted 链接器，于是 app 里没有自己的 `vite`**（见 §1 第 3 条）：`apps/*` 的
+  `build` 脚本保持标准的 `vite build` —— CI 用隔离式链接器能解析到；本机的 hoisted 树把
+  `vite` 提到了根，所以 `pnpm ci:local` 的 build 步骤改为直接调用根二进制构建两个 app。
 - **`packages/ui` / `packages/i18n` 目前不引入任何框架依赖**，因此它们的
   `package.json` 的 `dependencies` 为空；等 ADR-005 定论后再加。
 - **工作区之间靠源码引用（`exports: "./src/index.ts"`）而不是构建产物**：M0 阶段

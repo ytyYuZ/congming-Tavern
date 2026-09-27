@@ -30,16 +30,29 @@ const shim = new URL('./vite-sandbox-probe-shim.mjs', import.meta.url).href;
 const existing = process.env.NODE_OPTIONS ?? '';
 const nodeOptions = `${existing} --import ${shim}`.trim();
 
-const results = [];
-for (const step of steps) {
-  console.log(`\n[ci:local] ── ${step} ─────────────────────────────────────────────`);
-  // Pipelines are allowed to pipe: pass the command through the shell so the
-  // `pnpm` shim (pnpm.cmd on Windows) resolves.
-  const code = await new Promise((resolve) => {
-    // `append-only`: pnpm's default reporter redraws a progress line in place,
-    // which makes an embedding terminal flicker. The env var is what the INNER
-    // pnpm (`pnpm build` spawns one) sees; the flag covers the outer one.
-    const child = spawn(`pnpm --reporter=append-only ${step}`, {
+// The `build` step needs a host-specific shape, for exactly one reason: this host
+// cannot build pnpm's default ISOLATED node_modules tree (`ERR_PNPM_SYMLINK_FAILED
+// [symlinkAllModules] Maximum call stack size exceeded`), so the workspace uses the
+// HOISTED linker — and the hoisted linker lifts `vite` to the repository root instead
+// of linking it into each app. That leaves `apps/*`'s own `vite build` script with a
+// `.bin` shim pointing at a package that is not there. CI runs the canonical
+// `pnpm build` on Linux with the isolated linker and needs none of this.
+const BUILD_COMMANDS = [
+  'node node_modules/typescript/bin/tsc -b --noCheck --noEmit false',
+  'node node_modules/vite/bin/vite.js build apps/web --logLevel warn',
+  'node node_modules/vite/bin/vite.js build apps/desktop --logLevel warn',
+];
+
+const commandsFor = (step) =>
+  step === 'build' ? BUILD_COMMANDS : [`pnpm --reporter=append-only ${step}`];
+
+/** Run one command through the shell, inheriting stdio. Resolves to its exit code. */
+function run(command) {
+  return new Promise((resolve) => {
+    // `append-only`: pnpm's default reporter redraws a progress line in place, which
+    // makes an embedding terminal flicker. The env var is what the INNER pnpm
+    // (`pnpm build` spawns one) sees; the flag covers the outer one.
+    const child = spawn(command, {
       stdio: 'inherit',
       shell: true,
       env: { ...process.env, NODE_OPTIONS: nodeOptions, npm_config_reporter: 'append-only' },
@@ -47,6 +60,16 @@ for (const step of steps) {
     child.on('close', (exitCode) => resolve(exitCode ?? 1));
     child.on('error', () => resolve(1));
   });
+}
+
+const results = [];
+for (const step of steps) {
+  console.log(`\n[ci:local] ── ${step} ─────────────────────────────────────────────`);
+  let code = 0;
+  for (const command of commandsFor(step)) {
+    code = await run(command);
+    if (code !== 0) break;
+  }
   results.push({ step, code });
   if (code !== 0) {
     console.error(`\n[ci:local] ${step} FAILED (exit ${code}) — stopping, like CI does.`);
