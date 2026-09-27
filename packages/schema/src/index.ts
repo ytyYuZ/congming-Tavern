@@ -1,17 +1,25 @@
 /**
- * @smarttavern/schema — workspace entry point (M0-T0 placeholder).
+ * @smarttavern/schema — the single source of truth for every cross-module data
+ * structure (HANDOFF §4.1 invariant 2, ADR-016).
  *
- * BOUNDARY: this package is the single source of truth for every cross-module
- * data structure (HANDOFF §4.1 invariant 2). It must not import any other
- * internal package — enforced by biome.json and by
- * tools/scripts/check-dependency-direction.mjs.
+ * BOUNDARY: this package imports nothing but `zod`. It must not import any other
+ * internal package, do I/O, or hold business logic — enforced by biome.json and
+ * by tools/scripts/check-dependency-direction.mjs.
  *
- * M0-T1 adds `entities/{world,character,session,message,checkpoint,agenda,
- * memory,asset,turn}.ts` (Zod schemas + `z.infer` types); M0-T2 adds
- * `package.ts` and the exported `schema/package-1.json`. No business logic and
- * no I/O belongs here — only frozen contracts.
+ * LAYOUT
+ *   ./common      shared primitives, the `extensions` escape hatch, open enums
+ *   ./plugins     the plugin contract (interfaces only, no runtime)
+ *   ./versioning  immutability + lineage + `versionedEntity()`
+ *   ./entities/*  one file per domain entity
+ *   ./package.ts  the `.stpack` manifest                 (M0-T2)
  *
- * Until then this file exports nothing but its own identity so that the
- * workspace graph, typecheck and CI have something real to chew on.
+ * CONSUMERS IMPORT FROM HERE, not from the deep paths, so the internal layout
+ * stays free to move.
  */
+export * from './common';
+export * from './entities';
+export * from './plugins';
+export * from './versioning';
+
+/** Identity marker, kept so the package is greppable and smoke-testable. */
 export const SCHEMA_PACKAGE = '@smarttavern/schema' as const;

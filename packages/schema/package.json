@@ -15,5 +15,8 @@
   "scripts": {
     "build": "node -e \"console.log('[build] @smarttavern/schema is consumed as TS source during M0')\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
   }
 }

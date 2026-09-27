@@ -1,0 +1,155 @@
+/**
+ * Session — one playthrough of a world (docs/02 §4 `Session` / `SessionRefs` /
+ * `SessionState` / `Deadline`, §7 `sessions`).
+ *
+ * THE ONE RULE THAT SHAPES THIS FILE (ADR-010)
+ * Identity is a property of the SESSION, not of a character card.
+ * `SessionRefs.playerCharacter` names the card the user plays; every other card
+ * in `cast` is an NPC. A character card must therefore never carry a
+ * player/cast flag, an `isPlayer`/`kind`/`role` field or a duplicate persona:
+ * the same card has to be able to play the protagonist in one session and the
+ * antagonist in the next, and an imported card that contained such a flag would
+ * fight the session that owns it. See `./character.ts`, which is deliberately
+ * free of any identity field.
+ *
+ * TIME (ADR-012)
+ * `initialClock` is where this session started; the *live* time lives in
+ * `SessionState.clock` and is snapshotted into every checkpoint. A save that
+ * rolls the clock back must roll the rest of the state back with it
+ * (docs/02 §5.7), which is why both numbers exist rather than one.
+ *
+ * OPEN vs CLOSED
+ * - `schedulerMode` and `Deadline.kind`/`status` are CLOSED: they are intrinsic
+ *   protocol semantics the local scheduler and time engine switch on
+ *   exhaustively, and a plugin-invented mode could not be honoured (docs/02 §4.1).
+ * - The plugin channel for a session is `extensions`, as everywhere else.
+ */
+import { z } from 'zod';
+import {
+  EpochMinuteSchema,
+  ExtensionsSchema,
+  IdSchema,
+  SamplingParamsSchema,
+  TimestampSchema,
+} from '../common';
+
+/* ──────────────────────────────── 引用 ───────────────────────────────────── */
+
+/**
+ * A fully pinned reference: `{id, version}` and nothing else.
+ *
+ * Deliberately NOT `EntityRefSchema`: that one carries a `kind` (for
+ * polymorphic slots) and an optional `version` (for "whatever the head is").
+ * Here the surrounding field already names the kind, and every reference a
+ * session holds must be pinned — an unpinned world would make an old save
+ * re-render differently after an edit (ADR-010).
+ */
+export const EntityPinSchema = z.object({
+  id: IdSchema,
+  version: z.number().int().positive(),
+});
+export type EntityPin = z.infer<typeof EntityPinSchema>;
+
+/**
+ * What this session is made of. `playerCharacter` is required, not optional:
+ * a session that does not know who the user plays cannot build a prompt.
+ *
+ * `id` is an `IdSchema`, never a `UuidV7Schema`: an imported session pack is
+ * schema-validated *before* its ids are remapped (docs/04 §7 steps 3 and 8), so
+ * a foreign-but-well-formed id must not be a hard failure here.
+ */
+export const SessionRefsSchema = z.object({
+  world: EntityPinSchema,
+  playerCharacter: EntityPinSchema,
+  /** Everyone else on stage. Empty is legal (a solo opening scene). */
+  cast: z.array(EntityPinSchema),
+  promptPreset: EntityPinSchema,
+  rulePack: EntityPinSchema.optional(),
+  modelConfig: z.object({
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    params: SamplingParamsSchema,
+  }),
+});
+export type SessionRefs = z.infer<typeof SessionRefsSchema>;
+
+/* ─────────────────────────────── 会话 ────────────────────────────────────── */
+
+/**
+ * Who decides the speaking order (ADR-011): the user, the local rule scoring, or
+ * the AI's proposal. CLOSED — the scheduler has exactly these three behaviours,
+ * and `TurnPlan.mode` reuses this same schema so the two cannot drift.
+ */
+export const SchedulerModeSchema = z.enum(['user', 'rules', 'ai']);
+export type SchedulerMode = z.infer<typeof SchedulerModeSchema>;
+
+export const SessionSchema = z.object({
+  id: IdSchema,
+  title: z.string().min(1).max(200),
+  refs: SessionRefsSchema,
+  /** The world's `startMinute`, copied here so the session owns its origin. */
+  initialClock: EpochMinuteSchema,
+  schedulerMode: SchedulerModeSchema,
+  /**
+   * Tip of the message tree (`null` before the first message). The displayed
+   * history is this node's ancestor chain reversed (docs/02 §7).
+   */
+  headMessageId: IdSchema.nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  extensions: ExtensionsSchema.optional(),
+});
+export type Session = z.infer<typeof SessionSchema>;
+
+/* ─────────────────────────── 会话状态（存档快照） ─────────────────────────── */
+
+/**
+ * Countdown / duration deadline. `targetId` is what the countdown is *about*
+ * (a character, an agenda entry) and is optional because a plain "3 days until
+ * the ritual" has no target.
+ */
+export const DeadlineSchema = z.object({
+  id: IdSchema,
+  label: z.string().min(1),
+  dueMinute: EpochMinuteSchema,
+  /** CLOSED: intrinsic semantics the time engine switches on. */
+  kind: z.enum(['countdown', 'duration']),
+  targetId: IdSchema.optional(),
+  /** CLOSED: the countdown state machine. */
+  status: z.enum(['active', 'expired', 'cleared']),
+});
+export type Deadline = z.infer<typeof DeadlineSchema>;
+
+/** Combat rounds / turns, which suspend the narrative clock (docs/02 §5.7). */
+export const InnerClockSchema = z.object({
+  kind: z.enum(['round', 'turn']),
+  current: z.number().int().nonnegative(),
+  total: z.number().int().positive().optional(),
+  /** Used to convert tracks back into narrative minutes when the fight ends. */
+  secondsPerRound: z.number().positive(),
+  note: z.string(),
+});
+export type InnerClock = z.infer<typeof InnerClockSchema>;
+
+/**
+ * The mutable state a checkpoint snapshots whole (docs/04 §6). Everything the
+ * UI shows mid-scene is here, so restoring a save never needs to replay
+ * messages: `scene`, the clocks, free variables, rule-pack sheets and deadlines.
+ *
+ * `vars` is primitives only (macros substitute into text), while `sheets` holds
+ * whatever a rule pack needs per actor — `unknown` there on purpose, because the
+ * rule pack owns its schema and core must not.
+ */
+export const SessionStateSchema = z.object({
+  scene: z.object({
+    title: z.string(),
+    location: z.string(),
+    time: EpochMinuteSchema,
+  }),
+  clock: EpochMinuteSchema,
+  innerClock: InnerClockSchema.optional(),
+  vars: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  sheets: z.record(IdSchema, z.record(z.string(), z.unknown())),
+  deadlines: z.array(DeadlineSchema),
+});
+export type SessionState = z.infer<typeof SessionStateSchema>;
