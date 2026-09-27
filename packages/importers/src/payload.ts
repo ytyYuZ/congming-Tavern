@@ -395,8 +395,3 @@ export function decodePackage(entries: readonly PackageEntryPayload[]): DecodedP
     problems,
   };
 }
-
-/** The newest checkpoint of a session — where §6's `state.json` comes from. */
-export function newestCheckpoint(rows: readonly Checkpoint[]): Checkpoint | undefined {
-  return sortByCreatedAtThenId(rows).at(-1);
-}

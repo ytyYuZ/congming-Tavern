@@ -24,11 +24,12 @@
  * belong to the session or to what it embeds. Rule packs are never embedded (§4) —
  * they travel as an `optional` ref.
  *
- * WHERE THE SESSION'S "CURRENT" STATE COMES FROM: `docs/02` §7 has no
- * `sessionStates` collection — the live state of a session is what its newest
- * checkpoint snapshotted, so `state.json` is derived from that checkpoint, and a
- * session with no checkpoint gets a synthesised initial state reported as a
- * warning (never silently).
+ * WHERE THE SESSION'S "CURRENT" STATE COMES FROM (ADR-032): `Session.state`, the
+ * live state on the session row itself. It is NOT derived from the newest
+ * checkpoint any more. A checkpoint is a full snapshot in its own collection and
+ * remains one ("then"); the live state is "now", and on a local-first app the time
+ * between two manual save points has nowhere else to live. A package therefore
+ * always carries a real state and there is no longer a synthesis warning to emit.
  *
  * WHAT THIS FILE DOES NOT DO: it never touches the filesystem, the network or a
  * clock of its own. Identity and `createdAt` belong to the injected writer
@@ -60,7 +61,6 @@ import {
   type PackageRef,
   type PromptPreset,
   type Session,
-  type SessionState,
   type World,
   type WorldbookEntry,
   type WorldVersion,
@@ -100,7 +100,7 @@ export class ExportError extends Error {
 }
 
 /** Something the export could not do exactly as asked, but did not fail on. */
-export type ExportWarningCode = 'state-synthesized' | 'prompt-preset-not-embedded';
+export type ExportWarningCode = 'prompt-preset-not-embedded';
 
 export interface ExportWarning {
   readonly code: ExportWarningCode;
@@ -253,17 +253,6 @@ async function writePackage(
     bytes: result.bytes,
     manifest: result.manifest,
     warnings: built.warnings,
-  };
-}
-
-/** How a session's `state.json` is derived when the session has no checkpoint. */
-function synthesisedState(session: Session): SessionState {
-  return {
-    scene: { title: session.title, location: '', time: session.initialClock },
-    clock: session.initialClock,
-    vars: {},
-    sheets: {},
-    deadlines: [],
   };
 }
 
@@ -439,17 +428,10 @@ export async function exportSessionPackage(request: ExportSessionRequest): Promi
     ];
 
     const warnings: ExportWarning[] = [];
-    const newest = sortByCreatedAtThenId(checkpoints).at(-1);
-    if (newest === undefined) {
-      warnings.push({
-        code: 'state-synthesized',
-        detail:
-          'no checkpoint: state.json was synthesised from the session clock (docs/02 §7 has no sessionStates collection, so a checkpoint is what persists live state)',
-      });
-      payloads.push(encodeState(synthesisedState(session)));
-    } else {
-      payloads.push(encodeState(newest.state));
-    }
+    // ADR-032: `state.json` is the session's LIVE state, not a projection of the
+    // newest checkpoint. A checkpoint stays a snapshot of "then", and a save point
+    // is not what the session is playing right now.
+    payloads.push(encodeState(session.state));
 
     const refs: PackageRef[] = [
       {

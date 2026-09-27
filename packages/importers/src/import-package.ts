@@ -27,12 +27,14 @@
  * - §7 step 6: a `required` reference that is missing locally stops the import and
  *   names what is missing. An `embedded` reference whose payload is absent is a
  *   broken package, not a degraded one.
- * - `data/state.json`: `docs/02` §7 has no `sessionStates` collection, so the live
- *   state of a session is what its newest CHECKPOINT holds (§6 derives
- *   `state.json` from it). A `state.json` no checkpoint agrees with is reported;
- *   and a package with no checkpoint at all cannot persist a clock, which is also
- *   reported. Both are warnings, because such a package is still importable — the
- *   honest answer is to say what could not be stored.
+ * - `data/state.json` (ADR-032): it is the exporting session's LIVE state
+ *   (`Session.state`), and it is written BACK into the session row this import
+ *   stores. It is deliberately no longer compared against the newest checkpoint:
+ *   a checkpoint is a snapshot of a save point and the live state is "now", so
+ *   demanding that the two agree would be demanding that the user never played past
+ *   their last save. The one thing still reported is a `state.json` with no
+ *   `data/session.json` beside it — with no session row there is nowhere to put it,
+ *   and an import must say what it could not store rather than drop it silently.
  * - Schema versions: payloads are validated with the CURRENT build's schemas, and
  *   a payload written by a newer schema is refused by the package validator before
  *   this code runs. `packages/schema/migrations` owns the migration table.
@@ -73,7 +75,6 @@ import {
   type WorldbookEntry,
   type WorldVersion,
 } from '@smarttavern/schema';
-import { deepEqual } from './deep-equal';
 import {
   decideIdentity,
   type IdentityReason,
@@ -105,8 +106,7 @@ export type ImportFindingCode =
   | 'payload-schema'
   | 'import-missing-dependency'
   | 'import-reference-unresolved'
-  | 'import-state-without-checkpoint'
-  | 'import-state-mismatch';
+  | 'import-state-without-session';
 
 export interface ImportFinding {
   readonly severity: ImportSeverity;
@@ -672,8 +672,19 @@ async function commit(tx: Tx, input: CommitInput): Promise<CommitOutcome> {
   for (const row of worldbookOutcome.writes) queue(COLLECTIONS.worldbookEntries, row);
   entities.push(...worldbookOutcome.reports);
 
-  /* ── the session, then the tree that hangs off it ───────────────────────── */
+  /* ── the session ────────────────────────────────────────────────────────── */
 
+  /**
+   * The session is decided BEFORE the agenda, the checkpoints and the memories
+   * because all three reference it (and messages reference it too), so its id remap
+   * has to exist first.
+   *
+   * WHAT IS DELIBERATELY NOT DONE HERE: `data/state.json` is NOT folded in yet. The
+   * live state may name an agenda entry in a `deadline.targetId`, so rewriting it
+   * needs the agenda's remap table, and the agenda is decided two blocks down (it in
+   * turn needs the message remap, which needs this session's). The state is added to
+   * the decided row once the agenda exists — see the note there.
+   */
   const sessionOutcome = decideFlat<Session>({
     entity: 'session',
     collection: COLLECTIONS.sessions,
@@ -692,6 +703,8 @@ async function commit(tx: Tx, input: CommitInput): Promise<CommitOutcome> {
   for (const row of sessionOutcome.writes) queue(COLLECTIONS.sessions, row);
   entities.push(...sessionOutcome.reports);
 
+  /* ── the message tree ───────────────────────────────────────────────────── */
+
   const messageOutcome = decideMessages({
     incoming: input.decoded.messages,
     state,
@@ -704,7 +717,7 @@ async function commit(tx: Tx, input: CommitInput): Promise<CommitOutcome> {
   for (const row of messageOutcome.writes) queue(COLLECTIONS.messages, row);
   entities.push(...messageOutcome.reports);
 
-  /* ── agenda BEFORE checkpoints: a checkpoint may point at an agenda entry ── */
+  /* ── agenda (before checkpoints: they point at its entries) ─────────────── */
 
   const agendaOutcome = decideFlat<AgendaEntry>({
     entity: 'agenda',
@@ -725,6 +738,45 @@ async function commit(tx: Tx, input: CommitInput): Promise<CommitOutcome> {
   });
   for (const row of agendaOutcome.writes) queue(COLLECTIONS.agenda, row);
   entities.push(...agendaOutcome.reports);
+
+  /* ── state.json: the session's LIVE state, onto the session row (ADR-032) ── */
+
+  /**
+   * `data/state.json` is the exporting session's LIVE state, so it belongs on the
+   * session row and nowhere else. It is applied to the rows the session decision
+   * above just produced — not decided a second time — because the state is part of
+   * what "this session" means: a re-import whose clock has moved must still be
+   * recognised as the SAME save (docs/04 §12 item 9), not duplicated. The identity
+   * comparison therefore sees it, through these corrected rows.
+   *
+   * WHY THIS IS NOT DONE EARLIER: `rewriteState` needs the character remap for
+   * `sheets` (keyed by actor id) and the agenda remap for `deadlines[].targetId`,
+   * and the agenda is only decided above.
+   */
+  const incomingState = input.decoded.state;
+
+  if (incomingState !== undefined && input.decoded.session === undefined) {
+    findings.push({
+      severity: 'warning',
+      code: 'import-state-without-session',
+      path: 'data/state.json',
+      detail:
+        'the package has state.json but no data/session.json: ADR-032 stores a session’s live state on its own session row, so without a session there is nowhere to persist this state',
+    });
+  }
+
+  if (incomingState !== undefined && sessionOutcome.writes.length > 0) {
+    const stateMaps: StateMaps = {
+      characterRemap,
+      agendaRemap: agendaOutcome.remap,
+    };
+    const rewritten = rewriteState(incomingState, stateMaps);
+    for (let index = 0; index < sessionOutcome.writes.length; index += 1) {
+      const row = sessionOutcome.writes[index];
+      if (row === undefined) continue;
+      sessionOutcome.writes[index] = { ...row, state: rewritten };
+    }
+  }
 
   const checkpointOutcome = decideFlat<Checkpoint>({
     entity: 'checkpoint',
@@ -845,35 +897,11 @@ async function commit(tx: Tx, input: CommitInput): Promise<CommitOutcome> {
     }
   }
 
-  /* ── state.json: §6 says it mirrors the newest checkpoint ───────────────── */
+  /* ── state.json: the session's live state, written into the session row ──── */
 
-  if (input.decoded.state !== undefined) {
-    const newest = sortByCreatedAtThenId(input.decoded.checkpoints).at(-1);
-    if (newest === undefined) {
-      findings.push({
-        severity: 'warning',
-        code: 'import-state-without-checkpoint',
-        path: 'data/state.json',
-        detail:
-          'the package has state.json but no checkpoint: docs/02 §7 has no sessionStates collection, so live state is only stored inside a checkpoint and this state cannot be persisted',
-      });
-    } else {
-      const written = checkpointOutcome.writes.find((row) => row.id === newest.id) ?? newest;
-      const actual = rewriteState(input.decoded.state, {
-        characterRemap,
-        agendaRemap: agendaOutcome.remap,
-      });
-      if (!deepEqual(stripImportExtensions(written.state), actual)) {
-        findings.push({
-          severity: 'warning',
-          code: 'import-state-mismatch',
-          path: 'data/state.json',
-          detail:
-            'state.json disagrees with the newest checkpoint; the checkpoint wins (docs/04 §6: a checkpoint carries the full state snapshot)',
-        });
-      }
-    }
-  }
+  // Nothing left to check here: the state was folded into the session row above
+  // (ADR-032), and the one case worth reporting — a state with no session to carry
+  // it — was reported there, before anything was written.
 
   /* ── write, in a fixed collection order, inside the same transaction ─────── */
 

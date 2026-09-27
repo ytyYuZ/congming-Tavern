@@ -12,11 +12,23 @@
  * fight the session that owns it. See `./character.ts`, which is deliberately
  * free of any identity field.
  *
- * TIME (ADR-012)
- * `initialClock` is where this session started; the *live* time lives in
- * `SessionState.clock` and is snapshotted into every checkpoint. A save that
- * rolls the clock back must roll the rest of the state back with it
- * (docs/02 §5.7), which is why both numbers exist rather than one.
+ * TIME (ADR-012, ADR-032)
+ * `initialClock` is where this session started — the world's `startMinute`,
+ * copied here so the session owns its origin, and it never moves. The *live* time
+ * lives in `Session.state.clock` (`SessionState` below) and is snapshotted into
+ * every checkpoint. A save that rolls the clock back must roll the rest of the
+ * state back with it (docs/02 §5.7), which is why both numbers exist rather than
+ * one.
+ *
+ * WHY THE LIVE STATE IS ON THE SESSION ROW (ADR-032)
+ * `state` is a REQUIRED field of `Session`, not a nineteenth collection: ADR-022
+ * freezes the collection list as "§7's eighteen, verbatim", the row is already
+ * written every turn (`headMessageId`), and a checkpoint stays a full snapshot in
+ * its OWN collection — live state is "now", a checkpoint is "then", and rollback
+ * only means something while both exist. Rows written before this field existed
+ * are completed AT THE READ BOUNDARY (`apps/web/src/db/repository.ts`) with
+ * `defaultSessionState()`, which is what this file's helper is for: the missing
+ * field can be DERIVED from `initialClock`, so no `migrations` row is needed.
  *
  * OPEN vs CLOSED
  * - `schedulerMode` and `Deadline.kind`/`status` are CLOSED: they are intrinsic
@@ -73,34 +85,6 @@ export const SessionRefsSchema = z.object({
 });
 export type SessionRefs = z.infer<typeof SessionRefsSchema>;
 
-/* ─────────────────────────────── 会话 ────────────────────────────────────── */
-
-/**
- * Who decides the speaking order (ADR-011): the user, the local rule scoring, or
- * the AI's proposal. CLOSED — the scheduler has exactly these three behaviours,
- * and `TurnPlan.mode` reuses this same schema so the two cannot drift.
- */
-export const SchedulerModeSchema = z.enum(['user', 'rules', 'ai']);
-export type SchedulerMode = z.infer<typeof SchedulerModeSchema>;
-
-export const SessionSchema = z.object({
-  id: IdSchema,
-  title: z.string().min(1).max(200),
-  refs: SessionRefsSchema,
-  /** The world's `startMinute`, copied here so the session owns its origin. */
-  initialClock: EpochMinuteSchema,
-  schedulerMode: SchedulerModeSchema,
-  /**
-   * Tip of the message tree (`null` before the first message). The displayed
-   * history is this node's ancestor chain reversed (docs/02 §7).
-   */
-  headMessageId: IdSchema.nullable(),
-  createdAt: TimestampSchema,
-  updatedAt: TimestampSchema,
-  extensions: ExtensionsSchema.optional(),
-});
-export type Session = z.infer<typeof SessionSchema>;
-
 /* ─────────────────────────── 会话状态（存档快照） ─────────────────────────── */
 
 /**
@@ -132,9 +116,10 @@ export const InnerClockSchema = z.object({
 export type InnerClock = z.infer<typeof InnerClockSchema>;
 
 /**
- * The mutable state a checkpoint snapshots whole (docs/04 §6). Everything the
- * UI shows mid-scene is here, so restoring a save never needs to replay
- * messages: `scene`, the clocks, free variables, rule-pack sheets and deadlines.
+ * The mutable state a checkpoint snapshots whole (docs/04 §6) AND the live state
+ * every session row carries in `Session.state` (ADR-032). Everything the UI shows
+ * mid-scene is here, so restoring a save never needs to replay messages: `scene`,
+ * the clocks, free variables, rule-pack sheets and deadlines.
  *
  * `vars` is primitives only (macros substitute into text), while `sheets` holds
  * whatever a rule pack needs per actor — `unknown` there on purpose, because the
@@ -153,3 +138,81 @@ export const SessionStateSchema = z.object({
   deadlines: z.array(DeadlineSchema),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
+
+/**
+ * The state a session starts from: an untitled scene whose only real content is
+ * the clock, which is where the session itself started.
+ *
+ * WHY THIS IS A DERIVATION AND NOT A CONSTANT (ADR-032's addendum)
+ * `Session.state` is required, so every writer has to supply one AND every reader
+ * has to complete a row written before the field existed. Both cases answer the
+ * same question — "what does a session with nothing recorded yet look like?" — and
+ * the honest answer is derivable from what the row already carries: the clock is
+ * `initialClock`, and the rest is empty. Deriving it (rather than reading a stored
+ * `migrations` row) is exactly why no migration is needed: a migration is for a
+ * change of MEANING, and this field's meaning is recoverable from a field that is
+ * already there.
+ *
+ * `scene.title` and `scene.location` are deliberately EMPTY: only the clock has a
+ * value the session already knows. Copying the session title into the scene would
+ * make "the scene was never named" indistinguishable from "the scene is named
+ * after the save", and a location is not something that can be invented.
+ */
+export function defaultSessionState(initialClock: number): SessionState {
+  return {
+    scene: { title: '', location: '', time: initialClock },
+    clock: initialClock,
+    vars: {},
+    sheets: {},
+    deadlines: [],
+  };
+}
+
+/* ─────────────────────────────── 会话 ────────────────────────────────────── */
+
+/**
+ * Who decides the speaking order (ADR-011): the user, the local rule scoring, or
+ * the AI's proposal. CLOSED — the scheduler has exactly these three behaviours,
+ * and `TurnPlan.mode` reuses this same schema so the two cannot drift.
+ */
+export const SchedulerModeSchema = z.enum(['user', 'rules', 'ai']);
+export type SchedulerMode = z.infer<typeof SchedulerModeSchema>;
+
+/**
+ * WHY THE STATE SECTION SITS ABOVE THIS ONE: a Zod object evaluates its fields
+ * when it is built, so `state: SessionStateSchema` would read a `const` before its
+ * declaration — a temporal-dead-zone crash, not a style preference. So this file
+ * reads top-down in dependency order: common → refs → state (Deadline / InnerClock
+ * / SessionState / default) → session.
+ */
+export const SessionSchema = z.object({
+  id: IdSchema,
+  title: z.string().min(1).max(200),
+  refs: SessionRefsSchema,
+  /**
+   * The world's `startMinute`, copied here so the session owns its origin.
+   *
+   * NOT the live clock (ADR-012): `state.clock` below is the one that moves, and
+   * it is what `clockOf` reads. This field is kept because a rollback, a package
+   * export and a freshly derived default state all need to know where the session
+   * began — deleting it would lose the origin, not a redundant copy.
+   */
+  initialClock: EpochMinuteSchema,
+  /**
+   * The LIVE session state — what the UI shows and what a turn advances
+   * (docs/02 §5.7, §7; ADR-032). Required, because a session without a clock, a
+   * scene or variables cannot be played; a row written before this field existed
+   * is completed at the read boundary with `defaultSessionState()`.
+   */
+  state: SessionStateSchema,
+  schedulerMode: SchedulerModeSchema,
+  /**
+   * Tip of the message tree (`null` before the first message). The displayed
+   * history is this node's ancestor chain reversed (docs/02 §7).
+   */
+  headMessageId: IdSchema.nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  extensions: ExtensionsSchema.optional(),
+});
+export type Session = z.infer<typeof SessionSchema>;

@@ -12,10 +12,15 @@
  *    row it read changes. This is the reactive path, so it is asserted end to end
  *    rather than assumed: `StorageAdapter.transaction` is read-write and Dexie refuses
  *    it inside a querier, which would make the subscription silently never emit.
+ * 5. `Session.state` (ADR-032): the live clock and variables survive a restart, and a
+ *    row written BEFORE the field existed is completed at the read boundary with the
+ *    default derived from `initialClock`. Case 5's first test writes that old row the
+ *    way the old CODE wrote it — through the raw write path — because going through
+ *    `createSession` would test nothing (it always writes a `state`).
  */
 import 'fake-indexeddb/auto';
 import { COLLECTIONS } from '@smarttavern/core';
-import type { Message } from '@smarttavern/schema';
+import type { Message, Session, SessionState } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, resetDatabase, subscribe, write } from '../db/database';
 import {
@@ -29,6 +34,7 @@ import {
   readSessions,
   setHeadMessageId,
   writeProviderSettings,
+  writeSessionState,
 } from '../db/repository';
 
 let databases = 0;
@@ -131,6 +137,57 @@ describe('db/repository', () => {
 
     const chain = await getChain(session.id);
     expect(chain.map((message) => message.content)).toEqual(['a', 'b']);
+  });
+
+  it('completes a row written before Session.state existed, from initialClock (ADR-032)', async () => {
+    // The row is written the way the OLD code wrote it: a raw put with NO `state`.
+    // Going through `createSession` would test nothing, since it always writes one.
+    const session = await createSession({ title: '旧行' });
+    // Destructured rather than typed away: a spread of `Omit<Session, 'state'>` would
+    // still CARRY the state at runtime, which is exactly what this test must not do.
+    const { state: _droppedState, ...withoutState } = session;
+    await putRawSession({ ...withoutState, initialClock: 4321 });
+    // The read boundary is what makes the untrusted row usable: the clock is the
+    // session's own origin, and everything else is empty rather than invented.
+    const readBack = await getSession(session.id);
+    expect(readBack?.state).toEqual({
+      scene: { title: '', location: '', time: 4321 },
+      clock: 4321,
+      vars: {},
+      sheets: {},
+      deadlines: [],
+    });
+    expect(readBack?.initialClock).toBe(4321);
+    expect((await listSessions())[0]?.state.clock).toBe(4321);
+
+    // A malformed state is REPAIRED by the same rule rather than rejecting the row
+    // (the `readLocaleSetting` idiom): a half-trusted state is the bug this prevents.
+    await putRawSession({ ...withoutState, initialClock: 4321, state: { clock: 'not-a-number' } });
+    expect((await getSession(session.id))?.state.clock).toBe(4321);
+  });
+
+  it('round-trips the live state: a changed clock and vars survive a restart', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const advanced: SessionState = {
+      ...session.state,
+      scene: { title: 'The inn', location: 'Silverpine', time: 90 },
+      clock: 90,
+      vars: { weather: 'snow', danger: 3 },
+    };
+    await writeSessionState(session.id, advanced);
+
+    // "Restart": close this connection and open a NEW adapter over the same name, so
+    // the assertion runs through the real read path and not against an in-memory copy.
+    closeDatabase();
+    resetDatabase(databaseName);
+
+    const reloaded = await getSession(session.id);
+    expect(reloaded?.state.clock).toBe(90);
+    expect(reloaded?.state.vars).toEqual({ weather: 'snow', danger: 3 });
+    expect(reloaded?.state.scene.time).toBe(90);
+    // The origin is NOT overwritten: the live clock is a different field now, and the
+    // default state's clock is the only thing derived from `initialClock`.
+    expect(reloaded?.initialClock).toBe(0);
   });
 
   it('round-trips the provider settings, including the key', async () => {
@@ -255,5 +312,16 @@ describe('db/repository', () => {
 async function putRawMessage(row: Message): Promise<void> {
   await write(async (tx) => {
     await tx.collection<Message>(COLLECTIONS.messages).put(row);
+  });
+}
+
+/**
+ * Write one session row exactly as given — the ONLY way to build a row the current
+ * typed writer cannot produce (ADR-032's pre-`state` row). Typing it as a `Session`
+ * would be the same lie the test exists to disprove, hence the open record.
+ */
+async function putRawSession(row: Record<string, unknown>): Promise<void> {
+  await write(async (tx) => {
+    await tx.collection<Session>(COLLECTIONS.sessions).put(row as unknown as Session);
   });
 }

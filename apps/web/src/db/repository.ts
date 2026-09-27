@@ -56,6 +56,7 @@
 import { COLLECTIONS, type Collection, type RowBase, type Tx } from '@smarttavern/core';
 import { isLocale, type Locale } from '@smarttavern/i18n';
 import {
+  defaultSessionState,
   type Id,
   type JsonValue,
   type Message,
@@ -63,6 +64,8 @@ import {
   mintUuidV7,
   type Session,
   SessionSchema,
+  type SessionState,
+  SessionStateSchema,
 } from '@smarttavern/schema';
 import {
   type FontScale,
@@ -409,6 +412,11 @@ const DEFAULT_SAMPLING = { temperature: 0.7, topP: 1 } as const;
  * overwrites `refs.modelConfig` with what the user actually configured
  * (`recordSessionModel`) — and the alternative (refusing to create a session until
  * a key exists) would make 「新建会话」 the thing that blocks the wizard.
+ *
+ * THE LIVE STATE STARTS AS THE ORIGIN (ADR-032): `state` is required too, and a
+ * brand-new session has nothing recorded, so it is `defaultSessionState(initialClock)`
+ * — the scene unnamed, the clock at the world's start minute. That is a real value
+ * from the first turn on, which is what lets a restart find the clock again.
  */
 export async function createSession(options: { title: string }): Promise<Session> {
   const timestamp = Date.now();
@@ -426,9 +434,12 @@ export async function createSession(options: { title: string }): Promise<Session
         params: { ...DEFAULT_SAMPLING },
       },
     },
-    // 0 is the calendar epoch. The live clock is `SessionState.clock`, which is an
-    // M1/M3 concern; the session only has to remember where it started.
+    // 0 is the calendar epoch, and a session created here starts at it: the LIVE
+    // clock is `session.state.clock` (ADR-032), which begins at this same minute and
+    // is what `clockOf` reads from now on. `initialClock` stays the origin the
+    // default state is derived from, so it is not deleted.
     initialClock: 0,
+    state: defaultSessionState(0),
     schedulerMode: 'user',
     headMessageId: null,
     createdAt: timestamp,
@@ -440,19 +451,80 @@ export async function createSession(options: { title: string }): Promise<Session
   return session;
 }
 
+/**
+ * Complete one stored session row at the READ boundary (ADR-032's addendum).
+ *
+ * WHY THE READER DOES THIS AND NOT A `migrations` ROW
+ * `Session.state` became required in ADR-032, but rows written before that (M0 /
+ * early M1) have no `state` field, and a session without a clock, a scene or
+ * variables cannot be played. This is the same rule `readLocaleSetting` follows for
+ * a corrupt locale: the reader is where an untrusted row becomes a trustworthy
+ * value, so an absent — or unusable — `state` is COMPLETED with
+ * `defaultSessionState(initialClock)` instead of rejecting the whole row and
+ * taking the transcript down with it. It is a derivation, not a meaning change,
+ * which is why no migration row is needed; the next write persists the completed
+ * value naturally (`writeSessionState`, `setHeadMessageId`).
+ *
+ * WHY THIS TAKES A LOOSE SHAPE AND NOT A `Session`
+ * The whole point is that the incoming row is NOT a trustworthy `Session` — that is
+ * what "written before the field existed" means — so declaring the parameter as one
+ * would be the same lie this function disproves. Two optional `unknown` fields are
+ * the honest description of "a row that may or may not carry a state and a clock",
+ * and a real `Session` still satisfies it.
+ */
+function completeState(row: { state?: unknown; initialClock?: unknown }): SessionState {
+  const parsed = SessionStateSchema.safeParse(row.state);
+  if (parsed.success) return parsed.data;
+  // The clock is read defensively because this helper exists for rows nobody
+  // validated: a row whose `initialClock` is itself broken gets the epoch rather
+  // than a `NaN` that would silently poison every later comparison. A row that
+  // KEEPS a malformed state is repaired rather than merged field by field — a
+  // half-trusted state is exactly the "app shows a stale clock" bug this prevents.
+  return defaultSessionState(
+    typeof row.initialClock === 'number' && Number.isFinite(row.initialClock)
+      ? row.initialClock
+      : 0,
+  );
+}
+
 /** One session, or `undefined` when the id was never stored (or was deleted). */
 export async function getSession(sessionId: Id): Promise<Session | undefined> {
-  const row = await readTable<Session>(COLLECTIONS.sessions).get(sessionId);
-  return row === undefined ? undefined : SessionSchema.parse(row);
+  const row = await readTable<Record<string, unknown>>(COLLECTIONS.sessions).get(sessionId);
+  if (row === undefined) return undefined;
+  return SessionSchema.parse({ ...row, state: completeState(row) });
 }
 
 /** Newest first — `sessions.createdAt` is the index docs/02 §7 gives for this. */
 export async function listSessions(): Promise<Session[]> {
-  const rows = await readTable<Session>(COLLECTIONS.sessions)
+  const rows = await readTable<Record<string, unknown>>(COLLECTIONS.sessions)
     .orderBy('createdAt')
     .reverse()
     .toArray();
-  return rows.map((row) => SessionSchema.parse(row));
+  return rows.map((row) => SessionSchema.parse({ ...row, state: completeState(row) }));
+}
+
+/**
+ * Store a session's live state (ADR-032) — the write half of the pair whose read
+ * half is `getSession`.
+ *
+ * WHY IT READS THE ROW FIRST: a session row is written whole (`put` replaces it),
+ * so a writer must not lose the fields it is not changing — `refs`, `headMessageId`
+ * and `createdAt` are not this function's business. The row is completed through
+ * `completeState` on the way in for the same reason as on the way out: a state
+ * write on a pre-ADR-032 row must not be the operation that makes it unreadable.
+ *
+ * WHY IT IS NOT PART OF `setHeadMessageId`: the two are different facts written at
+ * different moments (a turn advances the transcript tip; the clock and variables
+ * move when the engine says so), and a caller that only moves the head must not
+ * have to invent a state to do it. Both are one `put` in one transaction.
+ */
+export async function writeSessionState(sessionId: Id, state: SessionState): Promise<void> {
+  await write(async (tx) => {
+    const row = await sessionsOf(tx).get(sessionId);
+    if (row === undefined) return;
+    const session = SessionSchema.parse({ ...row, state: completeState(row) });
+    await sessionsOf(tx).put({ ...session, state, updatedAt: Date.now() });
+  });
 }
 
 /**
@@ -471,7 +543,7 @@ export async function recordSessionModel(
   await write(async (tx) => {
     const row = await sessionsOf(tx).get(sessionId);
     if (row === undefined) return;
-    const session = SessionSchema.parse(row);
+    const session = SessionSchema.parse({ ...row, state: completeState(row) });
     await sessionsOf(tx).put({
       ...session,
       refs: {
@@ -532,12 +604,19 @@ export async function getMessage(messageId: Id): Promise<Message | undefined> {
   return row === undefined ? undefined : MessageSchema.parse(row);
 }
 
-/** Advance the transcript tip. `null` means "the transcript is empty again". */
+/**
+ * Advance the transcript tip. `null` means "the transcript is empty again".
+ *
+ * The row is completed through `completeState` first, exactly like `writeSessionState`:
+ * this write happens on EVERY turn, so it is also the write that persists a default
+ * derived at the read boundary (ADR-032) — and it must never be the write that
+ * rejects a row written before `Session.state` existed.
+ */
 export async function setHeadMessageId(sessionId: Id, headMessageId: Id | null): Promise<void> {
   await write(async (tx) => {
     const row = await sessionsOf(tx).get(sessionId);
     if (row === undefined) return;
-    const session = SessionSchema.parse(row);
+    const session = SessionSchema.parse({ ...row, state: completeState(row) });
     await sessionsOf(tx).put({ ...session, headMessageId, updatedAt: Date.now() });
   });
 }

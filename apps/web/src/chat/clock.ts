@@ -11,14 +11,19 @@
  * `packages/i18n` exists — and the wording it wraps around the parts comes from the
  * catalogs, while the month and segment names stay the world's own authored data.
  *
- * WHY THE CLOCK IS `session.initialClock`
- * docs/02 §5.7 puts the LIVE time in `SessionState.clock`, and `SessionState` is an
- * M1-T4/M1-M1 concern: this app has no `sessionStates` row yet (`db/repository.ts`
- * writes sessions and messages only). `Session.initialClock` is the one clock a
- * session actually carries — "the world's `startMinute`, copied here so the session
- * owns its origin" — so it is what the clock shows and what enters the prompt until
- * a checkpoint row exists. Reading it in ONE place (`clockOf`) is what makes the
- * swap to `SessionState.clock` a change here instead of at every call site.
+ * WHY THE CLOCK IS `session.state.clock` (ADR-032)
+ * docs/02 §5.7 puts the LIVE time in `SessionState.clock`, and ADR-032 gave
+ * `SessionState` a persistence slot: `Session.state`, required, completed at the
+ * read boundary for rows written before the field existed. So the clock the app
+ * shows and prompts with is the session's own live state — the value a turn
+ * advances and a checkpoint snapshots — and NOT `Session.initialClock`, which is
+ * still here and still means something narrower: the world's `startMinute`, the
+ * origin this session began at and the minute every derived default state starts
+ * from (`defaultSessionState`). It never moves, so it must not be deleted, and it
+ * must not be shown as "now" either.
+ *
+ * Reading it in ONE place (`clockOf`) is what made that swap a change here rather
+ * than at every call site.
  *
  * WHERE THIS MODULE SITS. It is the seam between three layers that must not import
  * each other: `@smarttavern/core` (the engine, which computes), the app's built-in
@@ -43,7 +48,7 @@ import { BUILTIN_CALENDAR, type BuiltinSlot } from './builtin-content';
 
 /** The clock reading of a session, as structured parts. See the header for `initialClock`. */
 export function clockOf(session: Session): ClockDisplay {
-  return clockDisplay(BUILTIN_CALENDAR, session.initialClock);
+  return clockDisplay(BUILTIN_CALENDAR, session.state.clock);
 }
 
 /**

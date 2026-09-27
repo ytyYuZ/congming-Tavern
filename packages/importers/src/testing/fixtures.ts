@@ -258,6 +258,17 @@ export function session(overrides: SessionOverrides = {}): Session {
       modelConfig: { provider: 'mock', model: 'mock-1', params: { temperature: 0.8, topP: 0.9 } },
     },
     initialClock: 1000,
+    // The LIVE state (ADR-032). Deliberately NOT the checkpoint below (`clock` 1120):
+    // a package whose live state has moved past its last save point is the normal
+    // case, and it is what makes `state.json` distinguishable from
+    // `checkpoints.json` in a round-trip test.
+    state: {
+      scene: { title: 'The lamp room', location: 'Lighthouse', time: 1140 },
+      clock: 1140,
+      vars: { wind: 'strong' },
+      sheets: {},
+      deadlines: [],
+    },
     schedulerMode: 'rules',
     headMessageId: FIXTURE.messages[2],
     createdAt: FIXTURE.base + 100,

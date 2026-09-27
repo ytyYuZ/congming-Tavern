@@ -118,8 +118,14 @@ describe('docs/04 §12 contract regression (import/export)', () => {
         .map((row) => `${row.id}<-${row.parentId ?? 'root'}:${row.speakerId ?? '-'}`),
     ).toEqual(['m-1<-root:-', `m-2<-m-1:${FIXTURE.playerId}`, `m-3<-m-2:${FIXTURE.npcId}`]);
 
-    // The clock: a checkpoint carries the full state (docs/04 §6), so this IS the
-    // restored clock — there is no sessionStates collection to read it from.
+    // The clock, twice over: the SESSION row carries the live state (ADR-032 — the
+    // "now"), and the checkpoint carries its own full snapshot (docs/04 §6 — the
+    // "then"). They are separate facts and an import must restore both.
+    const session = only(target.peek<Session>(COLLECTIONS.sessions));
+    expect(`${session.initialClock}:${session.state.clock}:${session.state.scene.time}`).toBe(
+      '1000:1140:1140',
+    );
+    expect(session.state.vars).toEqual({ wind: 'strong' });
     const checkpoint = only(target.peek<Checkpoint>(COLLECTIONS.checkpoints));
     expect(`${checkpoint.id}:${checkpoint.state.clock}:${checkpoint.state.scene.time}`).toBe(
       'cp-1:1120:1120',

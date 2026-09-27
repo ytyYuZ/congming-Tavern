@@ -7,8 +7,10 @@
  *    `playerCharacter` must be a pinned reference rather than a flag;
  * 2. every reference is pinned to a version, so an old save cannot silently
  *    re-render after the world is edited;
- * 3. `SessionState` is the whole save payload (docs/04 §6), so it is checked for
- *    the clock, inner clock, vars, sheets and deadlines independently.
+ * 3. `SessionState` is the whole save payload (docs/04 §6) AND the live state on the
+ *    session row itself (`Session.state`, ADR-032), so it is checked for the clock,
+ *    inner clock, vars, sheets and deadlines independently — and the row's `state`
+ *    is checked to be REQUIRED and distinct from `initialClock`.
  */
 import { describe, expect, it } from 'vitest';
 import { UUID_V7_PATTERN } from '../common';
@@ -29,6 +31,29 @@ const NPC_ID = '0192f0a1-7c3d-7a4e-9b21-5c8f0d3a1c04';
 const MESSAGE_ID = '0192f0a1-7c3d-7a4e-9b21-5c8f0d3a1c05';
 const NOW = 1_790_000_000_000;
 
+const fullDeadline = {
+  id: 'ritual',
+  label: '仪式开始',
+  dueMinute: 1_002_000,
+  kind: 'countdown',
+  targetId: NPC_ID,
+  status: 'active',
+};
+
+/**
+ * The live state a session row carries (ADR-032). Defined BEFORE `fullSession`
+ * because the session fixture embeds it, and re-used by the `SessionState` cases
+ * below so the two cannot describe different states.
+ */
+const fullState = {
+  scene: { title: '雪夜旅店', location: '银松镇·旅店', time: 1_000_120 },
+  clock: 1_000_120,
+  innerClock: { kind: 'round', current: 2, total: 10, secondsPerRound: 6, note: '酒馆混战' },
+  vars: { 天气: '暴雪', 威胁: 3, 已发现灯塔: true },
+  sheets: { [NPC_ID]: { hp: 12, conditions: ['疲惫'] } },
+  deadlines: [fullDeadline],
+};
+
 const fullRefs = {
   world: { id: WORLD_ID, version: 3 },
   playerCharacter: { id: PLAYER_ID, version: 1 },
@@ -46,29 +71,14 @@ const fullSession = {
   id: SESSION_ID,
   title: '银松镇的第一个冬天',
   refs: fullRefs,
+  // The origin, deliberately EARLIER than the live clock in `fullState`: a fixture
+  // where the two are equal would not catch a reader that used the wrong one.
   initialClock: 1_000_000,
+  state: fullState,
   schedulerMode: 'rules',
   headMessageId: MESSAGE_ID,
   createdAt: NOW,
   updatedAt: NOW,
-};
-
-const fullDeadline = {
-  id: 'ritual',
-  label: '仪式开始',
-  dueMinute: 1_002_000,
-  kind: 'countdown',
-  targetId: NPC_ID,
-  status: 'active',
-};
-
-const fullState = {
-  scene: { title: '雪夜旅店', location: '银松镇·旅店', time: 1_000_120 },
-  clock: 1_000_120,
-  innerClock: { kind: 'round', current: 2, total: 10, secondsPerRound: 6, note: '酒馆混战' },
-  vars: { 天气: '暴雪', 威胁: 3, 已发现灯塔: true },
-  sheets: { [NPC_ID]: { hp: 12, conditions: ['疲惫'] } },
-  deadlines: [fullDeadline],
 };
 
 /* ──────────────────────────────── helpers ────────────────────────────────── */
@@ -189,12 +199,27 @@ describe('session', () => {
       'title',
       'refs',
       'initialClock',
+      'state',
       'schedulerMode',
       'headMessageId',
       'createdAt',
       'updatedAt',
     ]);
     expect(SessionSchema.safeParse({ ...fullSession, title: '' }).success).toBe(false);
+  });
+
+  it('requires a well-formed live state and keeps it distinct from initialClock (ADR-032)', () => {
+    // The live state is REQUIRED: a session without a clock, a scene or variables
+    // cannot be played, and the read boundary (not the schema) is what completes a
+    // row written before the field existed.
+    expect(SessionSchema.safeParse({ ...fullSession, state: undefined }).success).toBe(false);
+    expect(SessionSchema.safeParse({ ...fullSession, state: {} }).success).toBe(false);
+    expect(SessionSchema.safeParse({ ...fullSession, state: { clock: 1 } }).success).toBe(false);
+
+    const parsed = SessionSchema.parse(fullSession);
+    expect(parsed.state).toEqual(fullState);
+    // Two clocks, two meanings: the origin never moves, the live clock does.
+    expect(parsed.initialClock).not.toBe(parsed.state.clock);
   });
 
   it('rejects an unknown scheduler mode rather than guessing', () => {

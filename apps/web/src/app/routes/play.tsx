@@ -22,9 +22,10 @@
  * session is open — the play screen — and deliberately absent from the home list and
  * the settings form, which belong to no world. Putting it in the shared header would
  * mean a clock with no session to read a minute from, which is why the absence is a
- * decision rather than an oversight. It reads `session.initialClock` through
- * `chat/clock.ts` (`clockOf`), the same function the prompt's clock comes from, so the
- * date on screen and the date in the request cannot disagree.
+ * decision rather than an oversight. It reads `session.state.clock` — the session's
+ * LIVE minute (ADR-032) — through `chat/clock.ts` (`clockOf`), the same function the
+ * prompt's clock comes from, so the date on screen and the date in the request cannot
+ * disagree.
  *
  * WHY THE COMPOSER'S TEXT IS LOCAL STATE AND THE STORE'S IS NOT
  * A half-typed message is not conversation state: it must not survive a session

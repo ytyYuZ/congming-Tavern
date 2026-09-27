@@ -12,18 +12,23 @@
  * The suite also covers the two import-flow branches `docs/04` §7 names but the
  * §12 clauses do not: the user's cherry-pick (step 7) and a missing dependency
  * (step 6).
+ *
+ * AND `state.json` (ADR-032): it is the session's LIVE state on the session row, so
+ * it must survive the trip on its own terms — equal to the exported session's
+ * `state`, distinct from the newest checkpoint, and written back into the session
+ * row on the way in. The fixture's live clock (1140) deliberately differs from its
+ * checkpoint's (1120) so a test cannot pass by reading the wrong one.
  */
 import { COLLECTIONS } from '@smarttavern/core';
 import type {
   CharacterVersion,
-  Checkpoint,
   Session,
+  SessionState,
   World,
   WorldbookEntry,
   WorldVersion,
 } from '@smarttavern/schema';
 import { describe, expect, it } from 'vitest';
-import { canonicalJsonBytes } from './canonical-json';
 import { exportCharacterPackage, exportWorldPackage } from './export-package';
 import { FIXTURE, seedLibrary } from './testing/fixtures';
 import {
@@ -227,38 +232,63 @@ describe('export → import → export', () => {
     expect(report.counts).toEqual({ created: 0, reused: 0, remapped: 0, skipped: 0 });
   });
 
-  it('a state.json no checkpoint agrees with is reported, and the checkpoint wins', async () => {
+  it('state.json is the session’s LIVE state, and an import writes it back into the session row', async () => {
+    // ADR-032: the live state is `Session.state` on the session row — "now" — and a
+    // checkpoint is a snapshot in its own collection — "then". The fixture proves the
+    // two are NOT the same value (live 1140 vs checkpoint 1120), so a test that
+    // accepted either one would be caught here.
+    const source = emptyLibrary();
+    seedLibrary(source);
+    const row = source.peek<Session>(COLLECTIONS.sessions)[0];
+    if (row === undefined) throw new Error('the fixture library has no session');
+    // Move the live clock PAST the last save point, which is the whole point of
+    // storing it separately: time between two manual saves has nowhere else to live.
+    const liveState: SessionState = {
+      ...row.state,
+      scene: { title: 'The cliff path', location: 'Silverpine', time: 9999 },
+      clock: 9999,
+      vars: { mood: 'wary' },
+    };
+    source.seed(COLLECTIONS.sessions, [{ ...row, state: liveState }]);
+
+    const { bytes } = await exportSession(source);
+
+    // (1) `state.json` IS the exported session's live state, value for value.
+    expect(payloadOf(bytes, 'data/state.json')).toEqual(liveState);
+    // ...while the checkpoint still carries its own snapshot, untouched.
+    const checkpoints = payloadOf(bytes, 'data/checkpoints.json') as { state: SessionState }[];
+    expect(checkpoints[0]?.state.clock).toBe(1120);
+
+    // (2) An import puts it back on the session row, through the real import path.
+    const target = emptyLibrary();
+    const report = await importInto(target, bytes);
+
+    expect(report.ok).toBe(true);
+    expect(report.findings).toEqual([]);
+    expect(target.peek<Session>(COLLECTIONS.sessions)[0]?.state.clock).toBe(9999);
+    expect(target.peek<Session>(COLLECTIONS.sessions)[0]?.state.vars).toEqual({ mood: 'wary' });
+  });
+
+  it('a state.json with no session to carry it is reported (ADR-032)', async () => {
+    // The state now lives ON the session row, so a package whose session was
+    // cherry-picked away has nowhere to put it. That is worth a warning rather than a
+    // silent drop — the import still succeeds, it just cannot store the clock.
     const { bytes } = await firstSession();
     const patched = await repackage(bytes, (files) => {
-      const state = payloadOf(bytes, 'data/state.json') as { clock: number };
-      files.set('data/state.json', canonicalJsonBytes({ ...state, clock: 9999 }));
+      files.delete('data/session.json');
     });
 
     const target = emptyLibrary();
     const report = await importInto(target, patched);
 
     expect(report.ok).toBe(true);
-    expect(report.findings.map((finding) => finding.code)).toEqual(['import-state-mismatch']);
-    // docs/04 §6: a checkpoint carries the full state snapshot, so it is the source.
-    const checkpoint = target.peek<Checkpoint>(COLLECTIONS.checkpoints)[0];
-    expect(checkpoint?.state.clock).toBe(1120);
-  });
-
-  it('a session package with no checkpoint reports that its state cannot be stored', async () => {
-    const source = emptyLibrary();
-    seedLibrary(source);
-    const bytes = await repackage((await exportSession(source)).bytes, (files) => {
-      // A package whose session has no save point: §5 allows it (there is simply
-      // nothing to restore a clock from).
-      files.delete('data/checkpoints.json');
-    });
-
-    const report = await importInto(emptyLibrary(), bytes);
-
-    expect(report.ok).toBe(true);
+    // The state is the finding under test; the message/agenda references to the
+    // session that is no longer in the package are reported too (and that is correct
+    // — they now dangle), so this asserts the code is present rather than alone.
     expect(report.findings.map((finding) => finding.code)).toContain(
-      'import-state-without-checkpoint',
+      'import-state-without-session',
     );
+    expect(target.peek<Session>(COLLECTIONS.sessions)).toEqual([]);
   });
 
   it('an unreadable container is refused as a finding, not as a crash', async () => {
