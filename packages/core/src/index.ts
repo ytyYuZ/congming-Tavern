@@ -17,6 +17,20 @@
 export const CORE_PACKAGE = '@smarttavern/core' as const;
 
 /**
+ * The prompt composer (`docs/02` §5.1, M1-G4): the §5.1 assembly order, the
+ * macro registry and the token budget with its priority trim. Pure functions
+ * over the ADR-029 `PromptPreset` — it defines no block shape of its own and
+ * does no I/O.
+ */
+export * from './engine/prompt';
+/**
+ * The world clock (`docs/02` §5.7, M1-T1). Pure functions only: `advance`,
+ * `setTime`, `display`, `segmentOf`, `fireDue` and the deadline sweep, plus the
+ * calendar arithmetic they are built on. See `./engine/time` for what is
+ * deliberately not there (`innerClock`, the `advance_time` policy).
+ */
+export * from './engine/time';
+/**
  * The port contracts (docs/02 §6, §13 #3/#7/#8) and their in-memory test
  * doubles. Re-exported from the entry point so an adapter package imports one
  * specifier; `./ports/mock` stays reachable through the barrel for tests.
