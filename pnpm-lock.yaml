@@ -300,7 +300,14 @@ importers:
 
   packages/ui: {}
 
-  tools/stpack-cli: {}
+  tools/stpack-cli:
+    dependencies:
+      '@smarttavern/packages':
+        specifier: workspace:*
+        version: link:../../packages/packages
+      '@smarttavern/schema':
+        specifier: workspace:*
+        version: link:../../packages/schema
 
 packages:
 
