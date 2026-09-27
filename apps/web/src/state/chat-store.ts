@@ -11,12 +11,20 @@
  * row — plus `status`, the turn's lifecycle.
  *
  * WHY THE PROVIDER CONFIGURATION IS READ AT SEND TIME AND NOT HELD
- * `send()` calls `useSettingsStore.getState().provider` when the turn starts. A copy
- * held here would go stale the moment the user edits the setup form, and a saved key
- * that the running turn does not use is exactly the kind of bug that looks like "the
- * model ignored my key". Nothing here logs, and the configuration is passed straight
- * into `sendTurn`, which hands it to the adapter and nowhere else (HANDOFF §4.1
- * invariant 6).
+ * `send()` calls `useSettingsStore.getState()` when the turn starts. A copy held here
+ * would go stale the moment the user edits the setup form, and a saved key that the
+ * running turn does not use is exactly the kind of bug that looks like "the model
+ * ignored my key". Nothing here logs, and the configuration is passed straight into
+ * `sendTurn`, which hands it to the adapter and nowhere else (HANDOFF §4.1 invariant 6).
+ *
+ * WHY THE LOCKED CASE IS CHECKED BEFORE ANYTHING IS SENT (M1-G3)
+ * Since the key can be encrypted at rest, "there is a key and this tab cannot read it" is
+ * a state a turn can start in. Sending anyway would drop the `Authorization` header and
+ * the provider would answer `auth` — the user would be told their key is WRONG when it is
+ * only locked, and would go looking in the wrong place. So the turn is refused locally
+ * with its own code (`error.keyLocked`) and nothing leaves the device. The check sits
+ * AFTER the "not configured" one because a missing endpoint is the more fundamental
+ * problem: an unlocked key with no endpoint still cannot send.
  *
  * WHY THE ABORT SIGNAL IS A MODULE VARIABLE
  * `AbortController` is not serialisable and belongs to the running turn, not to
@@ -37,9 +45,9 @@ import { create } from 'zustand';
 import { sendTurn } from '../chat/send-turn';
 import { subscribe } from '../db/database';
 import { createSession, getSession, readChain, readSessions } from '../db/repository';
-import { messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
+import { KEY_LOCKED_CODE, messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
 import { translate } from '../i18n/translate';
-import { isProviderReady, type ProviderSettings, useSettingsStore } from './settings-store';
+import { isProviderReady, useSettingsStore } from './settings-store';
 
 /** The turn lifecycle: nothing in flight, a stream arriving, or the last turn failed. */
 export type ChatStatus = 'idle' | 'streaming' | 'error';
@@ -247,13 +255,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
       fail('unknown', 'error.notInitialized', false);
       return;
     }
-    const config: ProviderSettings = useSettingsStore.getState().provider;
-    if (!isProviderReady(config)) {
+    const settings = useSettingsStore.getState();
+    if (!isProviderReady(settings.provider)) {
       // Its own code so the banner can name the missing settings instead of the
       // catch-all (`i18n/error-keys.ts`).
       fail(NOT_CONFIGURED_CODE, 'error.notConfigured', false);
       return;
     }
+    if (settings.locked) {
+      // A key EXISTS and cannot be read (M1-G3). The request must not go out: an omitted
+      // `Authorization` header would come back as `auth`, telling the user their key is
+      // wrong when it is only locked — a wrong explanation of a local fact. Nothing is
+      // sent and the banner names the fix.
+      fail(KEY_LOCKED_CODE, 'error.keyLocked', false);
+      return;
+    }
+    // The key travels in this object and nowhere else. `settings.key` is absent only for
+    // "no key stored", which is the documented way to reach a local Ollama or vLLM:
+    // `OpenAICompatibleOptions.apiKey` documents an empty string as "send no
+    // `Authorization` header", which is exactly what `''` produces here.
+    const config = {
+      baseUrl: settings.provider.baseUrl,
+      apiKey: settings.key ?? '',
+      model: settings.provider.model,
+    };
 
     controller = new AbortController();
     set({ status: 'streaming', error: undefined, draft: { ...IDLE_DRAFT } });

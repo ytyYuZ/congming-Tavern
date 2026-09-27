@@ -107,6 +107,56 @@ export const zhCN = {
    * the unit the settings are stored and shown in (a multiplier `1.15` reads as `115%`).
    */
   'setup.percentValue': '{percent}%',
+  /*
+   * THE MODEL LIST (M1-G3) — the endpoint's own `GET /models` answer, offered beside the
+   * free-text model field.
+   *
+   * WHY THE SENTENCES ARE SEPARATED BY OUTCOME: an unreachable endpoint, an HTTP error
+   * and an EMPTY list are three different facts about three different fixes, and the one
+   * thing a picker must not do is imply "no models exist" when it means "I could not ask"
+   * (`chat/providers.ts` records the whole argument). `setup.modelSavedMissing` is the
+   * decision this feature had to make — the saved model is KEPT and flagged rather than
+   * replaced, because the string is pinned by session history and a `/models` list is not
+   * authoritative — so its wording says "kept" explicitly.
+   */
+  'setup.modelsFetch': '获取模型列表',
+  'setup.modelsFetching': '获取中…',
+  'setup.modelsLoaded': '已获取 {count} 个模型',
+  'setup.modelsEmpty': '服务端返回了空列表；模型名仍可手动填写',
+  'setup.modelsUnreachable': '无法获取模型列表：服务地址不可达',
+  'setup.modelsHttpFailed': '无法获取模型列表：服务端返回 HTTP {status}',
+  'setup.modelChoicesLabel': '列表中的模型',
+  'setup.modelSavedMissing': '当前保存的模型不在该列表中，已保留',
+  'setup.modelsTruncated': '列表较长，只显示前 {shown} 个（共 {total} 个）；也可以直接输入模型名',
+  /*
+   * THE LOCAL KEY ENCRYPTION SECTION (M1-G3) — the passphrase flow.
+   *
+   * The policy these sentences state is decided in `apps/web/src/secrets/provider-secret.ts`:
+   * the passphrase is asked for when a key must be read or sealed and never in the
+   * background; cancelling changes nothing (a plaintext row stays plaintext, an envelope
+   * stays locked); a wrong passphrase is retryable and does not touch the stored row; and
+   * it is never cached, so a reload locks again. Every sentence below is that policy said
+   * to a person — `setup.passphraseHint` is the one that must not be dropped, because
+   * "forget it and the key is gone" is the fact a user has to know BEFORE typing one.
+   */
+  'setup.secretTitle': '本地密钥加密',
+  'setup.secretNone': '尚未保存密钥。',
+  'setup.secretPlaintext': '密钥目前以明文保存在本机数据库中。设置口令后将以 WebCrypto 加密存储。',
+  'setup.secretLocked': '密钥已加密并处于锁定状态：解锁后才能发送请求。',
+  'setup.secretUnlocked': '密钥已加密存储，并在本标签页内解锁；刷新页面后需要重新解锁。',
+  'setup.passphraseLabel': '口令',
+  'setup.passphrasePlaceholder': '至少 8 个字符',
+  'setup.passphraseHint':
+    '口令不会被保存，刷新页面后需要重新输入。忘记口令后无法恢复密钥，只能在下面重新填写密钥。',
+  'setup.passphraseSeal': '加密保存',
+  'setup.passphraseUnlock': '解锁',
+  'setup.passphraseLock': '锁定',
+  'setup.passphraseTooShort': '口令至少需要 8 个字符',
+  'setup.passphraseWrong': '口令不正确，密钥无法解密；存储内容未做任何修改',
+  'setup.passphraseUnavailable': '当前环境不支持 WebCrypto（需要安全上下文），无法加密',
+  'setup.secretNoSession': '当前标签页没有已解锁的口令',
+  'setup.secretUnreadable': '存储的密钥无法识别，请重新填写密钥',
+  'setup.secretStorageFailed': '保存失败，密钥未被修改',
 
   /* ── home: the session list ─────────────────────────────────────────────── */
   'home.newSession': '新建会话',
@@ -182,6 +232,15 @@ export const zhCN = {
    * that tells the user what to change.
    */
   'error.promptBudget': '本次请求超出模型上下文预算，未能发送。{detail}',
+  /*
+   * SHOWN, and the reason it exists at all (M1-G3): once the key is encrypted at rest,
+   * "the key is refused" and "the key is present but this tab has not unlocked it" become
+   * different failures with different fixes. Reporting the second as the first would be a
+   * lie the user cannot act on — the provider's own 401 would say the key is wrong when it
+   * is simply still locked (`state/chat-store.ts` picks this code before it builds a
+   * request, so nothing is sent).
+   */
+  'error.keyLocked': '密钥已加密且处于锁定状态，请到「设置」解锁后再发送',
 };
 
 /** Every key that must exist in every catalog, derived from the source of truth. */
@@ -238,6 +297,40 @@ export const en: Messages = {
   'setup.messageWidthLabel': 'Message width',
   'setup.percentValue': '{percent}%',
 
+  /* ── the model list, then the key encryption section (M1-G3) ────────────── */
+  'setup.modelsFetch': 'Fetch models',
+  'setup.modelsFetching': 'Fetching…',
+  'setup.modelsLoaded': 'Fetched {count} models',
+  'setup.modelsEmpty': 'The server returned an empty list. You can still type a model name.',
+  'setup.modelsUnreachable': 'Could not fetch the model list: the endpoint did not answer',
+  'setup.modelsHttpFailed': 'Could not fetch the model list: the server answered HTTP {status}',
+  'setup.modelChoicesLabel': 'Models in the list',
+  'setup.modelSavedMissing': 'The saved model is not in that list; it has been kept',
+  'setup.modelsTruncated':
+    'Long list: showing the first {shown} of {total}. You can also type a model name.',
+  'setup.secretTitle': 'Local key encryption',
+  'setup.secretNone': 'No key is stored yet.',
+  'setup.secretPlaintext':
+    'The key is currently stored in plain text in this device database. Set a passphrase to store it encrypted with WebCrypto.',
+  'setup.secretLocked': 'The key is encrypted and locked. Unlock it before sending a request.',
+  'setup.secretUnlocked':
+    'The key is stored encrypted and unlocked in this tab; you will need to unlock again after a reload.',
+  'setup.passphraseLabel': 'Passphrase',
+  'setup.passphrasePlaceholder': 'At least 8 characters',
+  'setup.passphraseHint':
+    'The passphrase is not saved, so you will be asked for it again after a reload. If you forget it the key cannot be recovered — enter a new key below instead.',
+  'setup.passphraseSeal': 'Encrypt',
+  'setup.passphraseUnlock': 'Unlock',
+  'setup.passphraseLock': 'Lock',
+  'setup.passphraseTooShort': 'A passphrase needs at least 8 characters',
+  'setup.passphraseWrong':
+    'Wrong passphrase: the key could not be decrypted. Nothing stored was changed.',
+  'setup.passphraseUnavailable':
+    'This environment has no WebCrypto (a secure context is required), so it cannot encrypt',
+  'setup.secretNoSession': 'No passphrase is unlocked in this tab',
+  'setup.secretUnreadable': 'The stored key is not readable; enter the key again',
+  'setup.secretStorageFailed': 'The save failed; the key was not changed',
+
   /* ── home ───────────────────────────────────────────────────────────────── */
   'home.newSession': 'New session',
   'home.creating': 'Creating…',
@@ -270,6 +363,7 @@ export const en: Messages = {
   'error.notConfigured': 'Enter the endpoint and model name in Settings first.',
   'error.localFailure': 'Unknown local error.',
   'error.promptBudget': 'This request is over the model budget, so it was not sent. {detail}',
+  'error.keyLocked': 'The key is encrypted and locked. Unlock it in Settings before sending.',
 };
 
 /**

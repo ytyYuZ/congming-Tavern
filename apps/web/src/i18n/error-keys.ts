@@ -52,6 +52,19 @@ export const NOT_CONFIGURED_CODE = 'not_configured';
  */
 export const PROMPT_BUDGET_CODE = 'prompt_budget_exceeded';
 
+/**
+ * The code `state/chat-store.ts` sets when a key IS stored but this tab has not unlocked
+ * it (M1-G3), so the turn is refused before any request is built.
+ *
+ * WHY IT IS NOT `NOT_CONFIGURED_CODE` AND NOT AN ADAPTER CODE: the configuration is
+ * complete — endpoint, model and a key all exist — and the adapter is never reached, so
+ * neither vocabulary describes it. Sending anyway would omit the `Authorization` header
+ * and the provider would answer `auth`, i.e. the user would be told their key is wrong
+ * when it is merely locked. Its own code is what lets the banner say the one thing that
+ * fixes it.
+ */
+export const KEY_LOCKED_CODE = 'key_locked';
+
 /** The sentence for anything the table does not know, including `'unknown'`. */
 export const GENERIC_ERROR_KEY: MessageKey = 'error.unknown';
 
@@ -71,6 +84,8 @@ export const ERROR_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
   [NOT_CONFIGURED_CODE]: 'error.notConfigured',
   /** Not an adapter code either: the composer refused before a request was built. */
   [PROMPT_BUDGET_CODE]: 'error.promptBudget',
+  /** Not an adapter code either: nothing was sent because this tab has not unlocked the key. */
+  [KEY_LOCKED_CODE]: 'error.keyLocked',
 };
 
 /** The catalog key whose sentence `code` should render. Never `undefined`. */

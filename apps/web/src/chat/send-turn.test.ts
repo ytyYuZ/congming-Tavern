@@ -16,18 +16,23 @@
 import 'fake-indexeddb/auto';
 import { renderParts } from '@smarttavern/core';
 import { createTranslator } from '@smarttavern/i18n';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, resetDatabase } from '../db/database';
+import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
 import {
   appendMessage,
   createSession,
   getSession,
+  listSessions,
+  readChain,
   readProviderSettings,
   setHeadMessageId,
   writeProviderSettings,
 } from '../db/repository';
 import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
+import { errorSentence } from '../state/chat-store';
 import { useLocaleStore } from '../state/locale-store';
+import { resetSettingsStore, useSettingsStore } from '../state/settings-store';
 import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
 import { clockOf, composeTurn, promptContext, promptSlots, worldClockText } from './clock';
 import { sendTurn } from './send-turn';
@@ -188,10 +193,16 @@ const CONFIG = { baseUrl: BASE_URL, apiKey: API_KEY, model: MODEL };
 let databases = 0;
 let databaseName = '';
 
+/** The passphrase the invariant-6 suite seals the row with; never persisted anywhere. */
+const PASSPHRASE = 'a-good-passphrase';
+
 beforeEach(() => {
   databases += 1;
   databaseName = `apps-web-send-turn-${databases}`;
   resetDatabase(databaseName);
+  // The tab's unlocked key lives outside the store (`secrets/provider-secret.ts`), so it has
+  // to be forgotten between cases or one test's unlock would be the next one's starting state.
+  resetSettingsStore();
   // The prompt's own clock block is assembled by the engine and carries no locale,
   // but the error sentences this file asserts DO come from the catalog. Pinning the
   // language makes the assertions independent of whatever the host browser reports,
@@ -200,56 +211,22 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  resetSettingsStore();
   // Close the connection, or the delete request below is blocked by it.
   closeDatabase();
   await deleteDatabase(databaseName);
 });
 
 /**
- * Every row of every store, as JSON.
- *
- * Read through the RAW IndexedDB API on purpose: the whole point of the invariant-6
- * assertions is that they do not go through the repository's own reader, which could
- * (in principle) be the thing dropping the key. This is what is actually on disk.
+ * Every row of every store, as JSON — through the RAW IndexedDB API on purpose
+ * (`db/raw-indexeddb.test-helpers.ts` holds the implementation and the argument): the whole
+ * point of the invariant-6 assertions is that they do not go through the repository's own
+ * reader, which could (in principle) be the thing dropping the key. That helper is shared
+ * with `secrets/provider-secret.test.ts`, so the two suites cannot disagree about what "on
+ * disk" means.
  */
-async function snapshotAllRows(): Promise<string> {
-  const database = await openRaw(databaseName);
-  try {
-    const names = Array.from(database.objectStoreNames);
-    const rows: unknown[] = [];
-    for (const name of names) {
-      const transaction = database.transaction(name, 'readonly');
-      rows.push(...(await request<unknown[]>(transaction.objectStore(name).getAll())));
-    }
-    return JSON.stringify(rows);
-  } finally {
-    database.close();
-  }
-}
 
-function openRaw(name: string): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const opening = indexedDB.open(name);
-    opening.onsuccess = () => resolve(opening.result);
-    opening.onerror = () => reject(opening.error);
-  });
-}
-
-function request<T>(source: IDBRequest): Promise<T> {
-  return new Promise((resolve, reject) => {
-    source.onsuccess = () => resolve(source.result as T);
-    source.onerror = () => reject(source.error);
-  });
-}
-
-function deleteDatabase(name: string): Promise<void> {
-  return new Promise((resolve) => {
-    const deletion = indexedDB.deleteDatabase(name);
-    deletion.onsuccess = () => resolve();
-    deletion.onerror = () => resolve();
-    deletion.onblocked = () => resolve();
-  });
-}
+/* ────────────────────────────────── tests ───────────────────────────────── */
 
 /** Poll until `predicate` holds. The fake wire records its signal synchronously. */
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -364,7 +341,7 @@ describe('sendTurn', () => {
     expect(result.assistantMessage?.content).toBe('部分回答');
     expect(result.assistantMessage?.extensions?.['x-aborted']).toBe(true);
     expect(result.headMessageId).toBe(result.assistantMessage?.id);
-    expect(await snapshotAllRows()).not.toContain('后面的内容');
+    expect(await snapshotAllRows(databaseName)).not.toContain('后面的内容');
     expect((await getSession(session.id))?.headMessageId).toBe(result.headMessageId);
   });
 
@@ -401,7 +378,7 @@ describe('sendTurn', () => {
     expect(result.headMessageId).toBe(result.userMessage.id);
     expect((await getSession(session.id))?.headMessageId).toBe(result.userMessage.id);
 
-    const snapshot = await snapshotAllRows();
+    const snapshot = await snapshotAllRows(databaseName);
     expect(snapshot).toContain('你好');
     expect(snapshot).not.toContain('"role":"assistant"');
   });
@@ -434,7 +411,7 @@ describe('sendTurn', () => {
     // (a) Nothing on disk contains the key BEFORE the user saves it: a defaulted
     //     baseUrl/apiKey/model written as a side effect of sending would be the leak
     //     this invariant exists to prevent.
-    expect(await snapshotAllRows()).not.toContain(API_KEY);
+    expect(await snapshotAllRows(databaseName)).not.toContain(API_KEY);
     // (b) The message metadata — the field the port's own docs call out — is clean.
     expect(JSON.stringify(result.assistantMessage?.meta)).not.toContain(API_KEY);
     expect(JSON.stringify(result.assistantMessage?.extensions ?? {})).not.toContain(API_KEY);
@@ -443,10 +420,19 @@ describe('sendTurn', () => {
 
     // (d) After the user saves it, it is in the settings row and NOWHERE else. Counting
     //     occurrences is what makes "nowhere else" checkable: exactly one row holds it,
-    //     so any second copy anywhere in the database changes the count.
-    await writeProviderSettings(CONFIG);
-    expect((await readProviderSettings()).apiKey).toBe(API_KEY);
-    const rows = await snapshotAllRows();
+    //     so any second copy anywhere in the database changes the count. (M1-G3 seals the
+    //     same row with WebCrypto; the plaintext form is the documented fallback and the
+    //     encrypted form is proven in `secrets/provider-secret.test.ts`.)
+    await writeProviderSettings({
+      baseUrl: CONFIG.baseUrl,
+      model: CONFIG.model,
+      secret: { kind: 'plaintext', apiKey: CONFIG.apiKey },
+    });
+    expect((await readProviderSettings()).secret).toEqual({
+      kind: 'plaintext',
+      apiKey: API_KEY,
+    });
+    const rows = await snapshotAllRows(databaseName);
     expect(rows.split(API_KEY)).toHaveLength(2);
   });
 
@@ -464,7 +450,7 @@ describe('sendTurn', () => {
     expect(result.error?.code).toBe('auth');
     expect(result.error?.message).not.toContain(API_KEY);
     expect(JSON.stringify(result)).not.toContain(API_KEY);
-    expect(await snapshotAllRows()).not.toContain(API_KEY);
+    expect(await snapshotAllRows(databaseName)).not.toContain(API_KEY);
   });
 
   it('chains a continuation onto the stored head, including across a branch', async () => {
@@ -606,5 +592,154 @@ describe('the engines are wired in', () => {
 
     expect(worldClockText(reading, createTranslator('zh-CN').t)).toBe(`当前 ${date}（晨）`);
     expect(worldClockText(reading, createTranslator('en').t)).toBe(`Now ${date} (晨)`);
+  });
+});
+
+/* ───────────────── the four surfaces the key must never reach (M1-G3) ───────────────── */
+
+/**
+ * HANDOFF §4.1 invariant 6, as four assertions rather than one sentence.
+ *
+ * The single test above proves the key stays out of the ROWS a turn writes. M1-G3 widens the
+ * surface — the key now has a passphrase, a ciphertext and an unlock session — so each way it
+ * could escape is checked where it could escape:
+ *   (a) an exported `.stpack`
+ *   (b) a log
+ *   (c) `Message.meta`
+ *   (d) user-facing error text, including a gateway that echoes the key back
+ *
+ * WHY (a) IS PROVEN AT THE SOURCE, AND WHAT THAT DOES AND DOES NOT COVER
+ * `apps/web` declares no dependency on `@smarttavern/importers` (there is no workspace link for
+ * it), so this file cannot run the exporter. The export side is therefore proven where the
+ * exporter lives — `packages/importers/src/export-secrets.test.ts` shows that `settings` and
+ * `providers` are never opened by an export at all — and the APP side is proven here, one level
+ * upstream: an export can only copy bytes that are in the database, so the assertion is that
+ * after the Web-side migration the plaintext key exists in NO row of ANY collection. That is
+ * strictly stronger than checking the exporter's own collection list, and it needs no import.
+ */
+describe('invariant 6: the key cannot reach an export, a log, a meta or an error text', () => {
+  /** One stored turn, so the assertions below run against a database that has content. */
+  async function runOneTurn(): Promise<void> {
+    const session = await createSession({ title: 'invariant-6' });
+    const wire = fakeWire(() => sseResponse(['回答']));
+    await sendTurn(
+      { config: CONFIG, transport: wire.fetch },
+      { sessionId: session.id, text: '问题', signal: new AbortController().signal },
+    );
+  }
+
+  it('(a) leaves no plaintext for an exported package to copy, once the row is sealed', async () => {
+    await runOneTurn();
+
+    // The documented fallback first (M0's row): the key IS on disk in the clear, exactly once —
+    // in the one row an exporter never reads — and nowhere else.
+    await writeProviderSettings({
+      baseUrl: BASE_URL,
+      model: MODEL,
+      secret: { kind: 'plaintext', apiKey: API_KEY },
+    });
+    expect((await snapshotAllRows(databaseName)).split(API_KEY)).toHaveLength(2);
+
+    // Now seal it: the number of copies drops to zero, in every collection, in every field.
+    await useSettingsStore.getState().load();
+    await expect(useSettingsStore.getState().encryptStored(PASSPHRASE)).resolves.toBeUndefined();
+
+    const onDisk = await snapshotAllRows(databaseName);
+    expect(onDisk.split(API_KEY)).toHaveLength(1);
+    // ...and the scan is not vacuous: the database has the endpoint, the transcript and the
+    // ciphertext of the key that was just sealed, so "the key is absent" means the key, not an
+    // empty database.
+    expect(onDisk).toContain(BASE_URL);
+    expect(onDisk).toContain('回答');
+    const sealed = await readProviderSettings();
+    if (sealed.secret.kind !== 'encrypted') throw new Error('the key was not sealed');
+    expect(onDisk).toContain(sealed.secret.envelope.ciphertext);
+  });
+
+  it('(b) writes the key to no console, through a turn, a seal and a failed unlock', async () => {
+    // The app logs nothing today, so this guards the FIELDS a future log line would carry
+    // (an error's message, a rejected promise, a store label) rather than a statement that
+    // exists. `mock` rather than a re-implementation so the real console calls are captured.
+    const spies = (['debug', 'info', 'log', 'warn', 'error'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => undefined),
+    );
+    try {
+      // The gateway quotes our own Authorization header in its error body — the one documented
+      // leak path (`openai-compatible.ts`) — and the log-side field is what it seeds.
+      const session = await createSession({ title: 'log-surface' });
+      const wire = fakeWire(() => errorResponse(403, 'forbidden', `Bearer ${API_KEY} denied`));
+      const result = await sendTurn(
+        { config: CONFIG, transport: wire.fetch },
+        { sessionId: session.id, text: '问题', signal: new AbortController().signal },
+      );
+
+      await writeProviderSettings({
+        baseUrl: BASE_URL,
+        model: MODEL,
+        secret: { kind: 'plaintext', apiKey: API_KEY },
+      });
+      await useSettingsStore.getState().load();
+      await useSettingsStore.getState().encryptStored(PASSPHRASE);
+      useSettingsStore.getState().lock();
+      // A wrong passphrase is the failure path most likely to quote its input in a message.
+      await expect(useSettingsStore.getState().unlock('wrong passphrase')).resolves.toBe(
+        'wrong-passphrase',
+      );
+
+      const logged = spies
+        .flatMap((spy) => spy.mock.calls)
+        .map((call) => JSON.stringify(call))
+        .join('\n');
+      expect(logged).not.toContain(API_KEY);
+      expect(logged).not.toContain(PASSPHRASE);
+      // The redaction is real, not a consequence of silence: this is the sentence that WOULD be
+      // logged (ADR-019 keeps `message` for logs), and the adapter already stripped the echo.
+      expect(result.error?.message).toBeDefined();
+      expect(result.error?.message).not.toContain(API_KEY);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it('(c) keeps the key out of Message.meta and extensions, sealed or not', async () => {
+    await runOneTurn();
+    await writeProviderSettings({
+      baseUrl: BASE_URL,
+      model: MODEL,
+      secret: { kind: 'plaintext', apiKey: API_KEY },
+    });
+    await useSettingsStore.getState().load();
+    await useSettingsStore.getState().encryptStored(PASSPHRASE);
+
+    const chain = await readChain((await listSessions())[0]?.id ?? '');
+    expect(chain).toHaveLength(2);
+    for (const message of chain) {
+      expect(JSON.stringify(message.meta)).not.toContain(API_KEY);
+      expect(JSON.stringify(message.extensions ?? {})).not.toContain(API_KEY);
+    }
+    // The metadata is populated with the model id, so "the key is absent" is not "the object is
+    // empty" — the assistant row is the one whose `meta.model` the debug panel reads.
+    const assistant = chain[1];
+    expect(assistant?.meta.model).toBe(MODEL);
+  });
+
+  it('(d) shows the catalog sentence, never the vendor text that quoted the key', async () => {
+    const session = await createSession({ title: 'error-surface' });
+    const wire = fakeWire(() => errorResponse(403, 'forbidden', `Bearer ${API_KEY} denied`));
+
+    const result = await sendTurn(
+      { config: CONFIG, transport: wire.fetch },
+      { sessionId: session.id, text: '问题', signal: new AbortController().signal },
+    );
+
+    expect(result.error?.code).toBe('auth');
+    // The provider's prose is redacted for logs, and the sentence a person reads comes from the
+    // catalog by code (ADR-019) — neither carries the key, and neither can: the sentence is
+    // selected from a fixed table.
+    expect(result.error?.message).not.toContain(API_KEY);
+    const shown = errorSentence({ code: result.error?.code ?? 'unknown' });
+    expect(shown).toContain('API Key');
+    expect(shown).not.toContain(API_KEY);
+    expect(await snapshotAllRows(databaseName)).not.toContain(API_KEY);
   });
 });

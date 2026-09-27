@@ -36,6 +36,22 @@
  * model, because the user has to be able to configure it and this app has no
  * backend (ADR-003). It is deliberately NOT copied into a `Session`, a `Message`,
  * a `MessageMeta` or an `extensions` blob, and nothing in this module logs.
+ *
+ * WHAT M1-G3 CHANGED ABOUT THAT ROW, AND WHAT IT DID NOT
+ * The row's `apiKey` field now holds either the legacy plaintext STRING or an
+ * encrypted envelope (`secrets/secret-crypto.ts`), and this module parses that
+ * difference the same way it parses every other field: at the boundary, into a
+ * discriminated `StoredProviderSecret`. It does NOT encrypt or derive anything
+ * itself — it stores what it is given and reports what it finds, which is what keeps
+ * "the row is the only copy" (a claim about STORAGE) separable from "the copy is
+ * sealed" (a claim about CRYPTO). `secrets/provider-secret.ts` owns the second claim
+ * and is the only caller that ever builds an `encrypted` value.
+ *
+ * The import below is a LEAF (`secrets/secret-crypto.ts` imports nothing from the
+ * app), which is why it is allowed here: this module must not import the i18n layer
+ * or the state layer (ADR-030's addendum — `i18n/translate.ts` ->
+ * `state/locale-store.ts` -> here is already a path in one direction, and closing it
+ * makes a module half-evaluated). A leaf has no such path to close.
  */
 import { COLLECTIONS, type Collection, type RowBase, type Tx } from '@smarttavern/core';
 import { isLocale, type Locale } from '@smarttavern/i18n';
@@ -56,6 +72,11 @@ import {
   parseTheme,
   type Theme,
 } from '../appearance/appearance';
+import {
+  type EncryptedSecret,
+  encryptedSecretToJson,
+  isEncryptedSecret,
+} from '../secrets/secret-crypto';
 import { readTable, write } from './database';
 
 /* ─────────────────────────────── identifiers ─────────────────────────────── */
@@ -81,15 +102,37 @@ export interface SettingsRow extends RowBase {
   value: JsonValue;
 }
 
-/** The BYO-Key configuration as it is stored (M0-T8: base URL, key, model). */
+/**
+ * What the provider row holds about the API key — the three states that exist.
+ *
+ * WHY A UNION RATHER THAN A NULLABLE STRING
+ * "No key" (a local Ollama), "a key, unencrypted" (the M0 row, and the documented
+ * fallback when WebCrypto is unavailable) and "a key under a passphrase" are three
+ * different facts, and every caller has to branch on them: a form must not show a
+ * lock it cannot open, a send must not treat a locked key as an absent one, and a
+ * migration must be able to tell exactly which row needs encrypting. Encoding the
+ * three in one field name (`apiKey`) with a discriminant keeps the stored shape
+ * honest — an empty plaintext string is normalised to `none`, because "no header" is
+ * what both mean on the wire.
+ */
+export type StoredProviderSecret =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'plaintext'; readonly apiKey: string }
+  | { readonly kind: 'encrypted'; readonly envelope: EncryptedSecret };
+
+/** The BYO-Key configuration as it is stored (M0-T8: base URL, model; M1-G3: sealed key). */
 export interface ProviderSettings {
   baseUrl: string;
-  apiKey: string;
   model: string;
+  secret: StoredProviderSecret;
 }
 
 /** What a first run starts from: no endpoint, no key, no model. */
-export const EMPTY_PROVIDER_SETTINGS: ProviderSettings = { baseUrl: '', apiKey: '', model: '' };
+export const EMPTY_PROVIDER_SETTINGS: ProviderSettings = {
+  baseUrl: '',
+  model: '',
+  secret: { kind: 'none' },
+};
 
 /**
  * Narrow an untrusted `JsonValue` back to the settings shape, field by field.
@@ -101,19 +144,41 @@ export const EMPTY_PROVIDER_SETTINGS: ProviderSettings = { baseUrl: '', apiKey: 
  */
 function toProviderSettings(value: JsonValue | undefined): ProviderSettings {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return { ...EMPTY_PROVIDER_SETTINGS };
+    return { baseUrl: '', model: '', secret: { kind: 'none' } };
   }
   return {
     baseUrl: stringField(value, 'baseUrl') ?? '',
-    apiKey: stringField(value, 'apiKey') ?? '',
     model: stringField(value, 'model') ?? '',
+    secret: toStoredSecret(jsonField(value, 'apiKey')),
   };
+}
+
+/**
+ * The key slot of a stored row, as one of the three states.
+ *
+ * A string is the M0 row (and any row written before a passphrase existed); an
+ * object is read through `isEncryptedSecret`, so a row that is neither — a number, a
+ * half-written envelope, a leftover from another version — is `none` rather than a
+ * decrypt attempt on garbage. Silently reporting `none` is the honest answer for a
+ * row nobody can use, and it is recoverable: the user types the key again.
+ */
+function toStoredSecret(value: JsonValue | undefined): StoredProviderSecret {
+  if (typeof value === 'string') {
+    return value === '' ? { kind: 'none' } : { kind: 'plaintext', apiKey: value };
+  }
+  if (isEncryptedSecret(value)) return { kind: 'encrypted', envelope: value };
+  return { kind: 'none' };
 }
 
 /** A string member of a parsed JSON object; `undefined` for anything else. */
 function stringField(value: { [key: string]: JsonValue }, key: string): string | undefined {
   const candidate = value[key];
   return typeof candidate === 'string' ? candidate : undefined;
+}
+
+/** Any member of a parsed JSON object; `undefined` when the key is absent. */
+function jsonField(value: { [key: string]: JsonValue }, key: string): JsonValue | undefined {
+  return value[key];
 }
 
 function settingsOf(tx: Tx): Collection<SettingsRow> {
@@ -266,15 +331,41 @@ export async function readProviderSettings(): Promise<ProviderSettings> {
   return toProviderSettings(row?.value);
 }
 
-/** Store the provider configuration. The key goes in this row and nowhere else. */
+/**
+ * Store the provider configuration — the WHOLE row, key slot included, in ONE write.
+ *
+ * WHY ONE PUT AND NOT TWO ("write the config", "write the secret")
+ * The user's save is one gesture, and the failure mode of splitting it is the one
+ * M1-G3 must not have: a base URL written while the key write fails leaves a row
+ * whose secret is the OLD one, and the user has no way to tell. One `put` replaces
+ * the row atomically (docs/02 §5.3), which is also what makes the plaintext ->
+ * encrypted migration safe: the replacing value is the whole row, so the plaintext
+ * string has nowhere to survive in. The caller composes the new secret — often the
+ * one it just read, unchanged — and this module stores exactly that.
+ *
+ * WHAT IT DOES NOT DO: it does not encrypt. A caller that wants an encrypted row
+ * passes an `encrypted` secret, which only `secrets/provider-secret.ts` builds.
+ */
 export async function writeProviderSettings(settings: ProviderSettings): Promise<void> {
   await write(async (tx) => {
     const row: SettingsRow = {
       id: PROVIDER_SETTINGS_ID,
-      value: { baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model },
+      value: {
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+        // `none` is written as an ABSENT field rather than as `''`: the row then says
+        // "there is no key" in the same way the reader means it, and no future reader
+        // has to know that an empty string once meant the same thing.
+        ...(settings.secret.kind === 'none' ? {} : { apiKey: secretToJson(settings.secret) }),
+      },
     };
     await settingsOf(tx).put(row);
   });
+}
+
+/** The stored form of a present secret: the legacy string, or the envelope's JSON. */
+function secretToJson(secret: Exclude<StoredProviderSecret, { kind: 'none' }>): JsonValue {
+  return secret.kind === 'plaintext' ? secret.apiKey : encryptedSecretToJson(secret.envelope);
 }
 
 /* ──────────────────────────────── sessions ───────────────────────────────── */

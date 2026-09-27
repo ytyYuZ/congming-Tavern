@@ -56,6 +56,9 @@ function deleteDatabase(name: string): Promise<void> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The row shape a plaintext (M0 / fallback) key is written in. */
+const PLAINTEXT = { kind: 'plaintext', apiKey: 'sk-round-trip' } as const;
+
 describe('db/repository', () => {
   it('reconstructs the ACTIVE branch of a branched tree, oldest first', async () => {
     const session = await createSession({ title: '分支测试' });
@@ -131,25 +134,35 @@ describe('db/repository', () => {
   });
 
   it('round-trips the provider settings, including the key', async () => {
-    expect(await readProviderSettings()).toEqual({ baseUrl: '', apiKey: '', model: '' });
+    expect(await readProviderSettings()).toEqual({
+      baseUrl: '',
+      model: '',
+      secret: { kind: 'none' },
+    });
 
     await writeProviderSettings({
       baseUrl: 'https://gateway.test/v1',
-      apiKey: 'sk-round-trip',
       model: 'test-model-1',
+      secret: { ...PLAINTEXT },
     });
     expect(await readProviderSettings()).toEqual({
       baseUrl: 'https://gateway.test/v1',
-      apiKey: 'sk-round-trip',
       model: 'test-model-1',
+      secret: { kind: 'plaintext', apiKey: 'sk-round-trip' },
     });
 
-    // A second write replaces the row rather than adding one (the id IS the key).
-    await writeProviderSettings({ baseUrl: 'http://localhost:11434/v1', apiKey: '', model: 'x' });
+    // A second write replaces the row rather than adding one (the id IS the key). An empty
+    // key is stored as `none` rather than as an empty string: "send no Authorization
+    // header" is what both mean on the wire, and one spelling is easier to reason about.
+    await writeProviderSettings({
+      baseUrl: 'http://localhost:11434/v1',
+      model: 'x',
+      secret: { kind: 'none' },
+    });
     expect(await readProviderSettings()).toEqual({
       baseUrl: 'http://localhost:11434/v1',
-      apiKey: '',
       model: 'x',
+      secret: { kind: 'none' },
     });
   });
 
@@ -162,7 +175,11 @@ describe('db/repository', () => {
       content: '重启前的消息',
     });
     await setHeadMessageId(session.id, user.id);
-    await writeProviderSettings({ baseUrl: 'https://gateway.test/v1', apiKey: 'k', model: 'm' });
+    await writeProviderSettings({
+      baseUrl: 'https://gateway.test/v1',
+      model: 'm',
+      secret: { kind: 'plaintext', apiKey: 'k' },
+    });
 
     // "Restart": close this connection and open a NEW adapter over the same name.
     closeDatabase();
