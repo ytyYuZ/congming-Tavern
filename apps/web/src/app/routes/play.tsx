@@ -113,9 +113,22 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
   const dismissError = useChatStore((state) => state.dismissError);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const loadSettings = useSettingsStore((state) => state.load);
+  const opening = useChatStore((state) => state.opening);
 
   const [text, setText] = useState('');
   const streaming = status === 'streaming';
+  /**
+   * The session whose opening choice the user declined (M1-S3).
+   *
+   * WHY THIS IS HERE AND NOT IN THE STORE: 跳过 writes nothing at all — that is the whole
+   * point of it — so there is no row to remember it in, and "this screen stopped offering the
+   * choice" is not a fact about the conversation. Holding the SESSION ID rather than a boolean
+   * is what makes a switch reset it, the same shape `useSessionDraft` gives the panels below;
+   * and the consequence is stated rather than hidden: reloading a session with no first
+   * message offers the choice again, which is correct for a session that has not started.
+   */
+  const [skipped, setSkipped] = useState<string | undefined>(undefined);
+  if (skipped !== undefined && skipped !== sessionId) setSkipped(undefined);
 
   // The route owns the subscription's lifetime: opening a different session (or
   // unmounting the view) must not leave a `liveQuery` running against the old one.
@@ -148,6 +161,19 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
           <TimeControls sessionId={session.id} session={session} />
           <StatusBar sessionId={session.id} session={session} />
           <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />
+          {/* The opening choice is offered exactly while the session has not started (M1-S3);
+              see `OpeningPanel` for why the head and the chain are both consulted, and why
+              跳过 is the one choice that writes nothing. `skipped` is this screen's own
+              answer, not store state, so a session switch resets it. */}
+          {skipped === session.id ? (
+            <p className="opening-status">{t('play.openingSkipped')}</p>
+          ) : openingChoosing(session, messageChain) ? (
+            <OpeningPanel
+              sessionId={session.id}
+              busy={opening || streaming}
+              onSkip={() => setSkipped(session.id)}
+            />
+          ) : null}
         </>
       )}
 
@@ -533,6 +559,136 @@ function CheckpointPanel({
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+/**
+ * Whether the opening choice is still open for this session (M1-S3).
+ *
+ * WHY BOTH THE HEAD AND THE CHAIN ARE CONSULTED, AND WHY THAT IS NOT REDUNDANT
+ * The two fields disagree in two real positions, and each disagreement is a decision:
+ * - a chain that is still EMPTY while the head is SET: `open` clears `messageChain` before its
+ *   read resolves, so on the first frame of a session with messages the transcript is empty
+ *   while the head already says where it ends. Without the head check the panel would flash on
+ *   every reload — and 手写 clicked in that frame would be refused by the store, which reads
+ *   the row rather than this view.
+ * - a head that is NULL while the chain is empty and the opening is still STORED: a rollback to
+ *   a save point taken before the first message sets the head back to `null` without deleting
+ *   anything (ADR-010), so the live position really is "no transcript". The panel IS offered
+ *   there, because that is what the live position is, and the write is what the store refuses
+ *   — a second opening would be a second ROOT that no head can reach. Recorded rather than
+ *   hidden: at that position the offer is a control that cannot succeed, and the honest fix
+ *   (re-offering the opening after a rollback) would need the store's guard to change too.
+ *
+ * WHAT THIS IS NOT: the guard on the write. `state/chat-store.ts`'s `startOpening` and
+ * `generateOpening` re-read the session's head and its roots and refuse unless it has NONE, so
+ * a stale render, a second tab, a programmatic caller or the rollback position above cannot
+ * append a second opening. This function decides only whether to OFFER the choice, from the two
+ * values a render already holds — which is why a synchronous check is possible here and the
+ * store's is not.
+ */
+function openingChoosing(session: Session, chain: readonly Message[]): boolean {
+  return session.headMessageId === null && chain.length === 0;
+}
+
+/**
+ * The opening panel (M1-S3) — 手写 / AI 生成 / 跳过, offered while the session has no first
+ * message.
+ *
+ * WHY THIS IS A PANEL AND NOT A COMPOSER MODE: an opening is a START (the chain's only root,
+ * written while the head is `null`), so it is a choice about the session rather than a turn
+ * in it. Both writing paths go through the store's own opening actions, and both leave the
+ * same start state — the hand-written one writes a user row at the root, the AI one writes
+ * the model's answer at the root with `append: {mode: 'none'}`, i.e. with NO user row, which
+ * is why the instruction it sends is on the wire and nowhere in the transcript.
+ *
+ * WHAT THIS COMPONENT DOES AND DOES NOT DECIDE
+ * It decides where the controls are, which sentence each one reads, and that a blank opening
+ * is refused before the store is called. The decision that the choice is still OPEN is the
+ * route's (`openingChoosing`, because `skipped` and the panel are one render decision), and
+ * the decision that an opening may be WRITTEN is the store's: `state/chat-store.ts`'s two
+ * actions re-read the session row and refuse unless `headMessageId` is `null`, so a stale
+ * render, a second tab or a programmatic caller cannot append one.
+ *
+ * WHY 跳过 IS THE ONLY CHOICE THAT TOUCHES NOTHING: it writes no row and moves no pointer —
+ * the session is already usable with no messages (`Session.headMessageId` is nullable, and
+ * the next turn starts a chain from it, docs/02 §7). There is no store action for it either:
+ * "the user declined to start" is one screen's fact, not session state, so the route owns it
+ * (`onSkip`) and the confirmation that the click did something sits with it.
+ */
+function OpeningPanel({
+  sessionId,
+  busy,
+  onSkip,
+}: {
+  sessionId: Id;
+  busy: boolean;
+  onSkip: () => void;
+}) {
+  const { t } = useTranslation();
+  const startOpening = useChatStore((state) => state.startOpening);
+  const generateOpening = useChatStore((state) => state.generateOpening);
+  const opening = useChatStore((state) => state.opening);
+  const [text, setText] = useSessionDraft(sessionId, '');
+  const [refused, setRefused] = useSessionDraft(sessionId, false);
+
+  const onWrite = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    const value = text.trim();
+    // A blank opening cannot be a message: `MessageSchema` allows an empty `content` but the
+    // transcript could not show it and the composer drops it from every later request
+    // (`chat/clock.ts`'s `toWireMessages`). So the refusal is said here instead.
+    if (value === '') {
+      setRefused(true);
+      return;
+    }
+    setRefused(false);
+    if (await startOpening(value)) setText('');
+  };
+
+  return (
+    <section className="opening">
+      <h2 className="section-title">{t('play.openingTitle')}</h2>
+      <p className="muted">{t('play.openingHint')}</p>
+
+      <form className="opening-write" onSubmit={onWrite}>
+        <label htmlFor="opening-text" className="sr-only">
+          {t('play.openingLabel')}
+        </label>
+        <textarea
+          id="opening-text"
+          className="opening-input"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          rows={3}
+          disabled={busy}
+          placeholder={t('play.openingPlaceholder')}
+        />
+        <div className="btn-row">
+          <button className="btn btn-primary" type="submit" disabled={busy}>
+            {t('play.openingWrite')}
+          </button>
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              // The store owns the `await`: a rejection here would be an unhandled one, and a
+              // refusal is reported through the banner rather than returned to be printed
+              // twice (the same rule `ContinueButton` follows).
+              void generateOpening();
+            }}
+          >
+            {opening ? t('play.generating') : t('play.openingGenerate')}
+          </button>
+          <button className="btn" type="button" disabled={busy} onClick={onSkip}>
+            {t('play.openingSkip')}
+          </button>
+        </div>
+      </form>
+
+      {refused ? <p className="opening-status">{t('play.openingWriteEmpty')}</p> : null}
     </section>
   );
 }

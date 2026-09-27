@@ -60,6 +60,30 @@
  * regeneration must ask the question through the SAME composer and stream through the same
  * adapter as the first answer, or "another answer to this prompt" would mean something
  * different from the answer it replaces.
+ *
+ * WHERE "ONLY WHILE THE CHAIN IS EMPTY" IS ENFORCED (M1-S3)
+ * An opening is a START: it is the chain's first message, the only node whose `parentId` is
+ * `null` and the only one that may be written while the session has no head (docs/02 §7).
+ * Appending a second one is therefore not a second turn, it is a second ROOT — and the head
+ * can only point at one of them, so the other becomes an unreachable row that nothing in the
+ * UI can even show. The rule that forbids it lives in ONE place, HERE: `startOpening` and
+ * `generateOpening` each re-read the table and refuse unless the session's head is `null` AND
+ * it has no root message at all — the second half is what covers a rollback to before the first
+ * message, where the head is back at `null` while the opening is still stored (ADR-010), so a
+ * second attempt is a no-op in every position. The view does not repeat the rule as a guard:
+ * `app/routes/play.tsx`'s `openingChoosing` only decides whether to OFFER the panel, from the
+ * two values a render already has, which is why that position still shows the choice and the
+ * store is what refuses the click. One rule, one decider; the one that decides the WRITE is
+ * this one.
+ *
+ * WHY THE TWO PATHS NEED A FLAG BESIDES `status`
+ * The AI path turns `status` into `'streaming'`, which already refuses a second call. The
+ * hand-written one does not stream anything — `status: 'streaming'` would put the transcript
+ * into a "generating" state nothing will end — so `opening` is the claim both paths take
+ * SYNCHRONOUSLY, before either one's first `await`, and it is the flag that makes two
+ * concurrent openings impossible rather than merely unlikely. It is deliberately one field
+ * for both paths: they are the same claim ("I am writing the chain's first message") and the
+ * two writes it guards are the same row.
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
@@ -154,6 +178,12 @@ export interface ChatState {
   regenerating: Id | null;
   status: ChatStatus;
   error: ChatError | undefined;
+  /**
+   * True while an OPENING is being written (M1-S3). Set synchronously, before either path's
+   * first `await`, so a second attempt is refused rather than racing the first one into a
+   * second root (`startOpening` explains why `status` cannot carry this).
+   */
+  opening: boolean;
 
   load: () => Promise<void>;
   create: () => Promise<Id>;
@@ -162,6 +192,25 @@ export interface ChatState {
   send: (text: string) => Promise<void>;
   abort: () => void;
   dismissError: () => void;
+  /**
+   * Write the chain's FIRST message from text the user typed (M1-S3's 手写).
+   *
+   * The row is a root (`parentId: null`) and the head moves to it — the two facts that make
+   * it an opening rather than an append. Resolves `false`, writing nothing, when this session
+   * already has a message or while another opening is in flight: an opening is a start, and a
+   * second one would be a second root (`headMessageId` can only name one of them).
+   */
+  startOpening: (text: string) => Promise<boolean>;
+  /**
+   * Ask the model for the chain's first message (M1-S3's AI 生成).
+   *
+   * It goes through the ordinary turn path with `append: {mode: 'none'}`, so the instruction
+   * the request carries is NOT written as a user row: the assistant answer is the chain's
+   * root, which is the same start state `startOpening` leaves. Resolves `false` when the
+   * session already has a message, when another opening is in flight, or when the turn cannot
+   * be started at all (no configuration, a locked key) — the banner has already said why.
+   */
+  generateOpening: () => Promise<boolean>;
   /**
    * The run of siblings `messageId` belongs to, or `undefined` when it has none (M1-S2).
    * A read: the view asks this to decide whether to render a switcher and to label it.
@@ -304,6 +353,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   regenerating: null,
   status: 'idle',
   error: undefined,
+  opening: false,
 
   async load(): Promise<void> {
     set({ sessions: await readSessions() });
@@ -372,6 +422,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       regenerating: null,
       status: 'idle',
       error: undefined,
+      opening: false,
     });
   },
 
@@ -404,6 +455,99 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   dismissError(): void {
     set({ error: undefined, status: 'idle' });
+  },
+
+  /** See the interface's `startOpening` for the rule this enforces. */
+  async startOpening(text: string): Promise<boolean> {
+    const state = get();
+    const session = state.session;
+    const content = text.trim();
+    if (session === undefined || content === '') return false;
+    // The claim is taken BEFORE the first `await` (see the header): from here on, every other
+    // caller sees `opening` and is refused, so the emptiness check below cannot be passed by
+    // two callers at the same moment.
+    if (state.opening || state.status === 'streaming') return false;
+    set({ opening: true });
+    try {
+      // THE GUARD IS THE ROWS, NOT THE RENDERED CHAIN. `messageChain` is a live view and can be
+      // a beat behind the database (a fresh `open`, a write from another tab), so the store
+      // asks the table instead: an opening may only be written into a session that has NO
+      // message at all and whose head is still `null`. The ROOT check is what handles the
+      // position a rollback leaves — the head back at `null` while the opening is still stored
+      // (ADR-010: messages are never deleted) — where a second opening would be a second root
+      // that no head can reach.
+      const stored = await getSession(session.id);
+      if (stored === undefined || stored.headMessageId !== null) return false;
+      if ((await listChildren(session.id, null)).length > 0) return false;
+
+      const opening = await appendMessage({
+        sessionId: session.id,
+        // THE EDGE THAT MAKES IT AN OPENING: a root has no parent (docs/02 §7), which is what
+        // distinguishes the first message of a session from every message after it.
+        parentId: null,
+        // `user`: this is text a person typed, and the next turn answers it. The role is the
+        // same one the composer writes — a hand-written opening is the first thing the player
+        // says, so modelling it as an assistant turn would put words in the model's mouth.
+        role: 'user',
+        content,
+      });
+      await setHeadMessageId(session.id, opening.id);
+      const messageChain = await getChain(session.id);
+      set({
+        session: { ...session, headMessageId: opening.id },
+        messageChain,
+        // The turn's own state is reset: an opening is a fresh transcript, and a banner left
+        // over from a previous failure would describe a session that no longer exists.
+        error: undefined,
+        status: 'idle',
+      });
+      return true;
+    } finally {
+      set({ opening: false });
+    }
+  },
+
+  /** See the interface's `generateOpening` for the rule this enforces. */
+  async generateOpening(): Promise<boolean> {
+    const state = get();
+    const session = state.session;
+    if (session === undefined) return false;
+    if (state.opening || state.status === 'streaming') return false;
+    // Read BEFORE the claim: a refused call must not leave the flag set for the next one. The
+    // two facts are the same ones `startOpening` checks — the session has not started (its head
+    // is `null`) and no opening is already a root there.
+    const stored = await getSession(session.id);
+    if (stored === undefined || stored.headMessageId !== null) return false;
+    if ((await listChildren(session.id, null)).length > 0) return false;
+    // The gate runs before the claim so a missing configuration is reported (`turnGate` puts
+    // its sentence in the banner) and leaves nothing latched behind it.
+    const gate = turnGate(set, translate('play.openingInstruction'));
+    if (gate !== undefined) return false;
+
+    set({ opening: true });
+    try {
+      controller = new AbortController();
+      set({ status: 'streaming', error: undefined, draft: { ...IDLE_DRAFT }, regenerating: null });
+      await runTurn(set, {
+        sessionId: session.id,
+        // NOTHING IS WRITTEN BEFORE THE REQUEST (M1-S2's `'none'`, reused rather than
+        // re-invented): the composer is handed the opening instruction as this turn's input,
+        // and the ASSISTANT row the model answers with becomes the chain's root, because the
+        // head is `null`. The instruction itself is therefore on the wire only — it never
+        // becomes a user message the transcript would show and the next turn would quote.
+        append: { mode: 'none' },
+        userText: translate('play.openingInstruction'),
+        prompt: translate('play.openingInstruction'),
+      });
+      // The answer is the chain's first row only if the turn really wrote one — the
+      // partial-text policy in `chat/send-turn.ts` discards an errored turn and leaves the
+      // transcript empty. Asking the ROW rather than trusting the call is what keeps `false`
+      // honest, so the panel stays on screen beside the banner that explained the failure.
+      const written = await getChain(session.id);
+      return written.some((message) => message.parentId === null);
+    } finally {
+      set({ opening: false });
+    }
   },
 
   /**
@@ -993,5 +1137,6 @@ export function resetChat(): void {
     regenerating: null,
     status: 'idle',
     error: undefined,
+    opening: false,
   });
 }

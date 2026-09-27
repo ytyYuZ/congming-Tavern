@@ -178,6 +178,41 @@ export const zhCN = {
   'play.composerPlaceholder': '例如：我推开门，走进昏暗的酒馆。',
   'play.send': '发送',
   'play.stop': '停止',
+  /*
+   * THE OPENING PANEL (M1-S3) — the three ways a session can start.
+   *
+   * An opening is a START, not a turn: it is the chain's first message, the only one whose
+   * `parentId` is `null` and the only one that may be written while the session has no head.
+   * The panel is therefore offered exactly while the chain is empty, and every sentence here
+   * belongs to that moment (the choices, the input's label, and the confirmation that 跳过
+   * did something — it did: the session is usable with no transcript).
+   *
+   * WHY `play.openingInstruction` IS IN THE CATALOG AND NOT IN THE PRESET
+   * The AI path sends this text as the turn's USER input through the ordinary turn
+   * (`chat/send-turn.ts` with `append: {mode: 'none'}`), so it must come from somewhere that
+   * holds text. It is an INSTRUCTION ABOUT THE INTERFACE'S MOMENT — "this is the first line
+   * of a session, set the scene" — which is what the catalog is for, and keeping it here is
+   * what lets `tools/scripts/check-i18n-literals.mjs` stay at zero exemptions beyond the
+   * documented built-in-content one. It is never persisted: `mode: 'none'` writes no user
+   * row, so the sentence is on the wire and nowhere else.
+   *
+   * WHAT IT DELIBERATELY IS NOT: it is not a `first_mes`. A character card's greeting is
+   * `CharacterData.first_mes` (docs/02 §4) and would be authored content with its own pinned
+   * language; no `CharacterVersion` row exists yet (docs/06 §8.5 决定 1), so this sentence
+   * ASKS for an opening instead of quoting one, and it follows the UI language the way the
+   * rest of the app's copy does.
+   */
+  'play.openingTitle': '开场',
+  'play.openingHint': '会话还没有第一条消息。选择开场方式，一旦写下就不能再重选。',
+  'play.openingInstruction':
+    '这是本会话的第一条消息。请写一段开场：交代场景与当前时间，并留下一个可以开始行动的钩子。只写旁白与角色的内容，不要替玩家说话。',
+  'play.openingLabel': '开场内容',
+  'play.openingPlaceholder': '例如：酒馆的门在身后合上，炉火把长影投在墙上。',
+  'play.openingWrite': '写开场',
+  'play.openingWriteEmpty': '请先输入开场内容',
+  'play.openingGenerate': 'AI 生成开场',
+  'play.openingSkip': '跳过开场',
+  'play.openingSkipped': '已跳过开场，直接发送第一条消息即可。',
   /**
    * The persistent world clock (M1-T1). `{date}` is the time engine's own
    * `renderParts` output — `纪元 1 一月 1 06:30` — and `{segment}` the day-part name
@@ -491,6 +526,19 @@ export const en: Messages = {
   'play.composerPlaceholder': 'For example: I push the door open and step into the dim tavern.',
   'play.send': 'Send',
   'play.stop': 'Stop',
+  'play.openingTitle': 'Opening',
+  'play.openingHint':
+    'This session has no first message yet. Choose how it starts — once it is written, the opening cannot be chosen again.',
+  'play.openingInstruction':
+    'This is the first message of the session. Write an opening: establish the scene and the current time, and leave a hook the player can act on. Write only narration and the characters — do not speak for the player.',
+  'play.openingLabel': 'Opening text',
+  'play.openingPlaceholder':
+    'For example: the tavern door closes behind me and the hearth throws long shadows on the wall.',
+  'play.openingWrite': 'Write the opening',
+  'play.openingWriteEmpty': 'Type the opening first',
+  'play.openingGenerate': 'Generate an opening',
+  'play.openingSkip': 'Skip the opening',
+  'play.openingSkipped': 'Opening skipped — just send your first message.',
   'play.clock': 'Now {date} ({segment})',
   'play.clockNoSegment': 'Now {date}',
   'play.clockLabel': 'World clock',

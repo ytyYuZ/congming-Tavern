@@ -632,3 +632,41 @@ body {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+
+/*
+ * The opening panel (M1-S3). Same shape as the save-point and status panels above — a rule
+ * rather than a wrapper element — because all three belong to the same open session and may
+ * move together. The textarea is full width for the same reason the composer's is: an
+ * opening is prose, and a one-line input would hide most of what the user is writing.
+ */
+.opening {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.opening-write {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+
+.opening-write textarea {
+  font: inherit;
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+
+/* The blank-opening refusal, and the confirmation that 跳过 did something. */
+.opening-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}

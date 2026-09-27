@@ -22,6 +22,7 @@
  */
 /** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
+import { createTranslator } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
 import type { Message, SessionState } from '@smarttavern/schema';
 import { act } from 'react';
@@ -59,6 +60,7 @@ import {
   resetLocaleStore,
   resetSettingsStore,
   useChatStore,
+  useLocaleStore,
   useSettingsStore,
 } from '../../mount';
 
@@ -105,6 +107,12 @@ beforeEach(async () => {
   // STORED row — the same thing a returning user has — and the shell's own `load()` then
   // adopts it. Poking the store instead would be overwritten by that legitimate read.
   await writeLocaleSetting('zh-CN');
+  // ...and the IN-MEMORY value is pinned too. `useChatStore`'s and `translate`'s non-React
+  // callers read the store, and the store's initial value follows the browser; only the
+  // shell's mount effect replaces it, which a test body that runs before that read settles
+  // would not see. The stored row above is what makes the shell adopt the same language, so
+  // the two are pinned to one value rather than to two guesses.
+  useLocaleStore.setState({ locale: 'zh-CN' });
 });
 
 afterEach(async () => {
@@ -198,20 +206,29 @@ async function unmount(): Promise<void> {
 /* ────────────────────────────────── tests ────────────────────────────────── */
 
 /**
- * Type into a CONTROLLED input the way a browser does.
+ * Type into a CONTROLLED field the way a browser does — an `<input>` or a `<textarea>`.
  *
- * React installs its own value tracker on the input's prototype, so assigning `input.value`
+ * React installs its own value tracker on the element's prototype, so assigning `.value`
  * directly is silently ignored: the framework thinks the value did not change and never fires
  * the change handler. Calling the NATIVE setter (the prototype descriptor) updates the value
- * without touching the tracker, and the `input` event is what React listens for.
+ * without touching the tracker, and the `input` event is what React listens for. The two
+ * element kinds are both handled here because the composer and the opening panel are
+ * textareas while the amount and label fields are inputs, and a helper that worked for only
+ * one of them would be the kind of difference nobody should have to remember.
  */
 async function typeInto(host: HTMLElement, selector: string, value: string): Promise<void> {
-  const input = host.querySelector(selector);
-  if (!(input instanceof HTMLInputElement)) throw new Error(`no input ${selector}`);
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  const field = host.querySelector(selector);
+  if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement)) {
+    throw new Error(`no field ${selector}`);
+  }
+  const prototype =
+    field instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
   await act(async () => {
-    setter?.call(input, value);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    setter?.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
 
@@ -1495,5 +1512,308 @@ describe('M1-S2: the message stream', () => {
     // What is left is the whole chain: a delete of the tail leaves a real path, not a head
     // that resolves nowhere.
     expect((await getChain(session.id)).map((message) => message.content)).toEqual(['第一问']);
+  });
+});
+
+/* ────────────────────── M1-S3: the opening panel ────────────────────── */
+
+/**
+ * THE PANEL IS A FUNCTION OF THE START STATE, AND EACH CHOICE LEAVES A DIFFERENT ONE
+ * docs/06 §2.5's acceptance is 「三种方式均生成合法的首条消息」, but 跳过 generates no message
+ * at all — so the cases below assert what each way leaves, driving the REAL panel: 手写 writes
+ * the root from the textarea, AI 生成 goes through the same turn path (one request, no user
+ * row), and 跳过 writes nothing while leaving a session whose next message is the root.
+ *
+ * WHY THE PANEL'S OWN CONDITION IS ASSERTED HERE RATHER THAN IN A UNIT TEST
+ * "Only offered when the chain is empty" is a statement about what a person sees, and the
+ * condition has two inputs that can disagree (`Session.headMessageId` and the live chain), so
+ * the DOM is where it is observable: a fresh session shows the panel, and a session that has
+ * started never does — not even for the frame in which `open` has cleared the chain but not
+ * yet read it.
+ */
+describe('M1-S3: the opening panel', () => {
+  /**
+   * The panel's copy, read from the zh-CN catalog DIRECTLY.
+   *
+   * WHY NOT THE APP'S `translate`: that reads the live locale store, and a test that wanted a
+   * particular sentence would then be asserting whatever the previous case left behind. The
+   * suite pins the rendered language by WRITING the stored row (`beforeEach`), which is how a
+   * returning user arrives at it, so the expectation has to name the same catalog explicitly.
+   */
+  const zh = createTranslator('zh-CN');
+
+  /** An SSE body carrying `chunks`, in the provider's own wire format. */
+  function sse(chunks: readonly string[]): Response {
+    const encoder = new TextEncoder();
+    const payloads = [
+      ...chunks.map(
+        (text) => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`,
+      ),
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const payload of payloads) controller.enqueue(encoder.encode(payload));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  }
+
+  /** A transport that answers the replies in order, plus the count of requests it received. */
+  function scriptedWire(replies: readonly (readonly string[])[]): {
+    fetch: FetchLike;
+    calls: () => number;
+  } {
+    let calls = 0;
+    return {
+      calls: () => calls,
+      fetch: () => {
+        const reply = replies[calls] ?? [];
+        calls += 1;
+        return Promise.resolve(sse(reply));
+      },
+    };
+  }
+
+  /** Store the provider row and substitute the transport, the way `mountApp` wires them. */
+  async function armTheProvider(wire: { readonly fetch: FetchLike }): Promise<void> {
+    await writeProviderSettings({
+      baseUrl: BASE_URL,
+      model: MODEL,
+      secret: { kind: 'plaintext', apiKey: API_KEY },
+    });
+    configureChat({ transport: wire.fetch });
+  }
+
+  /**
+   * Wait until the settings row is loaded, so a turn can be attempted.
+   *
+   * The play view asks for `SettingsState.loaded` and a click that arrived before that read
+   * settled would be refused by `turnGate` — the case under test would then be asserting
+   * against a banner instead of an opening.
+   */
+  async function waitForSettings(): Promise<void> {
+    const deadline = Date.now() + 4_000;
+    while (!useSettingsStore.getState().loaded) {
+      if (Date.now() > deadline) throw new Error('settings never loaded');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    }
+  }
+
+  /** The panel's own textarea, typed into the way a browser types. */
+  async function typeOpening(host: HTMLElement, value: string): Promise<void> {
+    const input = host.querySelector('.opening-input');
+    if (!(input instanceof HTMLTextAreaElement)) throw new Error('no opening textarea');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it('offers all three choices while the session has no first message', async () => {
+    const session = await createSession({ title: 'opening' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+
+    // The rendered copy is pinned by the zh-CN row this file writes in `beforeEach`, which is
+    // what makes "the panel is in the active language" a checked fact rather than an assumption.
+    expect(host.textContent).toContain(zh.t('play.openingHint'));
+    expect(buttonLabels(host)).toContain(zh.t('play.openingWrite'));
+    expect(buttonLabels(host)).toContain(zh.t('play.openingGenerate'));
+    expect(buttonLabels(host)).toContain(zh.t('play.openingSkip'));
+    expect(host.querySelector('.opening-input')).not.toBeNull();
+    // Nothing is stored by merely showing the panel: offering a choice is not choosing.
+    expect(await getChain(session.id)).toEqual([]);
+    expect((await getSession(session.id))?.headMessageId).toBeNull();
+  });
+
+  it('hand-writes the opening, then takes the panel away and refuses a second one', async () => {
+    const session = await createSession({ title: 'opening-hand' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+
+    await typeOpening(host, '酒馆的门在身后合上。');
+    await clickButton(host, zh.t('play.openingWrite'));
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+
+    // THE ROW: the chain's root, written from the textarea.
+    const stored = await getChain(session.id);
+    expect(stored.map((message) => message.content)).toEqual(['酒馆的门在身后合上。']);
+    expect(stored[0]?.parentId).toBeNull();
+    expect(stored[0]?.role).toBe('user');
+    expect((await getSession(session.id))?.headMessageId).toBe(stored[0]?.id);
+    await waitForText(host, '酒馆的门在身后合上。');
+
+    // THE PANEL IS GONE once the chain is non-empty — the empty-transcript position is what
+    // offered the choice, and it no longer holds.
+    expect(host.querySelector('.opening-input')).toBeNull();
+    expect(buttonLabels(host)).not.toContain(zh.t('play.openingWrite'));
+
+    // AND A SECOND ATTEMPT IS A NO-OP even when a caller reaches the action directly: an
+    // opening is a start, so a second row with `parentId: null` must be impossible. Wrapped in
+    // `act` because the action updates the store the mounted view subscribes to.
+    let written = true;
+    await act(async () => {
+      written = await useChatStore.getState().startOpening('第二句');
+    });
+    expect(written).toBe(false);
+    expect(await listChildren(session.id, null)).toHaveLength(1);
+  });
+
+  it('refuses a blank opening with a sentence, and writes nothing', async () => {
+    const session = await createSession({ title: 'opening-blank' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+
+    await clickButton(host, zh.t('play.openingWrite'));
+    await waitForText(host, zh.t('play.openingWriteEmpty'));
+
+    // The panel is still there (nothing was written) and the database is untouched.
+    expect(host.querySelector('.opening-input')).not.toBeNull();
+    expect(await getChain(session.id)).toEqual([]);
+    expect((await getSession(session.id))?.headMessageId).toBeNull();
+  });
+
+  it('skips the opening: no row, and the next message is the chain root', async () => {
+    const session = await createSession({ title: 'opening-skip' });
+    const wire = scriptedWire([['对开的回答']]);
+    await armTheProvider(wire);
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+    await waitForSettings();
+
+    await clickButton(host, zh.t('play.openingSkip'));
+    await waitForText(host, zh.t('play.openingSkipped'));
+    // THE ACCEPTANCE FOR 跳过: nothing was written and the head is still null, so the session is
+    // usable rather than blocked.
+    expect(await getChain(session.id)).toEqual([]);
+    expect((await getSession(session.id))?.headMessageId).toBeNull();
+    expect(host.querySelector('.opening-input')).toBeNull();
+
+    // AND THE NEXT TURN STARTS THE CHAIN FROM THAT NULL HEAD: the user's message is the root.
+    await typeInto(host, '#turn-input', '我推开门');
+    await clickButton(host, '发送');
+    await waitForState(() => useChatStore.getState().messageChain.length === 2);
+    const stored = await getChain(session.id);
+    expect(stored.map((message) => message.content)).toEqual(['我推开门', '对开的回答']);
+    expect(stored[0]?.parentId).toBeNull();
+    expect(stored[1]?.parentId).toBe(stored[0]?.id);
+    expect((await getSession(session.id))?.headMessageId).toBe(stored[1]?.id);
+  });
+
+  it('generates the opening through the panel with exactly one request and no user row', async () => {
+    const session = await createSession({ title: 'opening-ai' });
+    const wire = scriptedWire([['模型写的开场']]);
+    await armTheProvider(wire);
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+    await waitForSettings();
+
+    await clickButton(host, zh.t('play.openingGenerate'));
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+    await waitForText(host, '模型写的开场');
+
+    // ONE REQUEST, and the answer is the chain's ROOT: `append: {mode: 'none'}` writes no user
+    // row, so the instruction is on the wire only.
+    expect(wire.calls()).toBe(1);
+    const stored = await getChain(session.id);
+    expect(stored.map((message) => message.content)).toEqual(['模型写的开场']);
+    expect(stored[0]?.role).toBe('assistant');
+    expect(stored[0]?.parentId).toBeNull();
+    expect((await getSession(session.id))?.headMessageId).toBe(stored[0]?.id);
+    // The instruction the request carried was never stored, so no row in the database holds it.
+    expect(await snapshotAllRows(databaseName)).not.toContain(zh.t('play.openingInstruction'));
+    // The panel is gone, because the chain is no longer empty.
+    expect(host.querySelector('.opening-input')).toBeNull();
+  });
+
+  it('never offers the panel to a session that already has a message', async () => {
+    const session = await createSession({ title: 'opening-done' });
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '早就开始了',
+    });
+    await setHeadMessageId(session.id, first.id);
+
+    const host = await mountAt(`/play/${session.id}`, '早就开始了');
+
+    // Once the session is open the panel is never offered: the stored row is rendered and the
+    // head is set, which is the fact the store's own guard reads. The action call below is the
+    // other half — a caller that reaches it directly is refused too.
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+    expect(host.querySelector('.opening-input')).toBeNull();
+    expect(buttonLabels(host)).not.toContain(zh.t('play.openingGenerate'));
+    // Wrapped in `act` like every other direct store call in this file: the action updates the
+    // store, so an unwrapped call would leave React warning that the DOM assertions above may
+    // have read a tree it never flushed.
+    let refused = true;
+    await act(async () => {
+      refused = await useChatStore.getState().startOpening('第二条开场');
+    });
+    expect(refused).toBe(false);
+    expect(await listChildren(session.id, null)).toHaveLength(1);
+  });
+
+  it('refuses a second opening after a rollback to before the first message', async () => {
+    // A ROLLBACK TO BEFORE THE FIRST MESSAGE IS A REAL POSITION, and it is where the two
+    // "has this session started" signals disagree: `Session.headMessageId` is back to `null`
+    // while the opening row is still in the table (ADR-010 — messages are never deleted). The
+    // panel is deliberately OFFERED again there — the live position really is "no transcript"
+    // (`messageChain` is `[]`) — and the STORE is what refuses the second opening, because it
+    // would have to be a second ROOT that no head can reach. This case pins that refusal: it is
+    // the guard, not the panel, that makes a second opening impossible.
+    //
+    // The state is built the way the app builds it — save a point before the first message
+    // (docs/02 §7's nullable `Checkpoint.messageId`), play on, then click 读档 — rather than by
+    // poking the session row, so the position under test is one a user can reach.
+    const session = await createSession({ title: 'opening-rolled-back' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+
+    // A save point at "no transcript", taken through the panel's own control.
+    await typeInto(host, '#checkpoint-label', '开场前');
+    await clickButton(host, zh.t('play.checkpointSave'));
+    await waitForState(() => useChatStore.getState().checkpoints.length === 1);
+    expect(useChatStore.getState().checkpoints[0]?.messageId).toBeNull();
+
+    // Play on: the opening is written, then a second message hangs off it.
+    await typeOpening(host, '开场白');
+    await clickButton(host, zh.t('play.openingWrite'));
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+    const opening = await getChain(session.id);
+    expect(opening[0]?.parentId).toBeNull();
+    const second = await appendMessage({
+      sessionId: session.id,
+      parentId: opening[0]?.id ?? null,
+      role: 'assistant',
+      content: '之后的一句',
+    });
+    await setHeadMessageId(session.id, second.id);
+    await waitForState(() => useChatStore.getState().messageChain.length === 2);
+
+    // The rollback, through the panel's two-step control.
+    await clickButton(host, zh.t('play.checkpointRestore'));
+    await clickButton(host, zh.t('play.checkpointRestoreConfirm'));
+    await waitForState(() => useChatStore.getState().session?.headMessageId === null);
+
+    // THE POSITION: a null head, no live transcript, and the opening still stored.
+    expect((await getSession(session.id))?.headMessageId).toBeNull();
+    expect(await listChildren(session.id, null)).toHaveLength(1);
+    expect(useChatStore.getState().messageChain).toEqual([]);
+
+    // AND THE WRITE IS REFUSED FROM THAT POSITION — the guard the panel cannot replace.
+    let refused = true;
+    await act(async () => {
+      refused = await useChatStore.getState().startOpening('再写一条');
+    });
+    expect(refused).toBe(false);
+    // ...and the same is true of the AI path, which must not send a request it would have to
+    // write as a second root.
+    await expect(useChatStore.getState().generateOpening()).resolves.toBe(false);
+    expect(await listChildren(session.id, null)).toHaveLength(1);
   });
 });
