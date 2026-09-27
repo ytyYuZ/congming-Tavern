@@ -36,10 +36,13 @@ for (const step of steps) {
   // Pipelines are allowed to pipe: pass the command through the shell so the
   // `pnpm` shim (pnpm.cmd on Windows) resolves.
   const code = await new Promise((resolve) => {
-    const child = spawn(`pnpm ${step}`, {
+    // `append-only`: pnpm's default reporter redraws a progress line in place,
+    // which makes an embedding terminal flicker. The env var is what the INNER
+    // pnpm (`pnpm build` spawns one) sees; the flag covers the outer one.
+    const child = spawn(`pnpm --reporter=append-only ${step}`, {
       stdio: 'inherit',
       shell: true,
-      env: { ...process.env, NODE_OPTIONS: nodeOptions },
+      env: { ...process.env, NODE_OPTIONS: nodeOptions, npm_config_reporter: 'append-only' },
     });
     child.on('close', (exitCode) => resolve(exitCode ?? 1));
     child.on('error', () => resolve(1));

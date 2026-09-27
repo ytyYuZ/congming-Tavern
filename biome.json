@@ -16,7 +16,9 @@
       "!**/.npm-cache",
       "!**/.local-appdata",
       "!**/target",
-      "!**/*.stpack"
+      "!**/*.stpack",
+      "!schema",
+      "!**/.tmp-*"
     ]
   },
   "formatter": {

@@ -42,8 +42,9 @@
 | `docs/06-开发任务拆解.md` | 工程约定、M0–M4 任务清单（产出 / 依赖 / 验收）、关键路径、第一天清单、**§8 M0-T2 ~ M0-T5 实施计划** |
 | `HANDOFF.md` | 交接说明：给后续开发 AI 的阅读顺序、冻结决策、立即开工步骤、已知坑 |
 
-发布产物：`schema/package-1.json` —— 由 `tools/schema-export` 从 `packages/schema` 的 Zod 定义生成
-（**禁止手写第二份**），供第三方实现无需依赖本项目代码即可校验 `.stpack`。
+发布产物（均由 `pnpm schema:export` 从 `packages/schema` 的 Zod 定义生成，**禁止手写**，有漂移测试守护）：
+`schema/package-1.json` —— `.stpack` manifest 的 JSON Schema（draft 2020-12），供第三方实现无需依赖本项目代码即可校验；
+`schema/tools-1.json` —— 工具声明的 JSON Schema，供插件作者与 prompt 装配使用。
 
 ## 技术栈速览（详见 `docs/02-技术架构.md`）
 
@@ -57,8 +58,10 @@
 
 ## 当前状态
 
-v0.4：需求与架构已评审定稿；`docs/04` 包格式完成**规范文本消歧 r2**（仍为 `formatVersion: 1`）；
-产品名与前端框架已定（ADR-017）；**M0-T0 工程骨架与 M0-T1 实体契约已完成并提交**
-（`pnpm ci:local` 四项全绿，176 个用例）；**M0-T2 ~ M0-T5 的实施计划见 `docs/06` §8**。
+v0.6：**M0 的契约与骨架已基本落地** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
+（`schema/package-1.json` 与 `schema/tools-1.json` 由 `pnpm schema:export` 生成，有漂移测试守护）、
+M0-T3 `.stpack` 打包 / 解包 / 校验（自研窄 ZIP + canonical JSON，ADR-018）、
+M0-T4 包 CLI（`pnpm stpack -- validate|inspect|unpack`）、M0-T5 `core/ports` 核心接口与测试替身
+均已完成，`pnpm ci:local` 四步全绿。
 
-**下一步**：`M0-T2`（`packages/schema/src/package.ts` → 生成并提交 `schema/package-1.json`）。
+**下一步**：M0-T6（OpenAI 兼容 Provider）、M0-T7（IndexedDB 存储）、M0-T8（应用骨架；桌面端需先装 Rust 工具链）。

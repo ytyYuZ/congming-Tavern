@@ -16,6 +16,8 @@
     "test": "vitest run --pool=threads",
     "test:watch": "vitest --pool=threads",
     "check:deps": "node tools/scripts/check-dependency-direction.mjs",
+    "schema:export": "node tools/schema-export/export.mjs",
+    "stpack": "node tools/stpack-cli/bin/stpack.mjs",
     "build": "tsc -b --noCheck --noEmit false && pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" build",
     "ci": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "ci:local": "node tools/scripts/run-ci-local.mjs"

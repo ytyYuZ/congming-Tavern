@@ -68,3 +68,10 @@ secrets.json
 # The Electron/pnpm crash handler writes `debug.log` into the working directory
 # when a sandbox denies its crash-database path. Never commit those.
 *.log
+
+# --- Test litter -------------------------------------------------------------
+# `tools/stpack-cli` tests unpack into a temp directory inside the workspace (the
+# sandbox does not reliably allow the OS temp dir); a failed run must never leave
+# them staged.
+.tmp-*/
+*.tmp
