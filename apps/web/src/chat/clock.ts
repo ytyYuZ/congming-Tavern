@@ -31,19 +31,23 @@
  * glue words, passed in as `t` so this module never reaches for the locale store).
  */
 import {
+  advance,
   type ChatMessage,
   type ClockDisplay,
+  calendarView,
   // Imported under a local name on purpose: the bare identifier `display` collides
   // with the DOM's global `display` accessor in a browser, and a bundler that resolved
   // the free name to that global would silently call the wrong thing at runtime.
   display as clockDisplay,
   compose,
+  hourOfDayAt,
   type PromptBudget,
   type PromptContext,
   renderParts,
+  resolveSegments,
 } from '@smarttavern/core';
 import type { Translator } from '@smarttavern/i18n';
-import type { Message, PromptPreset, Session } from '@smarttavern/schema';
+import type { Message, PromptPreset, Session, SessionState } from '@smarttavern/schema';
 import { BUILTIN_CALENDAR, type BuiltinSlot } from './builtin-content';
 
 /** The clock reading of a session, as structured parts. See the header for `initialClock`. */
@@ -72,7 +76,95 @@ export function worldClockText(reading: ClockDisplay, t: Translator['t']): strin
   return t('play.clock', { date, segment });
 }
 
-/* ──────────────────────── the preset's app-side slot fill ─────────────────── */
+/* ───────────────────────────── advancing the clock ────────────────────────── */
+
+/**
+ * Move a session state's clock by `delta` minutes — M1-T2's engine half.
+ *
+ * THE ARITHMETIC IS THE ENGINE'S, NOT THIS MODULE'S
+ * `advance()` (`packages/core/src/engine/time/clock.ts`) owns the calendar walk and
+ * returns a `TimeStep`; this function only decides WHICH VALUE becomes the session's
+ * new `clock`. Re-deriving the minute here (`state.clock + delta * 60`) would work for
+ * the built-in 60-minute hour and quietly break for a world whose `minutesPerHour` is
+ * not 60 — a data edit, not a code change, which is exactly the kind of bug the engine
+ * exists to prevent. It returns a NEW state and moves no input, like every other
+ * engine operation (docs/02 §5.7's "time went back but the state did not" must be
+ * inexpressible).
+ *
+ * WHY ONLY `clock` MOVES: `session.state.clock` is what `clockOf` reads and what the
+ * prompt's time block is built from (ADR-032), so it is the one field a manual advance
+ * has to write. `scene.time` is the SCENE's own timestamp — a transcription of when
+ * the current scene opened — and a later scene tracker (M3) is what keeps it; guessing
+ * at it here would be a second, unchecked clock.
+ *
+ * WHY NEGATIVE DELTAS ARE ALLOWED: "set the clock back" is a documented user
+ * operation and a checkpoint rollback has to be expressible (docs/02 §5.7), so a
+ * custom amount below zero is a request, not an error. `advance` already defines what
+ * "crossed" means in that direction.
+ *
+ * WHAT IS DELIBERATELY NOT HERE (docs/02 §5.7's advance policy)
+ * `timeRhythm` (the implicit every-N-turns advance) and `advance_time`'s
+ * auto / ask / deny choice belong to the APPROVAL UI, not to this function: a pure
+ * function cannot ask a human, and the rule that "more than one day forces ask" is a
+ * decision about who may call `advance`, not about what `advance` computes. The manual
+ * controls on the play screen are the one caller today, and their whole policy is
+ * "the user pressed the button".
+ */
+export function advanceState(state: SessionState, delta: number): SessionState {
+  const step = advance({ delta, calendar: BUILTIN_CALENDAR, fromMinute: state.clock });
+  return { ...state, clock: step.toMinute };
+}
+
+/**
+ * The minutes one 「+时段」 press moves: to the START of the day segment after the one
+ * the clock is in.
+ *
+ * WHY THE NEXT BOUNDARY AND NOT A FIXED `stepMinutes`: the built-in calendar's four
+ * segments happen to be six hours each, so `+360` would look right and be wrong for
+ * every other set of windows — segments are world content and their widths are not
+ * uniform (docs/02 §5.7's `timeRhythm.stepMinutes` is a separate, optional number the
+ * world declares). Going to the next boundary makes the control mean "the next
+ * stretch of the day" for any calendar, which is what the label promises.
+ *
+ * The search is a scan over the resolved windows for the first `fromHour` strictly
+ * after the current hour, plus the first one after a full day; it uses the engine's
+ * own `resolveSegments` + `hourOfDayAt`, so an overnight window (`夜` declared 22 → 4)
+ * is flattened by the engine rather than re-interpreted here.
+ *
+ * A calendar with NO segments has no boundaries to aim at, so the answer falls back to
+ * one hour. That is the one number this module states rather than derives, and it is
+ * deliberately the same quantity the 「+1 小时」 button moves: with nothing named about
+ * the day, "the next part of the day" has no meaning and an hour is the honest step.
+ */
+export function segmentStep(state: SessionState): number {
+  const view = calendarView(BUILTIN_CALENDAR);
+  const segments = resolveSegments(BUILTIN_CALENDAR.segments, view.hoursPerDay);
+  if (segments.length === 0) return view.minutesPerHour;
+
+  const { hour, minute } = hourOfDayAt(view, state.clock);
+  // The next declared boundary strictly after this hour. A segment may legitimately be
+  // ABSENT here (a calendar whose windows do not cover every hour), so the scan is over
+  // the resolved windows rather than "the segment after the current one" — the latter
+  // would have nothing to answer with on an uncovered minute like 03:00 of a calendar
+  // that only names 06:00-12:00.
+  const after = segments
+    .filter((segment) => segment.fromHour > hour)
+    .reduce<number | undefined>(
+      (earliest, segment) =>
+        earliest === undefined || segment.fromHour < earliest ? segment.fromHour : earliest,
+      undefined,
+    );
+  // No boundary later today, so the step crosses midnight into the first one: the hours
+  // are measured on a circular day, which is also why a `fromHour` of 0 works here.
+  const firstBoundary = segments.reduce(
+    (lowest, segment) => Math.min(lowest, segment.fromHour),
+    view.hoursPerDay,
+  );
+  const nextHour = after ?? firstBoundary + view.hoursPerDay;
+  // Whole hours to the boundary, then back out the minutes already past the hour, so
+  // the step lands exactly ON the boundary rather than an hour's worth of minutes on.
+  return (nextHour - hour) * view.minutesPerHour - minute;
+}
 
 /**
  * One `{slot}` token. SINGLE braces, and that is the whole point: the composer's

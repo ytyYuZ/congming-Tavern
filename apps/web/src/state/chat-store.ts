@@ -40,14 +40,27 @@
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
-import type { Id, Message, Session } from '@smarttavern/schema';
+import type { Checkpoint, Id, Message, Session } from '@smarttavern/schema';
 import { create } from 'zustand';
+import { advanceState } from '../chat/clock';
 import { sendTurn } from '../chat/send-turn';
 import { subscribe } from '../db/database';
-import { createSession, getSession, readChain, readSessions } from '../db/repository';
+import {
+  createCheckpoint as createCheckpointRow,
+  createSession,
+  deleteCheckpoint as deleteCheckpointRow,
+  getChain,
+  getSession,
+  listCheckpoints,
+  readChain,
+  readSessions,
+  restoreCheckpoint as restoreCheckpointRow,
+  writeSessionState,
+} from '../db/repository';
 import { KEY_LOCKED_CODE, messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
 import { translate } from '../i18n/translate';
 import { isProviderReady, useSettingsStore } from './settings-store';
+import { writeErrorName } from './write-error';
 
 /** The turn lifecycle: nothing in flight, a stream arriving, or the last turn failed. */
 export type ChatStatus = 'idle' | 'streaming' | 'error';
@@ -84,6 +97,14 @@ export interface ChatState {
   sessions: Session[];
   session: Session | undefined;
   messageChain: Message[];
+  /**
+   * The OPEN session's save points, newest first (M1-M1). A plain copy read by
+   * `open` and refreshed by every save/restore/delete, NOT a `liveQuery`: the
+   * transcript is subscribed because a turn writes it while the user watches, while
+   * nothing but this screen writes a checkpoint — and a subscription per collection is
+   * a cost this list does not need.
+   */
+  checkpoints: Checkpoint[];
   draft: StreamingDraft;
   status: ChatStatus;
   error: ChatError | undefined;
@@ -95,6 +116,18 @@ export interface ChatState {
   send: (text: string) => Promise<void>;
   abort: () => void;
   dismissError: () => void;
+  /**
+   * Move the open session's clock by `delta` minutes (M1-T2). Resolves to the new
+   * minute, or `undefined` when there is no session or the delta is not a usable
+   * whole number of minutes.
+   */
+  advance: (delta: number) => Promise<number | undefined>;
+  /** Save the current instant under `label` (M1-M1). Resolves to the stored row. */
+  saveCheckpoint: (label: string) => Promise<Checkpoint | undefined>;
+  /** Roll the session back to a save point (M1-M1 / M1-T4). */
+  restoreCheckpoint: (checkpointId: Id) => Promise<boolean>;
+  /** Remove one save point. The live session is untouched. */
+  deleteCheckpoint: (checkpointId: Id) => Promise<void>;
 }
 
 /**
@@ -154,6 +187,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   session: undefined,
   messageChain: [],
+  checkpoints: [],
   draft: { ...IDLE_DRAFT },
   status: 'idle',
   error: undefined,
@@ -183,7 +217,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const token = openToken;
     const session = await getSession(sessionId);
     if (token !== openToken) return;
-    set({ session, error: undefined, status: 'idle', draft: { ...IDLE_DRAFT } });
+    // Read BEFORE the single `set`, and only then applied: the list is a second async
+    // read, and awaiting it inside the `set` argument would let a close or a new `open`
+    // run in between and be overwritten by this one's result.
+    const checkpoints = await listCheckpoints(sessionId);
+    if (token !== openToken) return;
+    set({ session, checkpoints, error: undefined, status: 'idle', draft: { ...IDLE_DRAFT } });
     // The transcript is a live query, so a message written by this turn OR by
     // another tab lands in the view without anyone re-fetching it by hand.
     unsubscribe = subscribe(
@@ -215,6 +254,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       session: undefined,
       messageChain: [],
+      checkpoints: [],
       draft: { ...IDLE_DRAFT },
       status: 'idle',
       error: undefined,
@@ -330,7 +370,142 @@ export const useChatStore = create<ChatState>((set, get) => ({
   dismissError(): void {
     set({ error: undefined, status: 'idle' });
   },
+
+  /**
+   * Move the clock by `delta` minutes and persist the whole state (M1-T2).
+   *
+   * WHY THE STORE OWNS THE `await`, NOT THE VIEW: the view's button handler is
+   * fire-and-forget, and an unhandled rejection there is a click that did nothing and
+   * said nothing. This action never rejects — the same rule every settings store
+   * follows (`state/write-error.ts`).
+   *
+   * WHY THE STATE CHANGES BEFORE THE WRITE: the acceptance sentence is 推进立即反映到 UI
+   * 与状态 ("the advance shows up immediately in the UI and in the state"), and
+   * `await writeSessionState(...)` first would leave the on-screen clock at the old
+   * minute until IndexedDB answered. The store's `session` IS the value the view
+   * renders, so setting it here is what "immediately" means; the row follows.
+   *
+   * WHY A FAILED WRITE RESYNCS INSTEAD OF GUESSING: the in-memory minute is not on
+   * disk, so the two disagree. Rolling back to the value this action read would be
+   * wrong too — the user may have pressed a second button while the first write was in
+   * flight — so the state is re-read from the repository, which is the only copy that
+   * cannot be stale. `error` carries the failure's NAME (`writeErrorName`'s rule: a
+   * storage message can quote the value that failed to store).
+   *
+   * A delta that is not a whole, non-zero number of minutes is REFUSED rather than
+   * rounded: the engine throws on a fractional delta, and "+0 minutes" is a button that
+   * cannot do anything.
+   */
+  async advance(delta: number): Promise<number | undefined> {
+    const session = get().session;
+    if (session === undefined || !Number.isInteger(delta) || delta === 0) return undefined;
+    const nextState = advanceState(session.state, delta);
+    set({ session: { ...session, state: nextState } });
+    try {
+      await writeSessionState(session.id, nextState);
+      set({ error: undefined });
+    } catch (cause) {
+      set({ error: localFailure(cause, 'unknown clock write failure') });
+      // The persisted state is re-read so the view cannot claim a minute the database
+      // does not hold. `getSession` completes a legacy row the same way every reader
+      // does (ADR-032).
+      const stored = await getSession(session.id);
+      if (stored !== undefined) set({ session: stored });
+      return undefined;
+    }
+    return nextState.clock;
+  },
+
+  /**
+   * Save the current instant under `label` (M1-M1).
+   *
+   * THE SNAPSHOT IS TAKEN BY THE REPOSITORY, not from `get().session`: `createCheckpoint`
+   * reads the session row inside its own transaction, which is what makes
+   * state + `headMessageId` ONE instant. Handing it the store's copy would reintroduce
+   * exactly the split the repository avoids — the store's copy can be a turn behind the
+   * head the turn just wrote. The label is chosen here because a default label is
+   * PERSISTED copy and therefore has to be translated where the locale store is
+   * reachable (`createSession`'s title records the same argument).
+   *
+   * The new row is put at the FRONT of `checkpoints`: the list is newest-first, the row
+   * was just minted, and re-reading the whole list to learn that would be a round trip
+   * for a fact this call already holds.
+   */
+  async saveCheckpoint(label: string): Promise<Checkpoint | undefined> {
+    const session = get().session;
+    if (session === undefined) return undefined;
+    const stored = await createCheckpointRow({ sessionId: session.id, label });
+    if (stored === undefined) return undefined;
+    set({ checkpoints: [stored, ...get().checkpoints] });
+    return stored;
+  },
+
+  /**
+   * Roll the session back to a save point (M1-M1 / M1-T4).
+   *
+   * WHY THE WRITE IS AWAITED BEFORE THE STATE MOVES, UNLIKE `advance`
+   * An advance is a request whose result the user is watching, so the screen leads and
+   * the row follows. A restore is the opposite: its whole value is that the clock, the
+   * vars, the scene and the transcript tip move back TOGETHER, and a screen that showed
+   * the rollback while the row still held the new position would be exactly the
+   * inconsistency this milestone exists to remove. So the row is written first, and the
+   * in-memory state is derived from the SAME checkpoint object that was written — never
+   * re-read, which is also what removes the race with the live query.
+   *
+   * The message chain is re-read by hand: the `liveQuery` subscription will emit the
+   * restored chain on its own schedule, but a caller (and the test) must be able to see
+   * the rollback the moment this resolves. Messages are never deleted (ADR-010) — the
+   * rows after the save point stay in the database and are simply no longer on the
+   * active chain, so re-loading the save or taking the other branch again still works.
+   */
+  async restoreCheckpoint(checkpointId: Id): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    const checkpoint = get().checkpoints.find((candidate) => candidate.id === checkpointId);
+    // A checkpoint that is not in this session's list belongs to another session's
+    // transcript: restoring it would move THIS session's head to a message id that is
+    // not in its tree, leaving an empty chain and a head that points nowhere.
+    if (checkpoint === undefined || checkpoint.sessionId !== session.id) return false;
+    const restored = await restoreCheckpointRow(checkpointId);
+    if (restored === undefined) return false;
+    const messageChain = await getChain(session.id);
+    set({
+      session: {
+        ...session,
+        state: { ...checkpoint.state },
+        headMessageId: restored.headMessageId,
+      },
+      messageChain,
+    });
+    return true;
+  },
+
+  /** Remove one save point. The live position is deliberately untouched. */
+  async deleteCheckpoint(checkpointId: Id): Promise<void> {
+    await deleteCheckpointRow(checkpointId);
+    set({
+      checkpoints: get().checkpoints.filter((candidate) => candidate.id !== checkpointId),
+    });
+  },
 }));
+
+/**
+ * A storage failure as a `ChatError`.
+ *
+ * `code: 'unknown'` is the code that already means "a local fault" to the banner
+ * (`i18n/error-keys.ts`), and `message` is the error's NAME only, through the same
+ * helper the settings stores use: a storage message can quote the value that failed to
+ * store. `retryable` is false and `turnText` empty, so the banner does not offer
+ * 「重试」 for a clock write the user cannot re-send as a turn.
+ */
+function localFailure(cause: unknown, whenUnknown: string): ChatError {
+  return {
+    code: 'unknown',
+    message: writeErrorName(cause, whenUnknown),
+    retryable: false,
+    turnText: '',
+  };
+}
 
 /** Test seam: forget the configured transport, the subscription and the state. */
 export function resetChat(): void {
@@ -343,6 +518,7 @@ export function resetChat(): void {
     sessions: [],
     session: undefined,
     messageChain: [],
+    checkpoints: [],
     draft: { ...IDLE_DRAFT },
     status: 'idle',
     error: undefined,

@@ -56,6 +56,8 @@
 import { COLLECTIONS, type Collection, type RowBase, type Tx } from '@smarttavern/core';
 import { isLocale, type Locale } from '@smarttavern/i18n';
 import {
+  type Checkpoint,
+  CheckpointSchema,
   defaultSessionState,
   type Id,
   type JsonValue,
@@ -656,6 +658,268 @@ export async function getChain(sessionId: Id): Promise<Message[]> {
   }
 
   return reversed.reverse();
+}
+
+/* ─────────────────────────────── checkpoints ─────────────────────────────── */
+
+/**
+ * One stored save point (M1-M1 / M1-T4, docs/04 §6, docs/02 §7, ADR-032).
+ *
+ * A CHECKPOINT IS **ONE ROW**, AND THAT IS A CONSEQUENCE OF ADR-032
+ * `packages/core/src/ports/storage.ts` motivates its single `transaction` entry point
+ * with "a checkpoint writes clock + agenda status + cast state", i.e. it describes a
+ * checkpoint as a MULTI-COLLECTION write. That sentence predates ADR-032, which gave
+ * the live state its persistence slot: `Session.state` is now ONE field holding the
+ * scene, BOTH clocks, `vars`, `sheets` and `deadlines`, and `CheckpointSchema.state`
+ * is that very type. So a save point is `{state, messageId, castState, agendaStatus,
+ * summary}` in one `checkpoints` row, and reading a save back is one `get`.
+ *
+ * The port's comment is still TRUE of the port — `transaction` remains the only entry
+ * point, and a compound write (an import, a migration) still needs it — so it is NOT
+ * edited here. What has changed is only which write this feature happens to perform:
+ * one row, one `put`, in one transaction. Recorded rather than silently rewritten
+ * because a future reader who trusts that example would look for a second collection
+ * that no longer participates.
+ *
+ * WHY `state` IS WRITTEN AS A COPY
+ * `createCheckpoint` snapshots the session's OWN `state` value, and objects are
+ * references: a checkpoint that aliased the live state would silently follow every
+ * later clock advance and stop being "then" at all. `savedState`/`copyState` below
+ * are what make the stored value an independent snapshot, and the repository test
+ * asserts BOTH directions of that (mutating the live value must not move the save,
+ * and mutating a read-back save must not move the live value).
+ */
+export type CheckpointRow = Checkpoint & RowBase;
+
+function checkpointsOf(tx: Tx): Collection<CheckpointRow> {
+  return tx.collection<CheckpointRow>(COLLECTIONS.checkpoints);
+}
+
+/**
+ * A DEEP-ENOUGH COPY OF A SESSION STATE — the one place the snapshot's independence is
+ * created.
+ *
+ * WHY NOT `structuredClone`: it exists in every browser this app targets, but it is a
+ * global that `biome.json` bans for `packages/core` and that this workspace has not
+ * adopted elsewhere; the state's shape is fixed by `SessionStateSchema` (a scene
+ * object, five flat records, one array of flat objects), so an explicit copy is
+ * shorter than the argument for the global and cannot throw on a value the schema
+ * already forbids. A field-by-field copy also states, in code, exactly which parts are
+ * shared by reference when they are not copied — `sheets`' values are `unknown` to
+ * core, so they are the one place a nested mutation could still be observed; that is
+ * called out at `copySheets` rather than hidden.
+ */
+function copyState(state: SessionState): SessionState {
+  return {
+    scene: { ...state.scene },
+    clock: state.clock,
+    ...(state.innerClock === undefined ? {} : { innerClock: { ...state.innerClock } }),
+    vars: { ...state.vars },
+    sheets: copySheets(state.sheets),
+    deadlines: state.deadlines.map((deadline) => ({ ...deadline })),
+  };
+}
+
+/**
+ * A new object per sheet, and a new object per row inside it.
+ *
+ * The CELLS are copied one level deep and no further: a sheet cell is `unknown`
+ * because the rule pack owns its schema, and a copy that recursed into it would be
+ * guessing at a shape this layer must not know. So a cell that holds an OBJECT is
+ * still shared — the same limitation `structuredClone` would not have — and it is
+ * recorded here rather than discovered: nothing in M1 writes such a cell (`vars` is
+ * primitives by schema and no rule pack ships yet).
+ */
+function copySheets(sheets: SessionState['sheets']): SessionState['sheets'] {
+  const copy: SessionState['sheets'] = {};
+  for (const [actorId, row] of Object.entries(sheets)) copy[actorId] = { ...row };
+  return copy;
+}
+
+/**
+ * Everything a save point captures, read from the session row — the "one instant".
+ *
+ * WHY THIS READS THE SESSION INSIDE THE CALLER'S TRANSACTION
+ * A save is TWO facts that must have coexisted: the live state (clock, vars, scene)
+ * and `headMessageId` (how far the transcript had got). Reading them in two separate
+ * reads — or reading the clock now and the head after an await — can record a pair
+ * that never was: the clock of a turn whose messages are not in the chain, or a
+ * transcript tip from after an advance the state does not contain. Restoring such a
+ * pair is a rollback to a moment that never existed, which is exactly the class of bug
+ * docs/02 §5.7's "读档即回滚时钟" is meant to make inexpressible. So both are read in
+ * ONE `getSession`-equivalent `get` inside ONE transaction, and the row is completed
+ * through `completeState` for the same reason every other reader does it (ADR-032):
+ * a save taken on a pre-`state` row must not be the operation that fails.
+ */
+function snapshotOf(
+  row: Record<string, unknown> | undefined,
+): { state: SessionState; headMessageId: Id | null } | undefined {
+  if (row === undefined) return undefined;
+  const session = SessionSchema.parse({ ...row, state: completeState(row) });
+  return { state: copyState(session.state), headMessageId: session.headMessageId };
+}
+
+/**
+ * Save the current instant under a label.
+ *
+ * The label is the CALLER's decision for the reason `createSession`'s title is: a
+ * default like "save point" is PERSISTED copy and must be written in the language that
+ * was active when the user pressed the button, and this module must not import the i18n
+ * layer (ADR-030's addendum). `label` is required by `CheckpointSchema`, so the caller
+ * supplies a real sentence.
+ *
+ * `castState` is an argument and NOT read from the session row, because the live cast
+ * presentation (who is on stage, which emotion, which outfit) has no persistence slot
+ * yet — `SessionRefs.cast` is the PINNED ROSTER, which is a different fact and must not
+ * be copied in as if it were live state. The caller that owns that state passes it; the
+ * default is the empty map, which is the honest "nothing recorded" value and what the
+ * play screen passes today.
+ *
+ * `agendaStatus` and `summary` are the two fields docs/04 §6's payload lists that no
+ * engine writes yet (the agenda state machine and rolling summaries are later
+ * milestones). They are written as their empty values rather than omitted, so the stored
+ * row is a complete `Checkpoint` from the first save on and a later writer fills them in.
+ *
+ * Returns the STORED row (id and `createdAt` included) so a caller does not have to
+ * re-read the list to show what it just saved. Returns `undefined` when the session id is
+ * unknown — the same silent no-op `writeSessionState` and `setHeadMessageId` perform,
+ * and the honest answer for "there is nothing to snapshot".
+ *
+ * WHY AN EMPTY TRANSCRIPT ALSO ANSWERS `undefined` (a missing field, reported)
+ * `CheckpointSchema.messageId` is `IdSchema` (`z.string().min(1)`), NOT nullable, and
+ * `packages/schema/src/entities/checkpoint.test.ts` pins that every field of the row is
+ * required. So the schema as frozen CANNOT express "saved before the first message": there
+ * is no message id to put in the field, and `''` is refused by `IdSchema` (measured — the
+ * first version of this function stored `''` and threw). The two ways out are a schema
+ * change (`messageId: IdSchema.nullable()`, matching `Session.headMessageId`, which is the
+ * shape the frozen test would also have to change) or a workaround here. This module takes
+ * the SECOND and reports the first, because a schema edit is the orchestrator's to land:
+ * until then a save point is "a position in a transcript" and there is no transcript yet.
+ * The play screen says so (`play.checkpointNeedsMessage`) rather than offering a button
+ * that cannot work.
+ */
+export async function createCheckpoint(input: {
+  sessionId: Id;
+  label: string;
+  castState?: Checkpoint['castState'];
+}): Promise<CheckpointRow | undefined> {
+  return write(async (tx) => {
+    const row = await sessionsOf(tx).get(input.sessionId);
+    const snapshot = snapshotOf(row === undefined ? undefined : { ...row });
+    if (snapshot === undefined || snapshot.headMessageId === null) return undefined;
+    const stored: CheckpointRow = {
+      id: mintUuidV7(),
+      sessionId: input.sessionId,
+      label: input.label,
+      messageId: snapshot.headMessageId,
+      auto: false,
+      state: snapshot.state,
+      agendaStatus: [],
+      summary: '',
+      castState: { ...(input.castState ?? {}) },
+      createdAt: Date.now(),
+    };
+    // Parsed BEFORE the put, like `appendMessage`: the persisted shape is then the
+    // schema's shape (ADR-016) instead of "whatever this function happened to build".
+    await checkpointsOf(tx).put(CheckpointSchema.parse(stored) as CheckpointRow);
+    return stored;
+  });
+}
+
+/**
+ * A session's save points, NEWEST FIRST.
+ *
+ * `sessions`/`messages` have `readTable` helpers because a `liveQuery` watches them;
+ * nothing subscribes to checkpoints yet, so this is a plain read. It goes through the
+ * port's own collection (`tx.collection(...).list`) rather than Dexie directly, which
+ * keeps "which index answers this" next to the port's index table — the compound
+ * `(sessionId, createdAt)` index is what makes it a range scan instead of a table scan.
+ */
+export async function listCheckpoints(sessionId: Id): Promise<CheckpointRow[]> {
+  return write(async (tx) =>
+    checkpointsOf(tx).list(
+      {
+        where: { sessionId },
+        field: 'createdAt',
+        order: 'desc',
+      },
+      'checkpoints_sessionId_createdAt',
+    ),
+  );
+}
+
+/** One save point by id, or `undefined` when it was deleted (or never existed). */
+export async function getCheckpoint(checkpointId: Id): Promise<CheckpointRow | undefined> {
+  const row = await readTable<Record<string, unknown>>(COLLECTIONS.checkpoints).get(checkpointId);
+  if (row === undefined) return undefined;
+  // Parsed on the way in for the reason every other reader parses: the row is
+  // structurally indistinguishable from an unvalidated object, and parsing strips
+  // unknown fields exactly as HANDOFF §4.1 invariant 5 requires.
+  return CheckpointSchema.parse(row) as CheckpointRow;
+}
+
+/**
+ * Remove one save point. Idempotent — `Collection.remove` documents that — so a
+ * double-click on 「删除」 is not an error.
+ */
+export async function deleteCheckpoint(checkpointId: Id): Promise<void> {
+  await write(async (tx) => {
+    await checkpointsOf(tx).remove(checkpointId);
+  });
+}
+
+/**
+ * Roll the session back to a save point.
+ *
+ * WHAT A ROLLBACK IS: TWO WRITES IN ONE TRANSACTION.
+ * 1. `Session.state` becomes the checkpoint's `state` — the clock, the scene, `vars`,
+ *    the sheets and the deadlines all move back TOGETHER, which is the acceptance
+ *    sentence for M1-T4 ("读档后时钟与状态一致回滚"). Doing it field by field was the
+ *    bug ADR-032 makes inexpressible: a checkpoint holds ONE state value, so there is
+ *    no way to restore "the clock from the save and the vars from now".
+ * 2. `headMessageId` moves to the checkpoint's message position.
+ *
+ * MESSAGES ARE NEVER TOUCHED (ADR-010). A rollback is a POINTER MOVE, not a delete:
+ * the rows after the save point stay exactly where they are, the branch that was live
+ * a moment ago is still a sibling of the restored one, and re-loading the save — or
+ * taking the other branch again — is therefore possible. Deleting them would make the
+ * rollback irreversible, which is the opposite of what a save point is for.
+ *
+ * WHAT IT DELIBERATELY DOES NOT TOUCH: the world / character / preset pins
+ * (`Session.refs`). A save point is a position in a scene, not a different build of the
+ * content: a card edited or a preset swapped after the save is a CHANGE THE USER MADE
+ * to the session, and silently reverting it would discard work the checkpoint never
+ * recorded. The pins are pinned per session (ADR-010), so they cannot drift under a
+ * rollback anyway — which is the fact that makes this a decision rather than an
+ * omission.
+ *
+ * The row is completed through `completeState` on the way in for the same reason every
+ * other writer does it, and the checkpoint is parsed on the way out so a malformed row
+ * is refused instead of half-applied.
+ *
+ * The message position is a plain `Id` now that `createCheckpoint` refuses an empty
+ * transcript, so nothing here has to map `''` back to `null`; `headMessageId` is still the
+ * nullable field on the session side, because "no messages" is a legal SESSION state.
+ */
+export async function restoreCheckpoint(
+  checkpointId: Id,
+): Promise<{ sessionId: Id; headMessageId: Id | null } | undefined> {
+  const checkpoint = await getCheckpoint(checkpointId);
+  if (checkpoint === undefined) return undefined;
+  const restoredState = copyState(checkpoint.state);
+  const headMessageId: Id | null = checkpoint.messageId;
+  await write(async (tx) => {
+    const row = await sessionsOf(tx).get(checkpoint.sessionId);
+    if (row === undefined) return;
+    const session = SessionSchema.parse({ ...row, state: completeState(row) });
+    await sessionsOf(tx).put({
+      ...session,
+      state: restoredState,
+      headMessageId,
+      updatedAt: Date.now(),
+    });
+  });
+  return { sessionId: checkpoint.sessionId, headMessageId };
 }
 
 /* ─────────────────────────────── live queries ────────────────────────────── */

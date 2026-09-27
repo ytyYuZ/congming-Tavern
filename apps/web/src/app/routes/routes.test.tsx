@@ -26,15 +26,22 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, createAppRouter } from '../../app/app';
+import { BUILTIN_HOURS_PER_DAY, BUILTIN_MINUTES_PER_HOUR } from '../../chat/builtin-content';
+import { clockOf, segmentStep, worldClockText } from '../../chat/clock';
 import { snapshotAllRows } from '../../db/raw-indexeddb.test-helpers';
 import {
   appendMessage,
+  createCheckpoint,
   createSession,
+  getChain,
+  getSession,
+  listCheckpoints,
   readProviderSettings,
   setHeadMessageId,
   writeLocaleSetting,
   writeProviderSettings,
 } from '../../db/repository';
+import { translate } from '../../i18n/translate';
 // The stores and the database accessors are taken from `mount`, NOT from `state/*` or
 // `db/*` directly: Vitest instantiates a module once per environment, and an instance
 // reached through another graph would be a different object from the one the mounted
@@ -228,6 +235,19 @@ async function waitForState(predicate: () => boolean, timeoutMs = 4_000): Promis
   await settle();
 }
 
+/**
+ * The clock sentence the PERSISTED session row says should be on screen right now.
+ *
+ * Built through `clockOf` + `worldClockText` — the same pair the view renders through — so
+ * the assertion follows a catalog wording change instead of breaking on it, and still
+ * proves the DOM shows the value the database holds. A hand-typed sentence would not.
+ */
+async function rememberedClock(sessionId: string): Promise<string> {
+  const session = await getSession(sessionId);
+  if (session === undefined) throw new Error(`no session ${sessionId}`);
+  return worldClockText(clockOf(session), translate);
+}
+
 describe('route smoke tests', () => {
   it('the setup view shows the SAVED values, including the key', async () => {
     await writeProviderSettings({
@@ -387,6 +407,263 @@ describe('route smoke tests', () => {
     expect(useChatStore.getState().draft.text).toBe('guard');
     await settle();
     expect(container?.textContent).toContain('guard');
+  });
+});
+
+/* ─────────────── M1-T2: the manual advance, and M1-M1/M1-T4: the saves ─────────────── */
+
+/**
+ * WHY THESE DRIVE THE REAL VIEW
+ * The milestone's acceptance sentences are about what a PERSON sees and what the DATABASE
+ * holds at the same moment: 「推进立即反映到 UI 与状态」 and 「读档后时钟与状态一致回滚」. A
+ * test of the store alone could not see the clock sentence, and a test of the repository
+ * alone could not see that the button wired the two together. So each case clicks the
+ * control the user clicks, then reads BOTH the DOM and the persisted row.
+ *
+ * WHY THE EXPECTED CLOCK SENTENCE IS BUILT, NOT TYPED
+ * `worldClockText(clockOf(session), translate)` is the same pair of functions the view
+ * renders through, so the assertion follows a wording change instead of breaking on it —
+ * and it still proves the DOM shows the value the database holds, which a hardcoded
+ * sentence would not.
+ */
+describe('M1-T2: the manual time advance', () => {
+  it('moves the clock by each preset step, immediately, in the DOM and in the row', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '发送');
+
+    // The session starts at its origin (ADR-032), and the screen says so.
+    expect(host.textContent).toContain(await rememberedClock(session.id));
+
+    const hour = BUILTIN_MINUTES_PER_HOUR;
+    const day = BUILTIN_HOURS_PER_DAY * BUILTIN_MINUTES_PER_HOUR;
+    const steps: readonly {
+      readonly label: string;
+      readonly expectClock: (from: number) => number;
+    }[] = [
+      { label: '+1 时段', expectClock: (from) => from + segmentStep(session.state) },
+      { label: '+1 小时', expectClock: (from) => from + hour },
+      { label: '+1 天', expectClock: (from) => from + day },
+    ];
+
+    let minute = session.state.clock;
+    for (const step of steps) {
+      await clickButton(host, step.label);
+      minute = step.expectClock(minute);
+      await waitForState(() => useChatStore.getState().session?.state.clock === minute);
+      // The persisted row is the authority; the sentence above the buttons is rendered
+      // from the store, which this same click moved.
+      expect((await getSession(session.id))?.state.clock).toBe(minute);
+      expect(host.textContent).toContain(await rememberedClock(session.id));
+    }
+  });
+
+  it('applies a custom amount and refuses one it cannot read', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '发送');
+    const start = session.state.clock;
+
+    await typeInto(host, '#advance-minutes', '90');
+    await clickButton(host, '推进');
+    await waitForState(() => useChatStore.getState().session?.state.clock === start + 90);
+    expect((await getSession(session.id))?.state.clock).toBe(start + 90);
+
+    // A refusal says so and writes NOTHING: the clock stays where the last accepted
+    // advance put it, and the state layer is not called at all.
+    await typeInto(host, '#advance-minutes', '不是数字');
+    await clickButton(host, '推进');
+    await waitForText(host, '请输入整数分钟数');
+    expect((await getSession(session.id))?.state.clock).toBe(start + 90);
+    expect(useChatStore.getState().session?.state.clock).toBe(start + 90);
+  });
+
+  it('survives a RELOAD through the real read path', async () => {
+    // This is the test the previous step could not write: nothing in the app moved the
+    // clock, so a persisted value could only be seeded, which this project forbids. The
+    // advance now goes through the real control, and the assertion runs after a real
+    // close-and-reopen of the database — i.e. through the read the app performs on start.
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '发送');
+    await clickButton(host, '+1 天');
+    const day = BUILTIN_HOURS_PER_DAY * BUILTIN_MINUTES_PER_HOUR;
+    await waitForState(() => useChatStore.getState().session?.state.clock === day);
+    await unmount();
+
+    // "Reload": a NEW adapter over the SAME database name, exactly like `mountApp` does.
+    closeDatabase();
+    resetDatabase(databaseName);
+    resetChat();
+
+    const remounted = await mountAt(`/play/${session.id}`, '发送');
+    expect((await getSession(session.id))?.state.clock).toBe(day);
+    expect(remounted.textContent).toContain(await rememberedClock(session.id));
+  });
+
+  it('persists only the clock the user asked for', async () => {
+    // A guard against the advance writing through some other path: the row the repository
+    // reads back must be the minute the screen is showing.
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '发送');
+    await clickButton(host, '+1 小时');
+    await waitForState(
+      () => useChatStore.getState().session?.state.clock === BUILTIN_MINUTES_PER_HOUR,
+    );
+    expect((await getSession(session.id))?.state.clock).toBe(BUILTIN_MINUTES_PER_HOUR);
+    expect(host.textContent).toContain(await rememberedClock(session.id));
+  });
+});
+
+describe('M1-M1 / M1-T4: the save-point panel', () => {
+  it('saves with a label, lists it, and rolls the clock and the transcript back together', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, first.id);
+    const host = await mountAt(`/play/${session.id}`, '发送');
+
+    await typeInto(host, '#checkpoint-label', '打点之前');
+    await clickButton(host, '保存存档点');
+    await waitForText(host, '已保存存档点');
+    // The row exists, at the current transcript position.
+    const saved = await listCheckpoints(session.id);
+    expect(saved.map((row) => row.label)).toEqual(['打点之前']);
+    expect(saved[0]?.messageId).toBe(first.id);
+    expect(host.textContent).toContain('打点之前');
+
+    // Play on: the clock moves and a second message lands.
+    await clickButton(host, '+1 天');
+    const day = BUILTIN_HOURS_PER_DAY * BUILTIN_MINUTES_PER_HOUR;
+    await waitForState(() => useChatStore.getState().session?.state.clock === day);
+    const second = await appendMessage({
+      sessionId: session.id,
+      parentId: first.id,
+      role: 'assistant',
+      content: '第二句',
+    });
+    await setHeadMessageId(session.id, second.id);
+    await waitForState(() => useChatStore.getState().messageChain.length === 2);
+    expect(host.textContent).toContain('第二句');
+
+    // Reading a save point is a DELIBERATE act: the first button only arms it.
+    await clickButton(host, '读档');
+    expect(host.textContent).toContain('确认回滚');
+    // … and nothing has moved yet.
+    expect((await getSession(session.id))?.state.clock).toBe(day);
+    await clickButton(host, '确认回滚');
+    await waitForText(host, '已读档回滚到该存档点');
+
+    // THE ACCEPTANCE: clock, state and transcript tip are back at the saved instant at
+    // once. `state` is compared whole for the same reason `repository.test.ts` does it.
+    const rolled = await getSession(session.id);
+    expect(rolled?.state).toEqual(saved[0]?.state);
+    expect(rolled?.state.clock).toBe(session.state.clock);
+    expect(rolled?.headMessageId).toBe(first.id);
+    // The screen: the saved clock sentence is back, and the later message is off the chain.
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+    expect(host.textContent).toContain('第一句');
+    expect(host.textContent).not.toContain('第二句');
+    // Nothing was deleted (ADR-010): the row is still in the database, just not on the chain.
+    expect(await getChain(session.id)).toHaveLength(1);
+  });
+
+  it('will not offer to save before there is a message position to save', async () => {
+    // `CheckpointSchema.messageId` is a NON-EMPTY `Id` (the schema test pins every field as
+    // required), so "saved before the first message" has no spelling in a checkpoint row.
+    // The panel therefore says so and disables the control instead of offering a button
+    // whose click would write nothing — a fresh session is the normal case, not an error
+    // path, so it gets a sentence rather than a failure.
+    const session = await createSession({ title: 'test-session' });
+    const host = await mountAt(`/play/${session.id}`, '发送');
+
+    expect(host.textContent).toContain('先发出一句话');
+    const save = Array.from(host.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent === '保存存档点',
+    );
+    expect(save?.disabled).toBe(true);
+    expect((host.querySelector('#checkpoint-label') as HTMLInputElement | null)?.disabled).toBe(
+      true,
+    );
+    expect(await listCheckpoints(session.id)).toEqual([]);
+
+    // One message later the same control works: the gate is about the message position, not
+    // about a session that has to be recreated.
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, first.id);
+    await waitForState(() => useChatStore.getState().messageChain.length === 1);
+    expect(host.textContent).not.toContain('先发出一句话');
+    expect(
+      Array.from(host.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent === '保存存档点',
+      )?.disabled,
+    ).toBe(false);
+
+    await typeInto(host, '#checkpoint-label', '现在可以了');
+    await clickButton(host, '保存存档点');
+    await waitForText(host, '已保存存档点');
+    // Exactly ONE row and ONE list entry: a double write would show up as a duplicate key in
+    // React's own warning, which a count taken after the fact could miss.
+    expect((await listCheckpoints(session.id)).length).toBe(1);
+    expect(useChatStore.getState().checkpoints.length).toBe(1);
+  });
+
+  it('blocks a restore until it is confirmed, and deletes only on a second click', async () => {
+    const session = await createSession({ title: 'test-session' });
+    // A save point needs a message position (the panel says so before the first message),
+    // so this test's session has one: the confirmations below are about save points.
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, first.id);
+    const host = await mountAt(`/play/${session.id}`, '发送');
+    await typeInto(host, '#checkpoint-label', '第一处');
+    await clickButton(host, '保存存档点');
+    await waitForText(host, '第一处');
+
+    // 「读档」 alone changes nothing: the live state has not moved.
+    await clickButton(host, '读档');
+    expect(host.textContent).toContain('确认回滚');
+    expect((await getSession(session.id))?.state.clock).toBe(0);
+
+    // 「删除」 alone changes nothing either.
+    await clickButton(host, '删除');
+    expect(host.textContent).toContain('确认删除');
+    expect((await listCheckpoints(session.id)).length).toBe(1);
+
+    await clickButton(host, '确认删除');
+    await waitForState(() => useChatStore.getState().checkpoints.length === 0);
+    expect(await listCheckpoints(session.id)).toEqual([]);
+    expect(host.textContent).toContain('还没有存档点');
+    // The live session is untouched by a delete.
+    expect((await getSession(session.id))?.state.clock).toBe(0);
+  });
+
+  it('cannot restore a save point that belongs to another session', async () => {
+    // The store refuses it (`restoreCheckpoint` checks `sessionId` before writing), which is
+    // what keeps a click on a stale list from pointing this session's head at a message id
+    // that is not in its tree — an empty transcript whose head resolves nowhere.
+    const mine = await createSession({ title: 'mine' });
+    const theirs = await createSession({ title: 'theirs' });
+    const foreign = await createCheckpoint({ sessionId: theirs.id, label: '别的存档' });
+
+    const host = await mountAt(`/play/${mine.id}`, '发送');
+    // The panel never renders another session's save points (that is the same decision, and
+    // the empty list below asserts it), so the guard is driven through the action the panel
+    // calls — the only way to reach it.
+    expect(host.textContent).toContain('还没有存档点');
+    expect(await useChatStore.getState().restoreCheckpoint(foreign?.id ?? '')).toBe(false);
+    expect((await getSession(mine.id))?.headMessageId).toBeNull();
+    expect((await getSession(theirs.id))?.headMessageId).toBeNull();
   });
 });
 

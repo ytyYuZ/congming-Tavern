@@ -192,6 +192,70 @@ export const zhCN = {
   'play.clockNoSegment': '当前 {date}',
   /** The clock readout's accessible name; a screen reader reads this, not the `·`. */
   'play.clockLabel': '世界时钟',
+  /*
+   * MANUAL TIME ADVANCE (M1-T2) — the controls beside the clock.
+   *
+   * WHY THE ADVANCE LIVES ON THE PLAY SCREEN AND NOT IN THE ENGINE: the engine's
+   * `advance()` is a pure minute mapper, and docs/02 §5.7's advance POLICY —
+   * `timeRhythm`'s implicit every-N-turns step, and the AI `advance_time` request's
+   * auto / ask / deny choice with its "over one day forces ask" rule — is a decision
+   * about WHO may move the clock. That is an approval question, so it belongs to the
+   * approval UI and not to a function that cannot ask a human. The buttons below are
+   * therefore the WHOLE policy of this build: the user pressed a button.
+   *
+   * WHY 「+1 时段」 AND NOT A FIXED MINUTE COUNT: a day segment is the world's own
+   * authored stretch of the day, so the control moves to the next segment BOUNDARY
+   * (`chat/clock.ts`'s `segmentStep`) rather than by a number the catalog would freeze.
+   * The custom amount is the escape hatch that needs no calendar at all.
+   */
+  'play.advanceTitle': '推进时间',
+  'play.advanceSegment': '+1 时段',
+  'play.advanceHour': '+1 小时',
+  'play.advanceDay': '+1 天',
+  'play.advanceCustomLabel': '自定义（分钟）',
+  /** An EXAMPLE amount, not copy — deliberately the same in both locales. */
+  'play.advanceCustomPlaceholder': '例如 90，或 -30 往前回拨',
+  'play.advanceCustom': '推进',
+  /** `{minutes}` is what was moved and `{date}` the clock's own sentence afterwards. */
+  'play.advanceDone': '已推进 {minutes} 分钟：{date}',
+  /** A custom amount that is not a usable whole number of minutes; nothing was written. */
+  'play.advanceInvalid': '请输入整数分钟数',
+  /*
+   * FIXED-POINT SAVES (M1-M1, M1-T4) — the checkpoint panel.
+   *
+   * `play.checkpointHint` is the sentence that must not be dropped: restoring DISCARDS
+   * the current live position, so the user has to know that it is a deliberate act and
+   * what it does NOT do. It does not delete messages (ADR-010 — messages are immutable,
+   * and a rollback is a pointer move, so the branch that was live a moment ago is still
+   * stored) and it does not touch the world / character / preset pins (a save point is a
+   * position in a scene, not a different build of the content). The panel's restore
+   * button therefore asks for a confirmation before it writes anything.
+   */
+  'play.checkpointTitle': '定点存档',
+  'play.checkpointHint':
+    '存档会记下当前的消息位置、时钟、变量与卡司状态。读档会把会话整体回滚到那一刻：不会删除任何消息，也不会改变世界、角色与预设的绑定。',
+  'play.checkpointLabelPlaceholder': '存档名称，例如：进城前',
+  'play.checkpointSave': '保存存档点',
+  /**
+   * Shown INSTEAD of saving when the transcript is still empty.
+   *
+   * `CheckpointSchema.messageId` is `IdSchema` — a non-empty string — and the schema test
+   * pins every field as required, so a save point cannot be written before the first
+   * message exists (the repository reports this as a missing nullable field; the workaround
+   * is `db/repository.ts`'s `createCheckpoint`). The screen says so rather than offering a
+   * button that would do nothing.
+   */
+  'play.checkpointNeedsMessage': '先发出一句话，才有可保存的消息位置',
+  'play.checkpointEmpty': '还没有存档点。',
+  'play.checkpointSaved': '已保存存档点',
+  'play.checkpointRestored': '已读档回滚到该存档点',
+  /** The first step of a two-step restore; it writes nothing on its own. */
+  'play.checkpointRestore': '读档',
+  /** The second step, shown only after 「读档」 was pressed. */
+  'play.checkpointRestoreConfirm': '确认回滚',
+  'play.checkpointDelete': '删除',
+  /** The second step of a delete, shown only after 「删除」 was pressed. */
+  'play.checkpointDeleteConfirm': '确认删除',
 
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
@@ -350,6 +414,28 @@ export const en: Messages = {
   'play.clock': 'Now {date} ({segment})',
   'play.clockNoSegment': 'Now {date}',
   'play.clockLabel': 'World clock',
+  'play.advanceTitle': 'Advance time',
+  'play.advanceSegment': '+1 segment',
+  'play.advanceHour': '+1 hour',
+  'play.advanceDay': '+1 day',
+  'play.advanceCustomLabel': 'Custom (minutes)',
+  'play.advanceCustomPlaceholder': 'for example 90, or -30 to turn it back',
+  'play.advanceCustom': 'Advance',
+  'play.advanceDone': 'Advanced {minutes} minutes: {date}',
+  'play.advanceInvalid': 'Enter a whole number of minutes',
+  'play.checkpointTitle': 'Save points',
+  'play.checkpointHint':
+    'A save point records the current message position, clock, variables and cast state. Loading one rolls the whole session back to that moment: it deletes no messages and changes no world, character or preset binding.',
+  'play.checkpointLabelPlaceholder': 'Save-point name, e.g. before entering the town',
+  'play.checkpointSave': 'Save a save point',
+  'play.checkpointNeedsMessage': 'Send a message first — a save point needs a message position',
+  'play.checkpointEmpty': 'No save points yet.',
+  'play.checkpointSaved': 'Save point stored',
+  'play.checkpointRestored': 'Rolled back to that save point',
+  'play.checkpointRestore': 'Load',
+  'play.checkpointRestoreConfirm': 'Confirm rollback',
+  'play.checkpointDelete': 'Delete',
+  'play.checkpointDeleteConfirm': 'Confirm delete',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',

@@ -382,3 +382,109 @@ body {
   min-width: 3.5rem;
   text-align: right;
 }
+
+/* --- the advance controls and the save points (M1-T2 / M1-M1) ------------- */
+
+/*
+ * One section heading for both new blocks. They sit on the play screen rather than in a
+ * settings form because each one is about THIS session's own position: the controls move
+ * the clock printed directly above them, and the save points belong to this transcript.
+ */
+.section-title {
+  font-size: 1rem;
+  margin: 0 0 0.4rem;
+}
+
+/*
+ * The manual advance (M1-T2). The buttons and the custom amount share one `.btn-row`, so
+ * a narrow window wraps them instead of overflowing: `flex-wrap` is what keeps the day
+ * button reachable without a horizontal scrollbar.
+ */
+.time-controls {
+  margin-top: 1rem;
+}
+
+/* The custom amount is a form so Enter submits it; it sits inline with the buttons. */
+.advance-custom {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.advance-custom input {
+  font: inherit;
+  width: 12rem;
+  max-width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* What the last press did. Not `role="status"`: see the world clock's note. */
+.time-status,
+.checkpoint-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The save-point panel (M1-M1). A rule rather than a wrapper element separates it from
+ * the clock and the advance controls, so the block can move to a screen of its own
+ * without a layout change — the same shape the appearance section uses.
+ */
+.checkpoints {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.checkpoint-save {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.6rem 0;
+}
+
+.checkpoint-save input {
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.checkpoint-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/*
+ * `flex-wrap` so the four controls of a long label still fit: a save point's name is user
+ * text of unbounded length, and a row that could not wrap would push the delete button off
+ * screen — i.e. hide the destructive action behind a horizontal scroll.
+ */
+.checkpoint-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.checkpoint-label {
+  font-weight: 600;
+}

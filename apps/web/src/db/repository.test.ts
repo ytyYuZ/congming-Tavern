@@ -22,16 +22,22 @@ import 'fake-indexeddb/auto';
 import { COLLECTIONS } from '@smarttavern/core';
 import type { Message, Session, SessionState } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { closeDatabase, resetDatabase, subscribe, write } from '../db/database';
+import { closeDatabase, readTable, resetDatabase, subscribe, write } from '../db/database';
 import {
   appendMessage,
+  type CheckpointRow,
+  createCheckpoint,
   createSession,
+  deleteCheckpoint,
   getChain,
+  getCheckpoint,
   getSession,
+  listCheckpoints,
   listSessions,
   readChain,
   readProviderSettings,
   readSessions,
+  restoreCheckpoint,
   setHeadMessageId,
   writeProviderSettings,
   writeSessionState,
@@ -301,10 +307,311 @@ describe('db/repository', () => {
     await sleep(250);
     expect(seen).toEqual([0]);
 
-    await createSession({ title: '第一个' });
+    await createSession({ title: '第一句' });
     await sleep(600);
     expect(seen[seen.length - 1]).toBe(1);
     unsubscribe();
+  });
+});
+
+/* ────────────────── M1-M1 / M1-T4: the fixed-point save ─────────────────── */
+
+/**
+ * Save and return the stored row, failing loudly when the repository answered nothing.
+ *
+ * A `checkpoint?.id ?? ''` at every call site would turn an `undefined` into a silent
+ * `restoreCheckpoint('')`, which is a green-looking test against a save point that does
+ * not exist — the exact shape of failure the assertion below would then be unable to
+ * distinguish from a rollback that did nothing.
+ */
+async function savePoint(sessionId: string, label: string): Promise<CheckpointRow> {
+  const stored = await createCheckpoint({ sessionId, label });
+  if (stored === undefined) throw new Error('createCheckpoint answered undefined');
+  return stored;
+}
+
+/**
+ * A save point is ONE row holding a full snapshot (ADR-032), so these tests read the
+ * ROW SHAPE first and then the transitions → save → change everything → restore → which
+ * is where the milestone's acceptance sentence lives ("读档后时钟与状态一致回滚", "存档含消息
+ * 位置 + 时钟 + 变量 + 卡司状态"). Asserting the fields one at a time would pass for an
+ * implementation that restored the clock and the vars in two separate steps; asserting the
+ * whole value at once cannot.
+ *
+ * WHY THE LIVE CHANGES GO THROUGH THE REAL WRITERS (`writeSessionState`,
+ * `appendMessage`, `setHeadMessageId`) rather than a raw put: what is being tested is
+ * that a rollback undoes an ordinary afternoon of play, not that it undoes a hand-built
+ * row.
+ */
+describe('db/repository — checkpoints (M1-M1, M1-T4)', () => {
+  it('stores a save point as ONE complete row: message position, clock, vars and cast state', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const opening = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '开场',
+    });
+    await setHeadMessageId(session.id, opening.id);
+    const saved: SessionState = {
+      ...session.state,
+      scene: { title: 'The inn', location: 'Silverpine', time: 30 },
+      clock: 30,
+      vars: { weather: 'snow', danger: 3 },
+    };
+    await writeSessionState(session.id, saved);
+
+    const stored = await createCheckpoint({
+      sessionId: session.id,
+      label: '进城前',
+      castState: { 'char-a': { present: true } },
+    });
+    // Narrowed once: the rest of this test is about the stored VALUE, and a `?.` on every
+    // assertion would hide a `undefined` return as a passing `undefined` comparison.
+    if (stored === undefined) throw new Error('createCheckpoint answered undefined');
+
+    // The whole row, in one assertion: one `put` in one collection is what ADR-032 made a
+    // save point, and the port's comment about a multi-collection checkpoint predates it.
+    expect(stored).toMatchObject({
+      sessionId: session.id,
+      label: '进城前',
+      messageId: opening.id,
+      auto: false,
+      state: { clock: 30, vars: { weather: 'snow', danger: 3 } },
+      castState: { 'char-a': { present: true } },
+      agendaStatus: [],
+      summary: '',
+    });
+    expect(typeof stored.id).toBe('string');
+    expect(await readTable(COLLECTIONS.checkpoints).count()).toBe(1);
+
+    // Read back through the schema-parsing reader: the stored row IS a `Checkpoint`.
+    const readBack = await getCheckpoint(stored.id);
+    expect(readBack?.state.clock).toBe(30);
+    expect(readBack?.state.scene.location).toBe('Silverpine');
+    expect(readBack?.messageId).toBe(opening.id);
+
+    // Newest first, and only this session's rows.
+    const other = await createSession({ title: 'other-session' });
+    await createCheckpoint({ sessionId: other.id, label: '别的存档' });
+    const listed = await listCheckpoints(session.id);
+    expect(listed.map((row) => row.label)).toEqual(['进城前']);
+    expect(listed.map((row) => row.id)).toEqual([stored.id]);
+  });
+
+  it('refuses a save point before the first message (CheckpointSchema.messageId is non-empty)', async () => {
+    const session = await createSession({ title: 'test-session' });
+    // The frozen schema has `messageId: IdSchema` — a NON-EMPTY string — and the schema
+    // test pins every field as required, so "saved before the first message" has no
+    // spelling. The repository answers `undefined` rather than writing a row the schema
+    // would refuse; `play.checkpointNeedsMessage` is what the screen says instead.
+    expect(await createCheckpoint({ sessionId: session.id, label: '开场前' })).toBeUndefined();
+    expect(await listCheckpoints(session.id)).toEqual([]);
+    expect(await readTable(COLLECTIONS.checkpoints).count()).toBe(0);
+
+    // Once a message exists, the same call succeeds and names that message.
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, first.id);
+    const stored = await savePoint(session.id, '开场前');
+    expect(stored.messageId).toBe(first.id);
+    expect(await restoreCheckpoint(stored.id)).toEqual({
+      sessionId: session.id,
+      headMessageId: first.id,
+    });
+  });
+
+  it('rolls the clock, vars, scene AND head back together in one restore', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, first.id);
+    const before: SessionState = {
+      ...session.state,
+      scene: { title: 'The inn', location: 'Silverpine', time: 30 },
+      clock: 30,
+      vars: { weather: 'snow', danger: 3 },
+    };
+    await writeSessionState(session.id, before);
+    const checkpoint = await savePoint(session.id, '打点');
+
+    // Play on: the clock moves, the vars change, the scene changes, a message lands and
+    // the transcript tip follows it. This is the state a rollback has to undo.
+    const after: SessionState = {
+      ...before,
+      scene: { title: 'The keep', location: 'North pass', time: 400 },
+      clock: 400,
+      vars: { weather: 'storm', danger: 9 },
+    };
+    await writeSessionState(session.id, after);
+    const later = await appendMessage({
+      sessionId: session.id,
+      parentId: first.id,
+      role: 'assistant',
+      content: '第二句',
+    });
+    await setHeadMessageId(session.id, later.id);
+
+    const advanced = await getSession(session.id);
+    expect(advanced?.state.clock).toBe(400);
+    expect(advanced?.headMessageId).toBe(later.id);
+
+    const restored = await restoreCheckpoint(checkpoint.id);
+    expect(restored).toEqual({ sessionId: session.id, headMessageId: first.id });
+
+    // THE ACCEPTANCE, IN ONE ASSERTION SET: all four halves of the state are the saved
+    // instant at once. A rollback that moved the clock but not the vars (or the reverse)
+    // fails here rather than passing four separate per-field checks.
+    const rolled = await getSession(session.id);
+    expect(rolled?.state).toEqual(before);
+    expect(rolled?.state.clock).toBe(30);
+    expect(rolled?.state.vars).toEqual({ weather: 'snow', danger: 3 });
+    expect(rolled?.state.scene).toEqual({ title: 'The inn', location: 'Silverpine', time: 30 });
+    expect(rolled?.headMessageId).toBe(first.id);
+    // The origin is not a rollback target: `initialClock` is where the session began.
+    expect(rolled?.initialClock).toBe(0);
+    // And the checkpoint itself is untouched by having been loaded — a save point that
+    // was consumed by reading it could not be loaded twice.
+    expect((await getCheckpoint(checkpoint.id))?.state.clock).toBe(30);
+    expect((await listCheckpoints(session.id)).length).toBe(1);
+  });
+
+  it('deletes no message on restore: the rows past the save point stay, off the chain', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, first.id);
+    const checkpoint = await savePoint(session.id, '打点');
+
+    const second = await appendMessage({
+      sessionId: session.id,
+      parentId: first.id,
+      role: 'assistant',
+      content: '第二句',
+    });
+    const third = await appendMessage({
+      sessionId: session.id,
+      parentId: second.id,
+      role: 'user',
+      content: '第三句',
+    });
+    await setHeadMessageId(session.id, third.id);
+    expect((await getChain(session.id)).map((row) => row.content)).toEqual([
+      '第一句',
+      '第二句',
+      '第三句',
+    ]);
+
+    await restoreCheckpoint(checkpoint.id);
+
+    // The chain read back is the checkpoint's chain —
+
+    expect((await getChain(session.id)).map((row) => row.content)).toEqual(['第一句']);
+    expect((await readChain(session.id)).map((row) => row.id)).toEqual([first.id]);
+    // … and BOTH later rows are still in the database (ADR-010: a rollback is a pointer
+    // move, so re-loading the save or taking the other branch again still works).
+    expect(await readTable(COLLECTIONS.messages).count()).toBe(3);
+    expect((await readTable<Message>(COLLECTIONS.messages).get(second.id))?.content).toBe('第二句');
+    expect((await readTable<Message>(COLLECTIONS.messages).get(third.id))?.content).toBe('第三句');
+  });
+
+  it('snapshots a COPY: neither direction of a later mutation crosses over', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const opening = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, opening.id);
+    const saved: SessionState = {
+      ...session.state,
+      clock: 30,
+      vars: { weather: 'snow' },
+    };
+    await writeSessionState(session.id, saved);
+    // The state the app is holding in memory while the user plays on. It is the value a
+    // naive `createCheckpoint` would store a REFERENCE to.
+    const live: SessionState = { ...saved };
+    const checkpoint = await savePoint(session.id, '打点');
+    const checkpointId = checkpoint.id;
+
+    // Direction 1: an in-place edit of the live state afterwards. An aliasing
+    // implementation would follow it, and the save point would stop being "then" at all —
+    // which is what makes a rollback meaningless.
+    live.clock = 90;
+    // `Object.assign` rather than `live.vars.weather = …` or `live.vars['weather'] = …`:
+    // `vars` is a `Record`, so the workspace's two rules disagree about the access
+    // spelling (`noPropertyAccessFromIndexSignature` demands a bracket, Biome's
+    // `useLiteralKeys` forbids the literal one). Assigning through a helper sidesteps
+    // neither rule and still mutates the very object the save point must not alias.
+    Object.assign(live.vars, { weather: 'storm' });
+    await writeSessionState(session.id, live);
+
+    // The live row really did move on —
+    expect((await getSession(session.id))?.state.clock).toBe(90);
+    // … and the save point did not, in either collection.
+    expect((await getCheckpoint(checkpointId))?.state.clock).toBe(30);
+    expect((await getCheckpoint(checkpointId))?.state.vars).toEqual({ weather: 'snow' });
+
+    // Direction 2: restore, then mutate the live state again. The checkpoint must stay put,
+    // and the state that was restored is a copy too — not the stored object itself.
+    await restoreCheckpoint(checkpointId);
+    const restored = await getSession(session.id);
+    expect(restored?.state.clock).toBe(30);
+    expect(restored?.state.vars).not.toBe(saved.vars);
+
+    const second: SessionState = { ...saved, clock: 600, vars: { weather: 'sunny' } };
+    await writeSessionState(session.id, second);
+    expect((await getCheckpoint(checkpointId))?.state.clock).toBe(30);
+    expect((await getCheckpoint(checkpointId))?.state.vars).toEqual({ weather: 'snow' });
+  });
+
+  it('deletes one save point without touching the live session', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const message = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '第一句',
+    });
+    await setHeadMessageId(session.id, message.id);
+    const kept = await createCheckpoint({ sessionId: session.id, label: '保留' });
+    const dropped = await createCheckpoint({ sessionId: session.id, label: '删除' });
+    if (kept === undefined || dropped === undefined) {
+      throw new Error('createCheckpoint answered undefined');
+    }
+
+    await deleteCheckpoint(dropped.id);
+    expect((await listCheckpoints(session.id)).map((row) => row.label)).toEqual(['保留']);
+    expect(await getCheckpoint(dropped.id)).toBeUndefined();
+
+    // The live position is not a delete's business.
+    const live = await getSession(session.id);
+    expect(live?.headMessageId).toBe(message.id);
+    expect(live?.state.clock).toBe(0);
+    expect(await getCheckpoint(kept.id)).toBeDefined();
+
+    // Idempotent: removing what is already gone is not an error (`Collection.remove`).
+    await expect(deleteCheckpoint(dropped.id)).resolves.toBeUndefined();
+  });
+
+  it('answers undefined for a session or a save point that does not exist', async () => {
+    expect(await createCheckpoint({ sessionId: 'no-such-session', label: 'x' })).toBeUndefined();
+    expect(await restoreCheckpoint('no-such-checkpoint')).toBeUndefined();
+    expect(await listCheckpoints('no-such-session')).toEqual([]);
   });
 });
 
