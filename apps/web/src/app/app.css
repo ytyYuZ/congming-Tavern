@@ -1,0 +1,250 @@
+/*
+ * The web shell's stylesheet (M0-T8) — plain CSS, no framework.
+ *
+ * WHY NO CSS FRAMEWORK AND NO CSS-IN-JS
+ * ADR-017 fixed the state layer, not the styling layer, and M0-T8's job is to prove
+ * the "configure key -> send -> stream -> persist" slice. A framework here would add
+ * a dependency and a build step for two screens. The class names below are therefore
+ * the whole design system, and M1 can replace this file wholesale without touching
+ * a component.
+ *
+ * WHY `prefers-color-scheme` RATHER THAN A THEME TOGGLE
+ * A theme setting is a second `settings` row and an M1 feature. Following the OS is
+ * the honest default until there is somewhere to store a choice.
+ */
+
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --text: #1c1d21;
+  --muted: #6b6d76;
+  --line: #e2e3e8;
+  --accent: #6b4ef2;
+  --accent-text: #ffffff;
+  --danger-bg: #fdecec;
+  --danger-text: #8c1d1d;
+  --ok-bg: #eaf7ee;
+  --ok-text: #1d6b39;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16171a;
+    --surface: #1f2024;
+    --text: #eceef2;
+    --muted: #9a9da8;
+    --line: #2e3036;
+    --accent: #8b74ff;
+    --accent-text: #12131a;
+    --danger-bg: #3a1d1d;
+    --danger-text: #ffb4b4;
+    --ok-bg: #16301f;
+    --ok-text: #8fe0a9;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.app-header h1 {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.app-main {
+  flex: 1;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error-text {
+  color: var(--danger-text);
+}
+
+/* --- controls ------------------------------------------------------------ */
+
+.btn {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.btn-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* --- session list -------------------------------------------------------- */
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.session-list a {
+  display: block;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+.session-list a:hover {
+  border-color: var(--accent);
+}
+
+/* --- forms --------------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.9rem;
+}
+
+.field label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field input {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.field-error {
+  color: var(--danger-text);
+  font-size: 0.85rem;
+}
+
+.notice {
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.notice-ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.notice-error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+/* --- transcript ---------------------------------------------------------- */
+
+.transcript {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 12rem;
+}
+
+.bubble {
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble-user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.bubble-assistant {
+  align-self: flex-start;
+  max-width: 85%;
+}
+
+.composer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.composer textarea {
+  flex: 1;
+  font: inherit;
+  resize: vertical;
+  min-height: 3rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+}

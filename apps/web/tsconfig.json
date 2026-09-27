@@ -1,6 +1,21 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "jsx is set here and NOT in tsconfig.base.json on purpose (M0-T8). The base sets",
+    "no jsx at all, because packages/* are framework-free and a jsx setting there would",
+    "silently allow a .tsx file into a package that must not have one. apps/web is the",
+    "single React workspace (docs/02 §3), so react-jsx is a per-workspace necessity and",
+    "the base may only ever be narrowed — never widened — by an extending config.",
+    "",
+    "The exclude is `src/**/*.test.*` and not `src/**/*.test.ts`: a `.test.tsx` file",
+    "would slip past the narrower pattern and be typechecked by NOTHING — Vitest only",
+    "transpiles, and the build graph deliberately excludes tests. tsconfig.test.json",
+    "adds them back for the `pnpm typecheck` test pass."
+  ],
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.*"]
 }
