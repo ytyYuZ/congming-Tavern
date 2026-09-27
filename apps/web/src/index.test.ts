@@ -35,6 +35,13 @@ const offline: FetchLike = () =>
 
 let databases = 0;
 
+// jsdom's `window.scrollTo` is a stub that logs "Not implemented" instead of scrolling,
+// and TanStack Router calls it on every navigation — so mounting the app would print that
+// error on each render. Same one-line neutralisation as routes.test.tsx, for the same
+// reason: it is jsdom telling us it has no viewport, not a defect in the app.
+const originalScrollTo = window.scrollTo;
+window.scrollTo = () => undefined;
+
 beforeEach(() => {
   databases += 1;
   document.body.innerHTML = '<div id="root"></div>';
