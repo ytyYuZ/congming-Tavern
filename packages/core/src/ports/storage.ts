@@ -195,6 +195,12 @@ export interface Query<TRow> {
    * guess. Guessing is what made `{where: {createdAt: 10}, from: 1, to: 5}` answer an
    * empty array, and a wrong answer pinned by a test becomes a compatibility promise
    * (ADR-023).
+   *
+   * An implementation is free to erase `TRow` — the Dexie adapter reads rows through
+   * `Query<RowBase>`, which collapses `field` to `'id'` at the type level — but it
+   * MUST then look the field up by the string the caller actually passed. Assuming
+   * `'id'` is the only real range field is exactly how that erasure turns into a bug
+   * (ADR-024).
    */
   field?: keyof TRow & string;
   /**
