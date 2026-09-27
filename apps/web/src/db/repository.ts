@@ -38,6 +38,7 @@
  * a `MessageMeta` or an `extensions` blob, and nothing in this module logs.
  */
 import { COLLECTIONS, type Collection, type RowBase, type Tx } from '@smarttavern/core';
+import { isLocale, type Locale } from '@smarttavern/i18n';
 import {
   type Id,
   type JsonValue,
@@ -119,6 +120,62 @@ function messagesOf(tx: Tx): Collection<Message> {
   return tx.collection<Message>(COLLECTIONS.messages);
 }
 
+/**
+ * The language row's id. Its OWN row rather than a field on `settings/provider`
+ * (ADR-022's `(key, value)` port): the two preferences have different lifetimes and
+ * different writers, and a language switch must not have to rewrite the row that
+ * holds the API key.
+ */
+export const LOCALE_SETTINGS_ID = 'locale';
+
+/**
+ * The stored language preference, or `undefined` when there is not a usable one.
+ *
+ * THE FALLBACK CHAIN IS APPLIED BY THE CALLER, AND THAT IS THE POINT
+ * M1-G1 fixes the order — stored preference, then `resolveLocale(navigator.languages)`,
+ * then `DEFAULT_LOCALE` — but only the FIRST step is storage. Steps 2 and 3 need
+ * `navigator` and `resolveLocale`, which live in the i18n layer, and this module must not
+ * import that layer: `i18n/translate.ts` -> `state/locale-store.ts` -> here is already a
+ * path in one direction, so importing it back closes an import cycle whose only symptom
+ * is `translate is not a function` while a module is half-evaluated. `state/locale-store
+ * .ts` therefore runs the full chain (`readLocaleSetting() ?? browserLocale()`, whose
+ * last resort `resolveLocale` supplies as `DEFAULT_LOCALE`) and this function answers the
+ * one question the database can answer.
+ *
+ * WHY `isLocale` AND NOT A LOOSE CHECK: the row was written by this app, so `'EN'` or
+ * `'zh'` is a bug in the writer rather than a fuzzy browser tag. Silently accepting it
+ * would hide that bug, and `undefined` sends the caller to the browser's own list, which
+ * is the honest answer for a row nobody can use.
+ */
+export async function readLocaleSetting(): Promise<Locale | undefined> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(LOCALE_SETTINGS_ID);
+  const stored = row?.value;
+  return isLocale(stored) ? stored : undefined;
+}
+
+/**
+ * Store the language preference.
+ *
+ * The repository owns the ROW, not the fallback: it writes exactly the locale it is
+ * given, because a preference the user chose must be readable back verbatim (that is
+ * what the persistence test asserts).
+ */
+export async function writeLocaleSetting(locale: Locale): Promise<void> {
+  await write(async (tx) => {
+    const row: SettingsRow = { id: LOCALE_SETTINGS_ID, value: locale };
+    await settingsOf(tx).put(row);
+  });
+}
+
+/**
+ * The browser's preferred BCP-47 tags, or `[]` when it has none.
+ *
+ * `navigator.languages` is read through a parameterised key because this workspace
+ * compiles with `noPropertyAccessFromIndexSignature` (which rejects dot access on the
+ * `Navigator` index signature) while Biome's `useLiteralKeys` rejects the literal
+ * bracket form — the same parameterised-key spelling `stringField` above uses.
+ */
+
 /* ────────────────────────────── settings I/O ─────────────────────────────── */
 
 /** Read the stored provider configuration; a first run answers empty strings. */
@@ -161,11 +218,19 @@ const PLACEHOLDER_PROVIDER = 'openai-compatible';
 /** Sampling defaults that satisfy the frozen `SamplingParamsSchema`. */
 const DEFAULT_SAMPLING = { temperature: 0.7, topP: 1 } as const;
 
-/** What a new session is called until M1 adds a title editor / auto-naming. */
-const NEW_SESSION_TITLE = '新会话';
-
 /**
  * Create a session and persist it.
+ *
+ * WHY THE TITLE IS THE CALLER'S DECISION (M1-G1)
+ * A new session's title is PERSISTED DATA — written once, in whatever language was
+ * active at creation time, and deliberately not re-translated by a later language switch
+ * (`home.defaultSessionTitle`'s catalog comment records the same decision). Deciding it
+ * HERE would mean this module reading the catalogs, i.e. the storage layer importing the
+ * UI layer, and `i18n/translate.ts` -> `state/locale-store.ts` -> this module is already
+ * a path in the other direction: the import would close a cycle whose only observable
+ * symptom is `translate is not a function` at module-evaluation time. So the caller (the
+ * chat store, which may import the i18n layer) passes the sentence it wants stored, and
+ * this module stays a database module.
  *
  * The clock, the scheduler mode and the model config are all required by the
  * frozen `SessionSchema`, so a session created before BYO-Key is configured still
@@ -174,11 +239,11 @@ const NEW_SESSION_TITLE = '新会话';
  * (`recordSessionModel`) — and the alternative (refusing to create a session until
  * a key exists) would make 「新建会话」 the thing that blocks the wizard.
  */
-export async function createSession(options: { title?: string } = {}): Promise<Session> {
+export async function createSession(options: { title: string }): Promise<Session> {
   const timestamp = Date.now();
   const session: Session = {
     id: mintUuidV7(),
-    title: options.title ?? NEW_SESSION_TITLE,
+    title: options.title,
     refs: {
       world: { ...PLACEHOLDER_PIN },
       playerCharacter: { ...PLACEHOLDER_PIN },

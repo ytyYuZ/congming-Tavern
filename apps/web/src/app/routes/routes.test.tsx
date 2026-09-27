@@ -30,6 +30,7 @@ import {
   appendMessage,
   createSession,
   setHeadMessageId,
+  writeLocaleSetting,
   writeProviderSettings,
 } from '../../db/repository';
 // The stores and the database accessors are taken from `mount`, NOT from `state/*` or
@@ -40,6 +41,7 @@ import {
   closeDatabase,
   resetChat,
   resetDatabase,
+  resetLocaleStore,
   resetSettingsStore,
   useChatStore,
 } from '../../mount';
@@ -71,12 +73,18 @@ afterAll(() => {
   window.scrollTo = originalScrollTo;
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   databases += 1;
   databaseName = `apps-web-routes-${databases}`;
   resetDatabase(databaseName);
   resetChat();
   resetSettingsStore();
+  resetLocaleStore();
+  // This file asserts RENDERED Chinese copy, and the store's documented initial value
+  // follows the browser (jsdom reports `en-US`). So the language is pinned by writing the
+  // STORED row — the same thing a returning user has — and the shell's own `load()` then
+  // adopts it. Poking the store instead would be overwritten by that legitimate read.
+  await writeLocaleSetting('zh-CN');
 });
 
 afterEach(async () => {
@@ -87,6 +95,7 @@ afterEach(async () => {
   await unmount();
   resetChat();
   resetSettingsStore();
+  resetLocaleStore();
   closeDatabase();
   await deleteDatabase(databaseName);
 });
@@ -199,7 +208,7 @@ describe('route smoke tests', () => {
   });
 
   it('the play view renders the PERSISTED chain, oldest first', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const user = await appendMessage({
       sessionId: session.id,
       parentId: null,
@@ -229,7 +238,7 @@ describe('route smoke tests', () => {
   });
 
   it('the play view shows the error banner from the adapter code, not the vendor prose', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const host = await mountAt(`/play/${session.id}`, '发送');
 
     await act(async () => {
@@ -252,7 +261,7 @@ describe('route smoke tests', () => {
   });
 
   it('the play view offers to retry only when the adapter said it is retryable', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const host = await mountAt(`/play/${session.id}`, '发送');
 
     await act(async () => {
@@ -272,7 +281,7 @@ describe('route smoke tests', () => {
   });
 
   it('the play view renders a streaming draft as an assistant bubble', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const host = await mountAt(`/play/${session.id}`, '发送');
 
     await act(async () => {
@@ -287,7 +296,7 @@ describe('route smoke tests', () => {
   });
 
   it('the play view shows a thinking marker before the first delta', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const host = await mountAt(`/play/${session.id}`, '发送');
 
     await act(async () => {
@@ -301,7 +310,7 @@ describe('route smoke tests', () => {
     // Guards the assumption the two tests above depend on: if a future change made the
     // app import the store through a second module instance, seeding would silently do
     // nothing and every error-state test would pass against an empty view.
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     await mountAt(`/play/${session.id}`, '发送');
     // Wrapped in `act` like every other seed in this file: an unwrapped update leaves
     // React warning that the DOM assertion below may be reading a tree it never

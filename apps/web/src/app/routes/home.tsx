@@ -10,12 +10,20 @@
  * The session's id only exists after the write, so the link cannot be rendered ahead
  * of time. `useNavigate` is the router's own answer to that, and it is the only
  * router hook this view needs.
+ *
+ * WHY THE DATE FORMATTER FOLLOWS THE ACTIVE LOCALE (M1-G1)
+ * `toLocaleString('zh-CN')` was a hardcoded language choice spelled in ASCII, so the
+ * character-based checker could not see it: an English interface would have shown
+ * zh-CN dates under English copy. `useTranslation` exposes the locale for exactly this,
+ * so the timestamp is formatted with the same language as the sentence next to it.
  */
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
+import { useTranslation } from '../../i18n/use-translation';
 import { useChatStore } from '../../state/chat-store';
 
 export function HomeRoute() {
+  const { t, locale } = useTranslation();
   const sessions = useChatStore((state) => state.sessions);
   const load = useChatStore((state) => state.load);
   const create = useChatStore((state) => state.create);
@@ -40,12 +48,12 @@ export function HomeRoute() {
     <>
       <section className="btn-row">
         <button className="btn btn-primary" type="button" disabled={creating} onClick={onNew}>
-          {creating ? '创建中…' : '新建会话'}
+          {creating ? t('home.creating') : t('home.newSession')}
         </button>
       </section>
 
       {sessions.length === 0 ? (
-        <p className="muted">还没有会话。先到「设置」填写 API 配置，然后新建一个会话。</p>
+        <p className="muted">{t('home.empty')}</p>
       ) : (
         <ul className="session-list">
           {sessions.map((session) => (
@@ -53,8 +61,8 @@ export function HomeRoute() {
               <Link to="/play/$sessionId" params={{ sessionId: session.id }}>
                 <strong>{session.title}</strong>
                 <div className="muted">
-                  {session.headMessageId === null ? '暂无消息' : '已有消息'} ·{' '}
-                  {new Date(session.createdAt).toLocaleString('zh-CN')}
+                  {session.headMessageId === null ? t('home.noMessages') : t('home.hasMessages')} ·{' '}
+                  {new Date(session.createdAt).toLocaleString(locale)}
                 </div>
               </Link>
             </li>

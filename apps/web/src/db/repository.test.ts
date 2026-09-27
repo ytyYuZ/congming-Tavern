@@ -100,14 +100,14 @@ describe('db/repository', () => {
   });
 
   it('answers an empty chain before the first message and for an unknown session', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     expect(await getChain(session.id)).toEqual([]);
     expect(await getChain('no-such-session')).toEqual([]);
     expect(await getSession('no-such-session')).toBeUndefined();
   });
 
   it('stops walking a corrupted cycle instead of hanging', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     // A cycle with no root at all: A's parent is B and B's parent is A. The walk has to
     // terminate on the repetition, not on the 10k bound and certainly not by hanging.
     const a = await appendMessage({
@@ -178,7 +178,7 @@ describe('db/repository', () => {
   });
 
   it('re-fires a liveQuery subscription for its own rows, and stops on unsubscribe', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const seen: string[][] = [];
     const unsubscribe = subscribe(
       () => readChain(session.id),

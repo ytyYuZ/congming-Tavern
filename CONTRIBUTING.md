@@ -196,7 +196,7 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 
 | job | 命令 | 内容 |
 | --- | --- | --- |
-| `lint` | `pnpm lint` | Biome lint + 格式校验，外加依赖方向检查脚本 |
+| `lint` | `pnpm lint` | Biome lint + 格式校验，外加依赖方向与硬编码文案两个检查脚本 |
 | `typecheck` | `pnpm typecheck` | `tsc -b`（strict + `noUncheckedIndexedAccess`；core 无 DOM） |
 | `test` | `pnpm test` | Vitest 跑遍全部 workspace |
 | `build` | `pnpm build` | Vite 构建 `apps/web`、`apps/desktop` |
@@ -206,9 +206,9 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 
 ---
 
-## 5. 如何验证"依赖方向"这条规则真的会红 / Proving the rule is live
+## 5. 如何验证这些规则真的会红 / Proving the rules are live
 
-两条规则都要能证实会失败，否则它只是装饰。以下步骤约 30 秒，两条都做一遍。
+每条规则都要能证实会失败，否则它只是装饰。以下每节约 15–30 秒，建议都做一遍。
 
 ### 5.1 Biome 规则（编辑器 / lint 立刻报错）
 
@@ -244,7 +244,54 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
    断言检查器确实会报告（以及干净树确实为 0 条）。把检查器里的 `ALLOWED` 表改坏，
    这些测试立刻变红。
 
-### 5.3 测试文件的类型检查（`tsconfig.test.json`）
+### 5.3 硬编码文案检查脚本（CI 的 `lint` job 里跑）
+
+M1-G1 的验收里有一句「lint 规则禁止裸字符串」：界面文字只能待在
+`packages/i18n` 的目录文件里，通过 `t('area.key')` 取用。人在 diff 里看不见
+"漏翻的那一条"，只有脚本能看见，所以这条规则由
+`tools/scripts/check-i18n-literals.mjs`（TypeScript 编译器 API 走 AST，不是正则）
+在 `pnpm lint` 里强制。它管两件事：
+
+- **字符规则**：`apps/*/src/**/*.{ts,tsx}` 里，任何字符串字面量、JSX 文本、
+  无替换模板字面量（以及带 `${}` 的模板两端文本）只要含中日韩字符就报错 ——
+  本项目的界面文案就是中文，中文出现在目录文件之外，要么是漏翻，要么是
+  该和翻译放在一起的 locale 标识，两者都该写成 `t(...)`。
+- **属性规则**：`title` / `placeholder` / `aria-label` / `aria-description` / `alt`
+  这几个**面向用户**的 JSX 属性只要直接写成字面量就报错，与字符无关 ——
+  `title="Settings"` 和 `title="设置"` 一样没被本地化，目录文件本身也是双语的。
+  这份名单写在脚本里的 `USER_VISIBLE_JSX_ATTRIBUTES` 常量中，要加要减都改那一处。
+  `className` / `id` / `role` / `data-*` 属于机器属性，不在名单里。
+
+**豁免三处（都是刻意的）**：`packages/i18n/**` 是文案本身该待的地方；
+`*.test.*`（以及 `__fixtures__/` 之类的目录）里的中文是断言渲染结果的证据，必须保持可读；
+`apps/web/src/chat/prompt.ts` 是**唯一一处临时豁免** —— 那个文件拼的是发给**模型**的消息，
+中文属于提示词内容而不是界面文案，跟着界面语言切换反而是 bug（英文界面会因此把英文
+系统提示词发给模型：显示偏好不该改变模型行为）。它的最终归宿是 `PromptPreset` 的数据块
+（ADR-029，M1-G4 落地），在那之前它是内置默认值；那一块落地时就把脚本里的
+`MODEL_PROMPT_FILE` 常量连同它的分支一起删掉。豁免刻意写成**一个精确文件**而不是模式
+（`chat/**`、`prompt*`），就是不让它自己长大 —— `chat/` 下的其他文件照常报错，
+这条也由测试盯着。
+
+**这条规则不抓什么**（说清楚，免得它看起来比实际更强）：JSX 文本节点里的
+拉丁文散文（`<h1>Settings</h1>`）和非名单属性的裸字符串（`<div label="Settings">`）
+都不会报错。把「所有非空文本节点」都算违规会连 `{item.name}`、标点、分隔符一起
+误报，逼着大家加白名单 —— 那种规则最后什么也强制不了。宁可窄而可执行。
+
+证实这条规则会红（约 30 秒）：
+
+1. 在任意 `apps/web` 源文件里加一条中文，例如
+   `const label = '设置';`（或 `<button title="Settings">…</button>`）。
+2. 运行 `pnpm lint`（或 `node tools/scripts/check-i18n-literals.mjs`）。预期：退出码 1，
+   并打印 `[i18n] N hardcoded-text violation(s):`，每条给出
+   `路径:行:列`、原文，以及提示 `use t('area.key') from @smarttavern/i18n`；
+   `title="Settings"` 这类属性的提示则会点名是哪个属性不该写字面量。
+3. 删掉那行；同一命令输出 `[i18n] OK — N UI source file(s) scanned …` 并退出 0。
+
+和依赖方向检查一样，这套实验在 `tools/scripts/check-i18n-literals.test.mjs`
+（`pnpm test`）里自动重跑：脚本一旦不再报告违规，或者扫描范围不再匹配到任何文件，
+测试就变红。**"一个文件都没扫到"会直接以退出码 2 大声失败**，不会假装成功。
+
+### 5.4 测试文件的类型检查（`tsconfig.test.json`）
 
 每个 workspace 的 `tsconfig.json` 都排除了自己的测试文件，而 Vitest 只**转译**测试
 （剥掉类型但不检查），所以测试里的类型错误此前完全不可见 —— 直到它在运行时炸掉。

@@ -11,7 +11,9 @@
  *   It is rendered as a normal assistant bubble so the transcript does not jump when
  *   the row lands.
  * - The error banner reads `error.code`, never the provider's English sentence: the
- *   port's `error.message` is for logs (docs/02 §8.4 决定 3).
+ *   port's `error.message` is for logs (docs/02 §8.4 决定 3). The code is turned into a
+ *   catalog key by `i18n/error-keys.ts` and rendered through `t(...)`, so the banner is
+ *   in the active language and an unrecognised code still shows a sentence.
  *
  * WHY THE COMPOSER'S TEXT IS LOCAL STATE AND THE STORE'S IS NOT
  * A half-typed message is not conversation state: it must not survive a session
@@ -22,10 +24,13 @@
 import type { Message } from '@smarttavern/schema';
 import { Link } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useState } from 'react';
-import { errorLabel, useChatStore } from '../../state/chat-store';
+import { messageKeyForCode } from '../../i18n/error-keys';
+import { useTranslation } from '../../i18n/use-translation';
+import { useChatStore } from '../../state/chat-store';
 import { useSettingsStore } from '../../state/settings-store';
 
 export function PlayRoute({ sessionId }: { sessionId: string }) {
+  const { t } = useTranslation();
   const session = useChatStore((state) => state.session);
   const messageChain = useChatStore((state) => state.messageChain);
   const draft = useChatStore((state) => state.draft);
@@ -63,13 +68,13 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
   return (
     <>
       <p className="muted">
-        <Link to="/">← 返回会话列表</Link>
+        <Link to="/">{t('play.backToList')}</Link>
         {session === undefined ? '' : ` · ${session.title}`}
       </p>
 
       {error === undefined ? null : (
         <div className="notice notice-error">
-          <div>{errorLabel(error.code)}</div>
+          <div>{t(messageKeyForCode(error.code))}</div>
           <div className="btn-row">
             {error.retryable && error.turnText !== '' ? (
               <button
@@ -80,11 +85,11 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
                   void send(error.turnText);
                 }}
               >
-                重试
+                {t('common.retry')}
               </button>
             ) : null}
             <button className="btn" type="button" onClick={dismissError}>
-              关闭
+              {t('common.close')}
             </button>
           </div>
         </div>
@@ -96,14 +101,14 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
         ))}
         {streaming ? (
           <div className="bubble bubble-assistant">
-            {draft.started ? draft.text : <span className="muted">正在生成…</span>}
+            {draft.started ? draft.text : <span className="muted">{t('play.generating')}</span>}
           </div>
         ) : null}
       </section>
 
       <form className="composer" onSubmit={onSend}>
         <label htmlFor="turn-input" className="muted">
-          输入你的行动或台词
+          {t('play.composerLabel')}
         </label>
         <textarea
           id="turn-input"
@@ -111,13 +116,13 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
           onChange={(event) => setText(event.target.value)}
           rows={2}
           disabled={streaming}
-          placeholder="例如：我推开门，走进昏暗的酒馆。"
+          placeholder={t('play.composerPlaceholder')}
         />
         <button className="btn btn-primary" type="submit" disabled={streaming}>
-          发送
+          {t('play.send')}
         </button>
         <button className="btn" type="button" disabled={!streaming} onClick={abort}>
-          停止
+          {t('play.stop')}
         </button>
       </form>
     </>

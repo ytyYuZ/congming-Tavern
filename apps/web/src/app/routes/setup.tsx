@@ -23,21 +23,30 @@
  * In the password field, because the user owns it and has no other way to check what
  * they saved. It is not echoed anywhere else, never logged, and never attached to a
  * message (HANDOFF §4.1 invariant 6).
+ *
+ * WHY THE RESOLVER IS REBUILT FROM THE ACTIVE LOCALE (M1-G1)
+ * Zod embeds each validation message in the schema, so the resolver is created from
+ * `t` and memoised on it: a language switch rebuilds the RULES (with their sentences in
+ * the new language) while react-hook-form keeps the values the user typed. A
+ * module-level schema would have frozen the validation copy into one language.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import {
+  type ConnectionNote,
   connectionNote,
   formDefaults,
   type ProviderConfigForm,
-  ProviderConfigFormSchema,
+  providerConfigFormSchema,
   testConnection,
 } from '../../chat/providers';
 import type { ProviderSettings } from '../../db/repository';
+import { useTranslation } from '../../i18n/use-translation';
 import { useSettingsStore } from '../../state/settings-store';
 
 export function SetupRoute() {
+  const { t } = useTranslation();
   const loaded = useSettingsStore((state) => state.loaded);
   const provider = useSettingsStore((state) => state.provider);
   const load = useSettingsStore((state) => state.load);
@@ -46,16 +55,19 @@ export function SetupRoute() {
     void load();
   }, [load]);
 
-  if (!loaded) return <p className="muted">正在读取设置…</p>;
+  if (!loaded) return <p className="muted">{t('setup.loading')}</p>;
   return <SetupForm stored={provider} />;
 }
 
 function SetupForm({ stored }: { stored: ProviderSettings }) {
+  const { t } = useTranslation();
   const save = useSettingsStore((state) => state.save);
-  const [testResult, setTestResult] = useState<string | undefined>(undefined);
+  const [testResult, setTestResult] = useState<ConnectionNote | undefined>(undefined);
   const [testFailed, setTestFailed] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const schema = useMemo(() => providerConfigFormSchema(t), [t]);
 
   const {
     register,
@@ -63,7 +75,7 @@ function SetupForm({ stored }: { stored: ProviderSettings }) {
     getValues,
     formState: { errors, isSubmitting },
   } = useForm<ProviderConfigForm>({
-    resolver: zodResolver(ProviderConfigFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: formDefaults(stored),
   });
 
@@ -77,18 +89,28 @@ function SetupForm({ stored }: { stored: ProviderSettings }) {
     setSaved(false);
     const result = await testConnection(getValues());
     setTestFailed(!result.ok);
-    setTestResult(result.ok ? `连接成功（HTTP ${result.status}）` : connectionNote(result));
+    // The KEY travels, not the sentence: the paragraph below renders it through `t`, so
+    // a language switch re-renders the note in the new language. `status` is only a
+    // parameter when a response actually arrived, which is why it is spread conditionally.
+    setTestResult(
+      result.ok
+        ? {
+            key: 'setup.testOk',
+            ...(result.status === undefined ? {} : { params: { status: result.status } }),
+          }
+        : connectionNote(result),
+    );
     setTesting(false);
   };
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate>
       <div className="field">
-        <label htmlFor="baseUrl">服务地址（Base URL）</label>
+        <label htmlFor="baseUrl">{t('setup.baseUrlLabel')}</label>
         <input
           id="baseUrl"
           type="url"
-          placeholder="https://api.deepseek.com/v1"
+          placeholder={t('setup.baseUrlPlaceholder')}
           {...register('baseUrl')}
         />
         {errors.baseUrl === undefined ? null : (
@@ -97,14 +119,19 @@ function SetupForm({ stored }: { stored: ProviderSettings }) {
       </div>
 
       <div className="field">
-        <label htmlFor="apiKey">API Key</label>
+        <label htmlFor="apiKey">{t('setup.apiKeyLabel')}</label>
         <input id="apiKey" type="password" autoComplete="off" {...register('apiKey')} />
-        <span className="muted">本地 Ollama / vLLM 可以留空。密钥只保存在这台设备的数据库中。</span>
+        <span className="muted">{t('setup.apiKeyHint')}</span>
       </div>
 
       <div className="field">
-        <label htmlFor="model">模型名</label>
-        <input id="model" type="text" placeholder="deepseek-chat" {...register('model')} />
+        <label htmlFor="model">{t('setup.modelLabel')}</label>
+        <input
+          id="model"
+          type="text"
+          placeholder={t('setup.modelPlaceholder')}
+          {...register('model')}
+        />
         {errors.model === undefined ? null : (
           <span className="field-error">{errors.model.message}</span>
         )}
@@ -112,17 +139,19 @@ function SetupForm({ stored }: { stored: ProviderSettings }) {
 
       <div className="btn-row">
         <button className="btn btn-primary" type="submit" disabled={isSubmitting}>
-          保存
+          {t('common.save')}
         </button>
         <button className="btn" type="button" disabled={testing} onClick={onTest}>
-          {testing ? '测试中…' : '测试连接'}
+          {testing ? t('setup.testing') : t('setup.testConnection')}
         </button>
       </div>
 
       {testResult === undefined ? null : (
-        <p className={`notice ${testFailed ? 'notice-error' : 'notice-ok'}`}>{testResult}</p>
+        <p className={`notice ${testFailed ? 'notice-error' : 'notice-ok'}`}>
+          {t(testResult.key, testResult.params)}
+        </p>
       )}
-      {saved ? <p className="notice notice-ok">已保存</p> : null}
+      {saved ? <p className="notice notice-ok">{t('setup.saved')}</p> : null}
     </form>
   );
 }

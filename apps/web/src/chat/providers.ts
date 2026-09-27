@@ -7,43 +7,79 @@
  * required by the port). Defining them once means the Zod form resolver and the
  * 「测试连接」 button cannot disagree about what "configured" means.
  *
+ * WHY THE SCHEMA IS BUILT FROM A TRANSLATOR (M1-G1)
+ * Zod bakes a message into the schema at construction time, so a module-level constant
+ * would freeze the validation sentence into one language — the setup screen's errors
+ * would stay Chinese in an English interface. `providerConfigFormSchema(t)` defers the
+ * choice to the caller, which is why the resolver is built from the ACTIVE locale: a
+ * language switch rebuilds the schema, and everything else about the form (its values,
+ * its dirty state) is untouched.
+ *
+ * WHY THIS MODULE IMPORTS *TYPES* FROM `@smarttavern/i18n` AND NO RUNTIME LOOKUP
+ * It has no way to know which language the user reads, so every sentence it needs is
+ * returned as a KEY (`ConnectionNote`) or asked for through a translator the caller
+ * supplies. Importing `translate` here would drag the locale store — and through it
+ * `db/repository.ts` — into a leaf module, which is an import cycle rather than a
+ * convenience (the layering note is in `i18n/translate.ts`).
+ *
  * WHY `apiKey` IS ALLOWED TO BE EMPTY
  * `OpenAICompatibleOptions.apiKey` documents an empty string as "send no
  * `Authorization` header", which is what a local Ollama or vLLM needs. Requiring a
  * key would block the one setup the port explicitly supports.
  */
+import type { MessageKey } from '@smarttavern/i18n';
 import { type FetchLike, LLM_ERROR_CODES, OpenAICompatibleProvider } from '@smarttavern/providers';
 import { z } from 'zod';
 import type { ProviderSettings } from '../db/repository';
 
-/** How long 「测试连接」 waits before giving up, in milliseconds. */
+/**
+ * The translator shape this module needs: a key, and optional `{name}` values.
+ *
+ * Structural on purpose: the only caller is the setup view, whose `t` comes from
+ * `useTranslation`, and a named parameter type keeps the signature readable without
+ * making a leaf module depend on the hook.
+ */
+export type MessageLookup = (
+  key: MessageKey,
+  params?: Readonly<Record<string, string | number>>,
+) => string;
+
+/**
+ * How long 「测试连接」 waits before giving up, in milliseconds.
+ *
+ * The comment keeps the button's name; the name itself is `setup.testConnection`.
+ */
 export const CONNECTION_TIMEOUT_MS = 15_000;
 
 /**
- * The setup form's contract.
+ * The setup form's contract, with its messages read from the active locale.
  *
  * An empty `baseUrl` or `model` is refused with a sentence the user reads, because
  * a first run MUST be told what is missing rather than getting an adapter error
- * about an empty URL later.
+ * about an empty URL later. `t` is taken as a parameter (rather than imported as a
+ * module-level function) so the caller's locale — and only the caller's — decides
+ * which catalog the rules come from.
  */
-export const ProviderConfigFormSchema = z.object({
-  baseUrl: z
-    .string()
-    .trim()
-    .min(1, '请填写服务地址')
-    .refine((value) => {
-      try {
-        const url = new URL(value);
-        return url.protocol === 'http:' || url.protocol === 'https:';
-      } catch {
-        return false;
-      }
-    }, '服务地址必须是 http(s) URL'),
-  apiKey: z.string(),
-  model: z.string().trim().min(1, '请填写模型名'),
-});
+export function providerConfigFormSchema(t: MessageLookup) {
+  return z.object({
+    baseUrl: z
+      .string()
+      .trim()
+      .min(1, t('setup.baseUrlRequired'))
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return url.protocol === 'http:' || url.protocol === 'https:';
+        } catch {
+          return false;
+        }
+      }, t('setup.baseUrlInvalid')),
+    apiKey: z.string(),
+    model: z.string().trim().min(1, t('setup.modelRequired')),
+  });
+}
 
-export type ProviderConfigForm = z.infer<typeof ProviderConfigFormSchema>;
+export type ProviderConfigForm = z.infer<ReturnType<typeof providerConfigFormSchema>>;
 
 /** The form's initial values, from whatever the settings row holds. */
 export function formDefaults(provider: ProviderSettings): ProviderConfigForm {
@@ -64,20 +100,48 @@ export interface ConnectionTestResult {
 }
 
 /**
- * The sentence 「测试连接」 shows for a failed probe.
+ * The sentence 「测试连接」 shows for a failed probe, as a KEY plus its parameters.
  *
  * WHY IT IS NOT `error.message`: the adapter composes that sentence for a developer
  * (it names the endpoint, the status and the vendor's own words, in English). What a
- * person needs is which of the four mapped causes this is. The stable `code` is what
- * picks the sentence, exactly as the port intends, and `chat/providers.test.ts` pins
- * that the code — not the prose — decides.
+ * person needs is which of the three mapped causes this is. The stable `code` is what
+ * picks the sentence, exactly as the port intends.
+ *
+ * WHY A KEY AND NOT A SENTENCE (M1-G1): this function used to return the Chinese text,
+ * which put UI copy in a module that has no idea what language the user reads — and
+ * meant the view could not re-render the note on a language switch. Returning
+ * `{ key, params }` lets the caller translate at render time, where the locale is known
+ * and observable.
+ *
+ * WHY ONE KEY WITH `{status}` RATHER THAN CONCATENATION: `连接失败：服务端返回 HTTP `
+ * + status is a sentence assembled from pieces, and a language that puts the status
+ * first (or drops the colon) cannot be expressed by concatenating fragments. The status
+ * travels as a parameter of a single catalog message, and the NO-STATUS case is a
+ * different catalog key (`setup.testOffline`) rather than a Chinese stand-in string
+ * concatenated in here — this module knows keys, never sentences.
+ *
+ * WHY `status` IS A `string | number` PARAMETER AND NOT A LOOKUP
+ * `setup.statusUnknown` ("unknown status") is itself catalog text, so filling
+ * `setup.testHttpFailed`'s `{status}` slot with it would be this module translating one
+ * fragment to build another. Instead the whole sentence is chosen by the caller's
+ * locale: no status means `setup.testOffline`'s own message.
  */
-export function connectionNote(result: ConnectionTestResult): string {
-  if (result.code === LLM_ERROR_CODES.network) {
-    return '连接失败：服务地址无法访问（检查地址、网络或浏览器 CORS 限制）';
-  }
-  if (result.offline) return '连接失败：服务地址不可达';
-  return `连接失败：服务端返回 HTTP ${result.status ?? '未知状态'}`;
+export interface ConnectionNote {
+  key: MessageKey;
+  /**
+   * Values for the message's `{name}` placeholders.
+   *
+   * Indexed `string` (not `MessageKey`) because it is handed straight to `t`. `Readonly`
+   * so a caller cannot mutate a value some other render is reading.
+   */
+  params?: Readonly<Record<string, string | number>>;
+}
+
+/** The catalog key and parameters for a failed probe. */
+export function connectionNote(result: ConnectionTestResult): ConnectionNote {
+  if (result.code === LLM_ERROR_CODES.network) return { key: 'setup.testNetworkFailed' };
+  if (result.offline || result.status === undefined) return { key: 'setup.testOffline' };
+  return { key: 'setup.testHttpFailed', params: { status: result.status } };
 }
 
 /**

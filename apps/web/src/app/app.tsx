@@ -20,7 +20,16 @@
  * loading after that flush and render an empty shell. Taking the router as a prop
  * keeps that ordering in the one place that mounts the app, and lets each test render
  * its own router at its own path.
+ *
+ * WHY THE LANGUAGE PICKER LIVES IN THE SHARED HEADER (M1-G1)
+ * Every page renders `AppHeader`, so the picker is on every route by construction: a
+ * control only reachable from the screen you are already reading is useless to the
+ * person who cannot read it. The options come from `LOCALES` and their labels from
+ * `LOCALE_LABELS` — each language's name IN ITS OWN LANGUAGE, deliberately never
+ * translated (see `i18n/use-translation.ts`) — while the select's accessible name IS
+ * translated, because a screen reader reads it in the active interface language.
  */
+import { isLocale } from '@smarttavern/i18n';
 import {
   createMemoryHistory,
   createRootRoute,
@@ -29,6 +38,9 @@ import {
   Link,
   RouterProvider,
 } from '@tanstack/react-router';
+import { type ChangeEvent, useEffect } from 'react';
+import { useTranslation } from '../i18n/use-translation';
+import { useLocaleStore } from '../state/locale-store';
 import { HomeRoute } from './routes/home';
 import { PlayRoute } from './routes/play';
 import { SetupRoute } from './routes/setup';
@@ -54,12 +66,47 @@ const playRoute = createRoute({
   component: PlayPage,
 });
 
-/** The header every route shares, including the only link to the setup screen. */
+/**
+ * The header every route shares: the product name, the language picker, and the only
+ * link to the setup screen.
+ *
+ * WHY IT DOES NOT LOAD THE PERSISTED LOCALE ITSELF
+ * The read is `<App/>`'s (see that component's comment): it is the ONE place every mount
+ * path goes through, whereas this header is rendered by each page separately. What this
+ * component needs from the store is exactly two fields — the locale to render in, and the
+ * setter.
+ */
 function AppHeader() {
+  const { t, locales, localeLabels, setLocale } = useTranslation();
+  const current = useLocaleStore((state) => state.locale);
+
+  const onLocaleChange = (event: ChangeEvent<HTMLSelectElement>): void => {
+    const raw = event.target.value;
+    if (!isLocale(raw)) return;
+    // Not awaited: the store switches immediately and reports a write failure through
+    // its own `error` field, so a slow or failing write cannot stall the UI
+    // (`state/locale-store.ts` records why).
+    void setLocale(raw);
+  };
+
   return (
     <header className="app-header">
-      <h1>聪明酒馆 SmartTavern</h1>
-      <Link to="/setup">设置</Link>
+      <h1>{t('common.appName')}</h1>
+      <nav className="app-nav">
+        <Link to="/setup">{t('nav.settings')}</Link>
+        <select
+          className="locale-picker"
+          aria-label={t('nav.language')}
+          value={current}
+          onChange={onLocaleChange}
+        >
+          {locales.map((locale) => (
+            <option key={locale} value={locale}>
+              {localeLabels[locale]}
+            </option>
+          ))}
+        </select>
+      </nav>
     </header>
   );
 }
@@ -115,7 +162,24 @@ export function createAppRouter(initialPath = '/') {
 /**
  * The root component. The router is INJECTED rather than built here so `mount.ts`
  * can await its first load before rendering — see the file header.
+ *
+ * WHY THE STORED LANGUAGE IS READ HERE AND NOT IN `mountApp`
+ * Restoring the persisted preference is an app-startup concern, but `mount.ts` is only
+ * ONE of the ways `<App/>` is reached: a test renders it directly, and a future embedder
+ * (the desktop shell's own frame, a storybook-style harness) would too. Putting the read
+ * in a mount effect here covers EVERY path by construction, and it is how this app
+ * already loads its other stores — a component effect calling `useXStore.getState()`.
+ * The read only REFINES the store's constructed value (which is already a usable
+ * language from `navigator.languages`), so it is safe for it to land after the first
+ * paint; `state/locale-store.ts`'s `loadToken` is what makes it safe for it to land after
+ * a user has already clicked the picker.
  */
 export function App({ router }: { router: ReturnType<typeof createAppRouter> }) {
+  const loadLocale = useLocaleStore((state) => state.load);
+
+  useEffect(() => {
+    void loadLocale();
+  }, [loadLocale]);
+
   return <RouterProvider router={router} />;
 }

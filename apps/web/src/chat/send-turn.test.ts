@@ -252,7 +252,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 
 describe('sendTurn', () => {
   it('persists the user turn and the assistant turn and advances the head', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const wire = fakeWire(() => sseResponse(['你', '好']));
 
     const result = await sendTurn(
@@ -286,7 +286,7 @@ describe('sendTurn', () => {
   });
 
   it('sends the active chain as prior turns on the second turn', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     await sendTurn(
       { config: CONFIG, transport: fakeWire(() => sseResponse(['第一次回答'])).fetch },
       { sessionId: session.id, text: '第一次提问', signal: new AbortController().signal },
@@ -311,7 +311,7 @@ describe('sendTurn', () => {
   });
 
   it('keeps the partial text when the stream is aborted, and marks it', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const body = controlledSseResponse(['部分回答', '后面的内容']);
     const wire = fakeWire(() => body.response);
 
@@ -344,7 +344,7 @@ describe('sendTurn', () => {
   });
 
   it('reports each delta as it arrives, so the view can render while the answer streams', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const wire = fakeWire(() => sseResponse(['你', '好', '呀']));
     const seen: string[] = [];
 
@@ -360,7 +360,7 @@ describe('sendTurn', () => {
   });
 
   it('reports an error event and writes NO orphan assistant row', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const wire = fakeWire(() =>
       errorResponse(401, 'invalid_api_key', 'Incorrect API key provided: sk-must-never'),
     );
@@ -382,7 +382,7 @@ describe('sendTurn', () => {
   });
 
   it('reports a rate limit as retryable', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const wire = fakeWire(() =>
       errorResponse(429, 'rate_limit_exceeded', 'Rate limit reached for test-model-1'),
     );
@@ -398,7 +398,7 @@ describe('sendTurn', () => {
   });
 
   it('never puts the API key in a persisted row, an error, or a message meta (invariant 6)', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const wire = fakeWire(() => sseResponse(['回答']));
 
     const result = await sendTurn(
@@ -426,7 +426,7 @@ describe('sendTurn', () => {
   });
 
   it('redacts a key the gateway echoes back in its own error body', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     // A gateway returning our own Authorization header inside its error text is the one
     // documented leak path (openai-compatible.ts) — and the adapter must redact it.
     const wire = fakeWire(() => errorResponse(403, 'forbidden', `Bearer ${API_KEY} denied`));
@@ -443,7 +443,7 @@ describe('sendTurn', () => {
   });
 
   it('chains a continuation onto the stored head, including across a branch', async () => {
-    const session = await createSession();
+    const session = await createSession({ title: 'test-session' });
     const root = await appendMessage({
       sessionId: session.id,
       parentId: null,

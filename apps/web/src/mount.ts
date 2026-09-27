@@ -62,6 +62,7 @@ export interface MountOptions {
  */
 export { closeDatabase, resetDatabase, subscribe } from './db/database';
 export { resetChat, useChatStore } from './state/chat-store';
+export { resetLocaleStore, useLocaleStore } from './state/locale-store';
 export { resetSettingsStore, useSettingsStore } from './state/settings-store';
 
 /**
@@ -69,6 +70,16 @@ export { resetSettingsStore, useSettingsStore } from './state/settings-store';
  *
  * The router is returned rather than kept private so a caller (a test, a future
  * desktop shell) can navigate without going through the DOM.
+ *
+ * WHERE THE STORED LANGUAGE IS RESTORED, AND WHY IT IS NOT HERE
+ * `<App/>` reads it in a mount effect (`app/app.tsx` records the reasoning): this
+ * function is only one of the ways the tree is reached, and a test that renders `<App/>`
+ * directly must get the same startup behaviour as the browser entry. Duplicating the read
+ * here would mean two `load()` calls racing on start-up for no benefit.
+ *
+ * NOTE ON `export … from` BELOW: the re-exports for tests do NOT create local bindings,
+ * so this file must IMPORT anything it also calls — see the import block above. The two
+ * shapes look identical at a glance and the mistake is a `ReferenceError` at runtime.
  */
 export function mountApp(root: HTMLElement, options: MountOptions = {}) {
   if (options.databaseName !== undefined) resetDatabase(options.databaseName);

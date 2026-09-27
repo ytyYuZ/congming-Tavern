@@ -30,12 +30,15 @@
  * leave `status` stuck on `'streaming'` — a composer with a permanently disabled
  * send button. So the failure is surfaced as `status: 'error'`.
  */
-import { type FetchLike, LLM_ERROR_CODES } from '@smarttavern/providers';
+import type { MessageKey } from '@smarttavern/i18n';
+import type { FetchLike } from '@smarttavern/providers';
 import type { Id, Message, Session } from '@smarttavern/schema';
 import { create } from 'zustand';
 import { sendTurn } from '../chat/send-turn';
 import { subscribe } from '../db/database';
 import { createSession, getSession, readChain, readSessions } from '../db/repository';
+import { messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
+import { translate } from '../i18n/translate';
 import { isProviderReady, type ProviderSettings, useSettingsStore } from './settings-store';
 
 /** The turn lifecycle: nothing in flight, a stream arriving, or the last turn failed. */
@@ -103,21 +106,18 @@ export function configureChat(next: { transport: FetchLike }): void {
 }
 
 /**
- * Human-readable label per adapter error code. The code is what code branches on;
- * the label is what a person reads (docs/02 §8.4 决定 3).
+ * `code` -> the sentence the error banner shows.
+ *
+ * THE SENTENCE MAP MOVED OUT OF THIS MODULE. It used to hold six Chinese strings here,
+ * which made a state module the owner of UI prose: translating the app meant editing the
+ * state layer, and the checker could only see the literals, not the coupling. The codes
+ * are the store's business (`ChatError.code`); the sentence per code is
+ * `i18n/error-keys.ts`'s, and the view resolves it through `t(...)`. This helper stays
+ * for the one caller with no translator at hand — a test or a log line — and it is
+ * deliberately a thin wrapper so there is exactly one code->key table in the app.
  */
-const ERROR_LABELS: Record<string, string> = {
-  [LLM_ERROR_CODES.auth]: 'API Key 被拒绝，请在「设置」中检查',
-  [LLM_ERROR_CODES.rateLimit]: '请求过于频繁，请稍后重试',
-  [LLM_ERROR_CODES.network]: '无法连接到服务，请检查地址与网络',
-  [LLM_ERROR_CODES.contentFilter]: '请求被内容审核拦截',
-  [LLM_ERROR_CODES.invalidRequest]: '请求被服务端拒绝，请检查模型名',
-  [LLM_ERROR_CODES.invalidResponse]: '服务端返回了无法解析的内容',
-};
-
-/** `code` -> the sentence the error banner shows. */
 export function errorLabel(code: string): string {
-  return ERROR_LABELS[code] ?? '发生未知错误';
+  return translate(messageKeyForCode(code));
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -133,7 +133,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async create(): Promise<Id> {
-    const session = await createSession();
+    // The default title is PERSISTED DATA written in the ACTIVE language: `createSession`
+    // deliberately does not know about locales (`db/repository.ts` records why), so the
+    // sentence is chosen here, where the locale store is reachable.
+    const session = await createSession({ title: translate('home.defaultSessionTitle') });
     await get().load();
     await get().open(session.id);
     return session.id;
@@ -194,7 +197,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const trimmed = text.trim();
     if (session === undefined || trimmed === '' || state.status === 'streaming') return;
 
-    const fail = (code: string, message: string, retryable: boolean): void => {
+    /**
+     * Record a failure the user must be told about.
+     *
+     * `message` is the LOG side of `ChatError` (ADR-019 keeps `code` and prose apart).
+     * It is normally the catalog sentence, read through the non-React `translate`, so no
+     * Chinese literal appears in this module. `cause` is the one exception: a local
+     * fault's NAME is the only detail a developer can act on, it is not UI copy, and
+     * `describeThrown` in `chat/send-turn.ts` records the same rule for the same reason.
+     */
+    const fail = (
+      code: string,
+      messageKey: MessageKey,
+      retryable: boolean,
+      cause?: unknown,
+    ): void => {
+      const message =
+        cause instanceof Error && cause.name !== '' ? cause.name : translate(messageKey);
       set({
         status: 'error',
         error: { code, message, retryable, turnText: trimmed },
@@ -202,12 +221,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
 
     if (transport === undefined) {
-      fail('unknown', '应用尚未完成初始化', false);
+      // A wiring bug, not a provider failure: nothing was configured to send with.
+      fail('unknown', 'error.notInitialized', false);
       return;
     }
     const config: ProviderSettings = useSettingsStore.getState().provider;
     if (!isProviderReady(config)) {
-      fail('unknown', '请先在「设置」中填写服务地址与模型名', false);
+      // Its own code so the banner can name the missing settings instead of the
+      // catch-all (`i18n/error-keys.ts`).
+      fail(NOT_CONFIGURED_CODE, 'error.notConfigured', false);
       return;
     }
 
@@ -239,7 +261,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               },
       });
     } catch (cause) {
-      fail('unknown', cause instanceof Error ? cause.name : '未知的本地错误', false);
+      // A local fault (the database, a React-free bug in this store). The catalog
+      // sentence is the default; the error's own NAME is the useful log detail and
+      // carries no provider prose (see `send-turn.ts`'s `describeThrown`).
+      fail('unknown', 'error.localFailure', false, cause);
     } finally {
       // The live query refreshes the chain on its own schedule; this store only
       // resets the turn's own state.

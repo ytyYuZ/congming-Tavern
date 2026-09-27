@@ -21,10 +21,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FetchLike } from '@smarttavern/providers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { writeLocaleSetting } from './db/repository';
 // Taken from `mount` so this file shares ONE module instance with the mounted app; see
 // the note on `mount.ts`'s test re-exports (Vitest instantiates a module per
 // environment, and apps/web mixes them).
-import { closeDatabase, resetChat, resetSettingsStore } from './mount';
+import {
+  closeDatabase,
+  resetChat,
+  resetDatabase,
+  resetLocaleStore,
+  resetSettingsStore,
+} from './mount';
 
 const html = readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8');
 const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8'));
@@ -37,21 +44,29 @@ let databases = 0;
 
 // jsdom's `window.scrollTo` is a stub that logs "Not implemented" instead of scrolling,
 // and TanStack Router calls it on every navigation — so mounting the app would print that
-// error on each render. Same one-line neutralisation as routes.test.tsx, for the same
-// reason: it is jsdom telling us it has no viewport, not a defect in the app.
-const originalScrollTo = window.scrollTo;
+// error on each render. Same neutralisation as routes.test.tsx, for the same reason: it is
+// jsdom telling us it has no viewport, not a defect in the app. Unlike that file this one
+// does not restore the original afterwards: the stub lives in this file's own jsdom
+// instance and dies with it, so an `afterAll` restore would only be ceremony.
 window.scrollTo = () => undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   databases += 1;
   document.body.innerHTML = '<div id="root"></div>';
   resetChat();
   resetSettingsStore();
+  resetLocaleStore();
+  resetDatabase(`apps-web-index-${databases}`);
+  // This file asserts RENDERED Chinese copy, and the store's documented initial value
+  // follows the browser (jsdom reports `en-US`), so the language is pinned by writing the
+  // STORED row — which is what a returning user has, and what the shell's `load()` adopts.
+  await writeLocaleSetting('zh-CN');
 });
 
 afterEach(() => {
   resetChat();
   resetSettingsStore();
+  resetLocaleStore();
   closeDatabase();
   document.body.innerHTML = '';
 });
