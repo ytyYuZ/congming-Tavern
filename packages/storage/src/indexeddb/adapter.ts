@@ -340,16 +340,40 @@ export interface IndexedDbStorageOptions {
 }
 
 /**
+ * The IndexedDB implementation's OWN surface, on top of the port.
+ *
+ * WHY THE INSTANCE IS REACHABLE AT ALL (measured in M0-T8, not assumed):
+ * ADR-017 makes Dexie's `liveQuery` the reactive-read mechanism, and `liveQuery`
+ * runs its querier inside a READ-ONLY Dexie transaction. `StorageAdapter.transaction()`
+ * opens `rw`, so calling it from a querier throws
+ * `ReadOnlyError: Readwrite transaction in liveQuery context` and the subscription
+ * **never emits a value** — in a browser that is a chat transcript that silently
+ * stops updating. `Dexie.liveQuery` is also a module-level API driven by global
+ * `storagemutated` events, so it cannot be scoped to a private instance either.
+ * The only way for the UI to observe writes is therefore to share the ONE instance.
+ *
+ * THE RULE THAT KEEPS THIS FROM LEAKING: `db` is for reactive READS
+ * (`liveQuery(() => db.table(name)…)`). Every WRITE still goes through
+ * `transaction()`, so row validation (ADR-023 / ADR-024), the shared error types
+ * and the single write path stay in this file.
+ */
+export interface IndexedDbStorage extends StorageAdapter {
+  readonly db: Dexie;
+}
+
+/**
  * Build the adapter. The database is described eagerly but opened lazily by Dexie
  * on the first transaction, so importing this module never touches IndexedDB —
  * which matters in Node, where `globalThis.indexedDB` only exists once
  * `fake-indexeddb` has been imported.
  */
-export function createIndexedDbStorage(options: IndexedDbStorageOptions = {}): StorageAdapter {
+export function createIndexedDbStorage(options: IndexedDbStorageOptions = {}): IndexedDbStorage {
   const db = new Dexie(options.name ?? DATABASE_NAME);
   db.version(DATABASE_VERSION).stores(indexedDbSchema());
 
   return {
+    // See `IndexedDbStorage`: reactive reads only, writes go through `transaction`.
+    db,
     async transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       // `db.transaction`'s async-callback form (Dexie 4 has no static
       // `Dexie.transaction`), which does not rely on zone tracking, so an `await`
