@@ -78,21 +78,28 @@
 
 ## 当前状态
 
-v0.9：**M0 全部完成** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
-（`schema/package-1.json` 与 `schema/tools-1.json` 由 `pnpm schema:export` 生成，有逐字节漂移测试守护）、
-M0-T3 `.stpack` 打包 / 解包 / 校验（自研窄 ZIP + canonical JSON，ADR-018）、M0-T4 包 CLI、
-M0-T5 `core/ports` 核心接口与测试替身、**M0-T9 契约回归套件**（`docs/04` §12 第 1–7 条逐条覆盖）、
-**M0-T6 OpenAI 兼容 Provider**（零依赖 SSE 解析器，密钥脱敏有专门断言）、
-**M0-T7 IndexedDB 存储**（Dexie；集合与索引取自 `core/ports` 的常量，含跨集合事务回滚）、
-**M0-T8 应用骨架**（`apps/web` 的 React 19 壳打通「配置密钥 → 发消息 → 流式渲染 → 落库 → 重启仍在」；
-`apps/desktop` 是 Tauri 2 壳，Rust 侧 `llm_stream` 字节管道绕开 CORS）
-均已完成；工具链为 **Vite 8.3.1 + Vitest 5.0.2 + Rust 1.98 + Tauri 2.12**，
-`pnpm ci:local` 四步全绿（**55 个测试文件 / 633 个用例**），Rust 侧 `fmt` / `clippy -D warnings` /
+v0.10：**M1 进行中** —— M0 的九项任务全部完成（详见上一版记录的行内说明）；M1 已落地三项：
+
+- **M1-G1 i18n 骨架**：`packages/i18n`（zh-CN 为唯一真相源，`en` 用 `Record<MessageKey, string>`
+  定型，**漏译是编译错误**；`resolveLocale` 逐候选应用两级匹配）+ **全界面转换** + **禁止裸字符串的
+  lint 规则**（走 TypeScript AST：CJK 字面量，以及 title / placeholder / aria-label 等用户可见属性
+  必须走 `t(...)`）。切换语言全界面即时生效，并持久化在独立的 `settings` 行里。
+- **M1-T1 世界时钟（引擎侧）**：`packages/core/src/engine/time/` —— `advance` / `setTime` /
+  `display` / `segmentOf` / `fireDue` 与重复日程顺延。`minutesPerHour` / `hoursPerDay` 是**数据**
+  而非常量（26 小时的一天、100 分钟的小时都合法）；跨时段遍历按走过顺序报告，前进与后退**互为镜像**
+  并逐行断言。`display()` 返回**结构化部件**而不是成品句子：引擎不拥有 locale。
+- **M1-G4 PromptComposer 最小版**：`packages/core/src/engine/prompt/` —— 按 `docs/02` §5.1 的
+  装配顺序、宏注册表（`roll` / `random` / `pick` 与未知宏**原样保留并上报**，因为骰子引擎属于 M3）、
+  以及**宁可高估**的 token 估算与按优先级裁剪（`required` 永不裁剪；超预算给出明确短缺量而不是
+  发一个模型必然拒绝的请求）。
+
+工具链为 **Vite 8.3.1 + Vitest 5.0.2 + Rust 1.98 + Tauri 2.12**；
+`pnpm ci:local` **五步全绿**（**71 个测试文件 / 1003 个用例**），Rust 侧 `fmt` / `clippy -D warnings` /
 `cargo test` 亦全绿。
 
 > **一处保留**：桌面**窗口**在开发用的受限环境里起不来（事件循环到不了 `Ready`，因此没有窗口被创建），
 > 所以"窗口里显示了界面"需要在正常桌面会话里自行确认；界面与传输逻辑分别有测试覆盖。
 > 详见 `docs/06-开发任务拆解.md` §9.4 的状态块。
 
-**下一步**：M1（MVP 三阶段跑通），入口是 **M1-G1 i18n 骨架**与 **M1-G4 PromptComposer 最小版**；
-动手前建议先收掉 §9.4 记下的 UUIDv7 双实现。
+**下一步**：把两个引擎接进应用（常驻时钟 UI、用 `compose()` 取代 M0 的内置装配、时间注入 prompt
+即 M1-T3），随后是 **M1-G2**（主题与外观）与 **M1-G3**（Provider 管理）。
