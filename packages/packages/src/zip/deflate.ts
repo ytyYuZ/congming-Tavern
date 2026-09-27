@@ -309,7 +309,19 @@ export async function inflateRaw(bytes: Uint8Array, opts: InflateLimits = {}): P
     }
     return concat(chunks, total);
   } catch (cause) {
-    await reader.cancel().catch(() => undefined);
+    // Deliberately does NOT call `reader.cancel()`.
+    //
+    // Cancelling a Node-backed `DecompressionStream` while a write is still in
+    // flight makes the Node↔web-streams adapter destroy the underlying duplex with
+    // the abort reason, and that rejection lands on an internal promise no caller
+    // can attach a handler to. It showed up as `AbortError` unhandled rejections on
+    // Linux CI — Vitest fails the run on those even though every assertion passed —
+    // and it does not reproduce on every platform, because it depends on whether the
+    // rejection is delivered while the worker is still alive.
+    //
+    // Dropping the stream instead costs at most the compressed input this call
+    // already holds, on a path that is about to throw anyway, and it never destroys
+    // something behind the caller's back.
     if (cause instanceof ZipError) throw cause;
     throw new ZipError(
       `inflate failed: ${cause instanceof Error ? cause.message : String(cause)}`,
