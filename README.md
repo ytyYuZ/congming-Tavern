@@ -78,10 +78,12 @@
 
 ## 当前状态
 
-v0.7：**M0 的契约与骨架已落地** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
+v0.8：**M0 的契约与骨架已落地** —— M0-T0 工程骨架、M0-T1 实体契约、M0-T2 包格式契约
 （`schema/package-1.json` 与 `schema/tools-1.json` 由 `pnpm schema:export` 生成，有逐字节漂移测试守护）、
 M0-T3 `.stpack` 打包 / 解包 / 校验（自研窄 ZIP + canonical JSON，ADR-018）、M0-T4 包 CLI、
-M0-T5 `core/ports` 核心接口与测试替身、**M0-T9 契约回归套件**（`docs/04` §12 第 1–7 条逐条覆盖）
-均已完成；工具链升到 **Vite 8.3.1 + Vitest 5.0.2**，`pnpm ci:local` 四步全绿（44 个测试文件 / 440 个用例）。
+M0-T5 `core/ports` 核心接口与测试替身、**M0-T9 契约回归套件**（`docs/04` §12 第 1–7 条逐条覆盖）、
+**M0-T6 OpenAI 兼容 Provider**（零依赖 SSE 解析器，密钥脱敏有专门断言）、
+**M0-T7 IndexedDB 存储**（Dexie；集合与索引取自 `core/ports` 的常量，含跨集合事务回滚）
+均已完成；工具链为 **Vite 8.3.1 + Vitest 5.0.2**，`pnpm ci` 四步全绿（50 个测试文件 / 559 个用例）。
 
-**下一步**：M0-T6（OpenAI 兼容 Provider）、M0-T7（IndexedDB 存储）、M0-T8（应用骨架；桌面端需 Rust 工具链）。
+**下一步**：M0-T8（应用骨架：Web 壳 + 桌面壳；桌面端需 Rust 工具链）。

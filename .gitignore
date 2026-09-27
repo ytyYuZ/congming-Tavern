@@ -64,14 +64,18 @@ stpack-out/
 *.pem
 secrets.json
 
+# Host-specific development notes: our machine's restrictions and the workarounds
+# they need. Deliberately untracked — CONTRIBUTING.md keeps only what is true on
+# any machine, and this file is where the local exceptions live.
+LOCAL-DEV-NOTES.md
+
 # --- Stray logs -------------------------------------------------------------
-# The Electron/pnpm crash handler writes `debug.log` into the working directory
-# when a sandbox denies its crash-database path. Never commit those.
+# Some toolchain crash handlers write `debug.log` into the working directory when
+# their crash database is unavailable. Never commit those.
 *.log
 
 # --- Test litter -------------------------------------------------------------
-# `tools/stpack-cli` tests unpack into a temp directory inside the workspace (the
-# sandbox does not reliably allow the OS temp dir); a failed run must never leave
-# them staged.
+# `tools/stpack-cli` tests unpack into a temp directory inside the workspace, so a
+# failed run cannot strand files in the OS temp dir; it must never leave them staged.
 .tmp-*/
 *.tmp

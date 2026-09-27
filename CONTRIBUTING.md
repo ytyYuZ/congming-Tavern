@@ -13,10 +13,10 @@ lives at the root so it is not confused with the spec documents in `docs/`.
 | 项 | 要求 |
 | --- | --- |
 | Node | `>=22.12.0`（CI 用 `.nvmrc` 锁定的版本） |
-| 包管理 | `pnpm@12.6.0`（`packageManager` 字段已固定；不要用 npm / yarn） |
+| 包管理 | pnpm（版本由 `.github/workflows/ci.yml` 的 `pnpm/action-setup` 钉住；不要用 npm / yarn） |
 | 命令 | `pnpm install` → `pnpm lint` → `pnpm typecheck` → `pnpm test` → `pnpm build` |
 
-```powershell
+```bash
 pnpm install        # 必须在仓库根目录执行
 pnpm lint           # Biome（lint + 格式校验）+ 依赖方向检查
 pnpm typecheck      # tsc -b，strict + noUncheckedIndexedAccess
@@ -26,78 +26,49 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
 
 `pnpm ci` 可以一次跑完 lint → typecheck → test → build，等价于 CI。
 
-### 沙箱 / 受限主机上的本地跑法
-
-以下三点只影响**某些受限主机**（例如禁止子进程管道通信的沙箱），CI 不需要：
-
-1. **pnpm 的用户级目录必须在工作区内。** pnpm 12 会在
-   `%LOCALAPPDATA%\pnpm-store-operation-locks\all-stores.lock` 上取全局操作锁；
-   该目录不可写时会在访问 registry 前就失败：
-   `ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK ... 拒绝访问 (os error 5)`。
-   跑 pnpm 前先把两个用户目录指进工作区（`.local-appdata/` 已忽略）：
-
-   ```powershell
-   $env:LOCALAPPDATA = "$PWD\.local-appdata"; $env:USERPROFILE = $env:LOCALAPPDATA
-   pnpm install
-   ```
-
-2. **Vite 在 Windows 上会探测网络驱动器。** 它调用
-   `child_process.exec('net use')`；禁止管道子进程的主机会抛 `EPERM`，
-   于是 `vitest` 与 `vite build` 还没开始就挂掉。用本地包装脚本跑四个 job，
-   它会预加载一个只中和该探测的 shim：
-
-   ```powershell
-   pnpm ci:local            # 等价于 pnpm ci，但带上探测 shim
-   pnpm ci:local lint test  # 只跑其中几步
-   ```
-
-   shim 见 `tools/scripts/vite-sandbox-probe-shim.mjs`（只拦截 `net use`，
-   其它 spawn 全部原样透传），包装脚本见 `tools/scripts/run-ci-local.mjs`。
-   这两者都是**本地跑法**，`pnpm ci` / CI 完全不使用它们。
-
-3. **某些主机上的 pnpm 建不出隔离式软链树。** 症状是安装看似"成功"，随后
-   `@vitest/utils` 一类依赖解析失败；或安装直接报
-   `ERR_PNPM_SYMLINK_FAILED [symlinkAllModules] Maximum call stack size exceeded`。
-   这类主机改用 hoisted 链接器安装（**只影响本地**，CI 仍用默认的隔离式布局）：
-
-   ```powershell
-   pnpm install --node-linker=hoisted --no-frozen-lockfile
-   ```
-
-   另外：本机**装不"干净"**。esbuild 的 postinstall 需要 spawn 子进程，而这类主机禁止
-   （`spawn EPERM`），所以 `pnpm install` 在本机必然以非零退出：不批准构建脚本会报
-   `ERR_PNPM_IGNORED_BUILDS`，批准了又会在运行脚本时崩。因此 `pnpm-workspace.yaml` 里
-   设了 `verifyDepsBeforeRun: false`，避免每个 `pnpm run` / `pnpm test` 之前的依赖检查
-   触发一次失败安装、连带把 lint / typecheck / test 全部挡掉。CI 显式安装，不需要这个检查。
-
-   还有一处同样的取舍：**hoisted 链接器不把 `vite` 链进各个 app**（它被提到仓库根），
-   而 `apps/*` 的 `build` 脚本写的是标准 `vite build`（CI 的隔离式链接器能解析到）。
-   所以 `pnpm ci:local` 的 build 步骤改为直接调用根二进制构建两个 app —— 这是**唯一**
-   一处在本地包装脚本里复刻 CI 步骤的地方，动机写在 `tools/scripts/run-ci-local.mjs` 的注释里。
+> **根 `package.json` 里刻意没有 `packageManager` 字段。** pnpm 见到该字段会先把指定
+> 版本自装进 store 再 re-exec，这在无法写用户级目录的机器上会失败并留下一个空包目录，
+> 此后每次 `pnpm` 调用都指向不存在的二进制。版本改由 CI 显式钉住 —— 本地版本可以不同，
+> 但请让 `pnpm install` 之后**提交 lockfile 的变化**，因为 CI 用 `--frozen-lockfile`。
 
 ### Vite 8 / Vitest 5（已不再使用 rolldown-vite）
 
-M0-T5 之后按计划完成升级：**`vite` 8.3.1 + `vitest` 5.0.2**，并删掉了此前
-`overrides: vite: npm:rolldown-vite@^7.3.1` 那一行。原因：`rolldown-vite` 已被 registry
-标记 deprecated（弃用语是"用它从 Vite 7 迁移到 Vite 8"），Rolldown 已并入 Vite 8 本体 ——
-所以"不依赖 esbuild 转换管道"这一收益由 Vite 8 直接继承，不再需要一行 override。
+当前工具链：**`vite` 8.3.1 + `vitest` 5.0.2**。此前用来绕开 esbuild 转换管道的
+`overrides: vite: npm:rolldown-vite@^7.3.1` 已删除：`rolldown-vite` 已被 registry 标记
+deprecated，弃用语即"用它从 Vite 7 迁移到 Vite 8"，Rolldown 已并入 Vite 8 本体。
 
-**esbuild 仍在依赖树里**（Vite 8 依赖它），因此 `pnpm-workspace.yaml` 里有一项
-`allowBuilds: esbuild: true`。三个坑都值得记住：
+**esbuild 仍在依赖树里**（Vite 8 依赖它），所以 `pnpm-workspace.yaml` 里有一项
+`allowBuilds: esbuild: true`，三点务必别改动：
 
-1. 它必须是**映射**（`包名: 布尔`）。写成列表会被 pnpm 当作配置错误，整个安装直接失败。
-2. pnpm 在检测到被忽略的构建脚本时会**自己往 `pnpm-workspace.yaml` 里插一个占位项**，
-   值是字符串 `set this to true or false`；字符串不等于 `true`，所以照原样保留等于没批准。
-3. 不批准时 pnpm 让安装以 `ERR_PNPM_IGNORED_BUILDS` 失败（在 pnpm 11.8.0 上是硬错误，
-   不是警告），而每个 `pnpm run` / `pnpm test` 之前的依赖检查又会触发一次安装 ——
-   于是这个错误会**连带挡掉** lint / typecheck / test。
+1. 它必须是**映射**（`包名: 布尔`）。写成列表会被 pnpm 当成配置错误，安装直接失败。
+2. pnpm 检测到被忽略的构建脚本时**会自己往 `pnpm-workspace.yaml` 里插一个占位项**，
+   值是字符串 `set this to true or false`；字符串不等于 `true`，照原样保留等于没批准。
+3. 不批准会让 pnpm 以 `ERR_PNPM_IGNORED_BUILDS` 结束安装，而有些 pnpm 版本还会把它
+   当**硬错误**（不是警告）。
 
 ### `.npmrc`
 
-pnpm 12 的 `allowBuilds` / `cacheDir` / `storeDir` 都读
-`pnpm-workspace.yaml`，**不读** `.npmrc`；根目录 `.npmrc` 只为 npm 与旧版
-pnpm 保留少量兼容设置。`cacheDir` 指向工作区内的 `.npm-cache/`，使依赖缓存
-在无法写用户级目录的机器上也正常，并让构建更接近封闭环境。
+pnpm 12 的 `allowBuilds` / `cacheDir` / `storeDir` 都读 `pnpm-workspace.yaml`，
+**不读** `.npmrc`；根目录 `.npmrc` 只为 npm 与旧版 pnpm 保留少量兼容设置。
+`cacheDir` 指向工作区内的 `.npm-cache/`，让依赖缓存留在仓库内、构建更接近封闭环境。
+
+### 受限主机（禁止子进程管道通信的沙箱等）
+
+一些沙箱会拒绝管道子进程，Vite 的网络驱动器探测（`net use`）因此抛 `EPERM`，
+`vitest` 与 `vite build` 会在启动阶段就挂掉。仓库提供了本地包装脚本，它会预加载一个
+**只中和该探测**的 shim：
+
+```bash
+pnpm ci:local            # 等价于 pnpm ci，但带上探测 shim
+pnpm ci:local lint test  # 只跑其中几步
+```
+
+`tools/scripts/run-ci-local.mjs` 与 `tools/scripts/vite-sandbox-probe-shim.mjs` 都只服务
+本地跑法，`pnpm ci` 与 CI 完全不使用它们。
+
+与**具体某台机器**有关的其它绕行（用户级目录、链接器、安装为何可能非零退出等）不写进
+本文件，而是记在**未纳入版本控制**的 `LOCAL-DEV-NOTES.md`。若你在类似环境里开发，
+照它的思路处理即可；公开仓库里不需要这些信息。
 
 ---
 
@@ -257,6 +228,10 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 - 不写"以后可能用得上"的抽象；抽象只在出现第二个实现时提取。
 - 每个 PR 必须包含测试；纯 UI 调整可用 e2e 覆盖。
 - 密钥绝不进入导出包、日志与消息元数据（硬不变量 #6）。
+- **访问 `Record` 的字段要留神本仓库的两个开关**：`tsconfig` 开了
+  `noPropertyAccessFromIndexSignature`（禁止 `record.key`），而 Biome 的
+  `useLiteralKeys` 又反对 `record['key']`。两者都接受的形式是**参数化键**——
+  `const field = (record, key) => record[key]`，然后到处用它。
 
 ### 本仓库当前待定（M0-T0 未在文档中规定，先按此执行）
 
@@ -271,9 +246,6 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 - **`tsconfig.base.json` 未开启 `exactOptionalPropertyTypes`**：文档只要求
   `strict` + `noUncheckedIndexedAccess`。该选项与 Zod 的可选字段（`?: T` 与
   `?: T | undefined`）冲突面较大，留到 M0-T1 定义实体 schema 时再评估。
-- **本地用 hoisted 链接器，于是 app 里没有自己的 `vite`**（见 §1 第 3 条）：`apps/*` 的
-  `build` 脚本保持标准的 `vite build` —— CI 用隔离式链接器能解析到；本机的 hoisted 树把
-  `vite` 提到了根，所以 `pnpm ci:local` 的 build 步骤改为直接调用根二进制构建两个 app。
 - **`packages/ui` / `packages/i18n` 目前不引入任何框架依赖**，因此它们的
   `package.json` 的 `dependencies` 为空；等 ADR-005 定论后再加。
 - **工作区之间靠源码引用（`exports: "./src/index.ts"`）而不是构建产物**：M0 阶段
