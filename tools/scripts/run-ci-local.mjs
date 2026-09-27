@@ -7,7 +7,7 @@
  * `net use`; on a host that denies such spawns the probe kills Vitest and
  * `vite build` before they start. The shim neutralises only that probe.
  *
- * Usage:  pnpm ci:local            (all four steps, in CI order)
+ * Usage:  pnpm ci:local            (all steps, in CI order)
  *         pnpm ci:local lint test  (a subset, for iterating)
  *
  * Nothing here changes what the steps check — only whether the host lets them
@@ -15,7 +15,7 @@
  */
 import { spawn } from 'node:child_process';
 
-const ALL_STEPS = ['lint', 'typecheck', 'test', 'build'];
+const ALL_STEPS = ['lockfile', 'lint', 'typecheck', 'test', 'build'];
 const requested = process.argv.slice(2);
 const steps = requested.length > 0 ? requested : ALL_STEPS;
 
@@ -43,8 +43,27 @@ const BUILD_COMMANDS = [
   'node node_modules/vite/bin/vite.js build apps/desktop --logLevel warn',
 ];
 
-const commandsFor = (step) =>
-  step === 'build' ? BUILD_COMMANDS : [`pnpm --reporter=append-only ${step}`];
+// The CI install step is `pnpm install --frozen-lockfile`, and it runs FIRST — so a
+// manifest/lockfile drift turns all four jobs red before a single check runs. That
+// happened once (M0-T8): two specifiers in `apps/desktop/package.json` were edited by
+// hand without a matching install, and every other local step was blind to it.
+//
+// `--lockfile-only --ignore-scripts` keeps this side-effect free: it never touches
+// node_modules and never runs a lifecycle script, which matters on hosts where the
+// esbuild postinstall cannot spawn.
+//
+// CAVEAT, and it is the bigger half: this runs whatever pnpm is on PATH. pnpm 12
+// ALSO enforces a `minimumReleaseAge` supply-chain policy (24 h by default) that
+// pnpm 11 knows nothing about, so a dependency published in the last day passes here
+// and still fails CI. Use the pnpm version CI pins for that check — see
+// CONTRIBUTING.md §1.
+const LOCKFILE_COMMANDS = ['pnpm install --frozen-lockfile --lockfile-only --ignore-scripts'];
+
+const commandsFor = (step) => {
+  if (step === 'lockfile') return LOCKFILE_COMMANDS;
+  if (step === 'build') return BUILD_COMMANDS;
+  return [`pnpm --reporter=append-only ${step}`];
+};
 
 /** Run one command through the shell, inheriting stdio. Resolves to its exit code. */
 function run(command) {

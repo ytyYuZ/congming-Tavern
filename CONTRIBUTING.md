@@ -31,14 +31,39 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
 > 此后每次 `pnpm` 调用都指向不存在的二进制。版本改由 CI 显式钉住 —— 本地版本可以不同，
 > 但请让 `pnpm install` 之后**提交 lockfile 的变化**，因为 CI 用 `--frozen-lockfile`。
 
+### CI 的 install 步骤：两类会让**四个 job 一起红**的失败（都踩过）
+
+CI 的第一步就是 `pnpm install --frozen-lockfile`，所以它一坏不是某个 job 红，而是**四个全红**，
+日志里只有一行 `ERR_PNPM_…`，看起来非常像"环境问题"。已知两类成因：
+
+1. **manifest 与 lockfile 的 specifier 对不上**（`ERR_PNPM_OUTDATED_LOCKFILE`）。
+   典型成因：手改了某个 `package.json` 的版本（尤其是把 `^x` 换成精确版本）却没有重跑安装。
+   `pnpm ci:local` 现在第一步就是 `lockfile`，专门查这个
+   （`--lockfile-only --ignore-scripts`：不碰 node_modules、不跑生命周期脚本）。
+2. **依赖比"最小发布年龄"更新**（`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`）。
+   pnpm 12 默认拒绝安装**发布不足 24 小时**的版本；本仓库把它显式写在 `pnpm-workspace.yaml`
+   里，理由与解法也在那段注释里。关键坑：**本机 pnpm 11 只校验"当前平台会装"的条目，
+   pnpm 12 校验整份 lockfile**，所以这类问题经常表现为"本机全绿、CI 全红"。
+   权威检查必须用 CI 钉住的那个版本：
+
+   ```bash
+   npx --yes pnpm@12.6.0 install --frozen-lockfile --lockfile-only --ignore-scripts
+   ```
+
+   解法是让 pnpm 自己挑"已满 24 小时"的版本（依赖写**范围**、别写精确版本），
+   然后用 pnpm 12 跑 `pnpm install --lockfile-only` 重新解析，而不是放宽这条策略。
+   精确版本是唯一的例外：pnpm 绕不过它，会把受影响的包写进 `minimumReleaseAgeExclude`
+   —— 那是**显式豁免**，不是静默跳过。
+
 ### Vite 8 / Vitest 5（已不再使用 rolldown-vite）
 
 当前工具链：**`vite` 8.3.1 + `vitest` 5.0.2**。此前用来绕开 esbuild 转换管道的
 `overrides: vite: npm:rolldown-vite@^7.3.1` 已删除：`rolldown-vite` 已被 registry 标记
 deprecated，弃用语即"用它从 Vite 7 迁移到 Vite 8"，Rolldown 已并入 Vite 8 本体。
 
-**esbuild 仍在依赖树里**（Vite 8 依赖它），所以 `pnpm-workspace.yaml` 里有一项
-`allowBuilds: esbuild: true`，三点务必别改动：
+**esbuild 目前不在依赖树里**：pnpm 12 解析 `vite@8.3.1` 时不会带上它（Vite 8 已内置 Rolldown）。
+`pnpm-workspace.yaml` 里的 `allowBuilds: esbuild: true` 因此是**预留**——一旦某个新版把 esbuild
+带回依赖树，没有这一项安装会直接硬失败。三点务必别改动它：
 
 1. 它必须是**映射**（`包名: 布尔`）。写成列表会被 pnpm 当成配置错误，安装直接失败。
 2. pnpm 检测到被忽略的构建脚本时**会自己往 `pnpm-workspace.yaml` 里插一个占位项**，

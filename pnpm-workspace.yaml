@@ -37,6 +37,23 @@ allowBuilds:
 # (and CI sandboxes) deny writes to the user-level pnpm/npm directories.
 cacheDir: .npm-cache
 
+# Supply-chain policy: refuse to install a version published less than 24 hours ago.
+# pnpm 12 applies this BY DEFAULT; it is written out here so the rule is visible in
+# the repository instead of arriving as a surprise from the package manager.
+#
+# WHY IT MATTERS TO A CONTRIBUTOR: `pnpm install` (any version) happily resolves the
+# newest release, so a dependency updated today passes locally and then fails CI,
+# where the pinned pnpm re-verifies the WHOLE lockfile against this policy:
+#   ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION: N lockfile entries failed verification
+# The fix is to let pnpm choose the newest version that satisfies the policy (use a
+# RANGE, not an exact version, for anything freshly published) rather than to widen
+# this setting. `pnpm install --lockfile-only` with the pinned pnpm does that.
+#
+# Exact pins are the one case pnpm cannot resolve around: it then records the affected
+# packages under `minimumReleaseAgeExclude` — a deliberate, visible exemption, not a
+# silent bypass. Prefer a range unless the pin is load-bearing.
+minimumReleaseAge: 1440
+
 # Hoisted linker, deliberately — see the comment block in .npmrc for the reason
 # and the cost. Mirrored here because pnpm 12 reads settings from this file while
 # pnpm 11 reads them from .npmrc; keeping both in sync keeps one tree shape.
