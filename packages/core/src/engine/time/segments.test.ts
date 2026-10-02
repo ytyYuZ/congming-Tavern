@@ -177,10 +177,16 @@ describe('resolveSegments — one window, two spellings', () => {
   /**
    * The long form is documented in this module's header AND in `types.ts` ("may exceed
    * `hoursPerDay` for an overnight window"), and `resolveSegments` normalises the short
-   * form INTO it — but the hour assertion used to bound `toHour` at `hoursPerDay`, so the
-   * documented long form was refused before it could be normalised. No test wrote it that
-   * way, which is exactly why a 293-file green suite could not see it: the short spelling
-   * folds before the bound is reached, so only the long one hit it.
+   * form INTO it — but the hour assertion here used to bound `toHour` at `hoursPerDay`, so
+   * the documented long form was refused before it could be normalised. No test wrote it
+   * that way, which is exactly why a green suite could not see it: the short spelling folds
+   * before the bound is reached, so only the long one hit it.
+   *
+   * AND THE FIRST REPAIR WAS INCOMPLETE, which is why the case below exists: this module is
+   * not the only validator. `calendar.ts`'s `assertSegmentHours` bounded `toHour` the same
+   * way, and `calendarView` — what `display()` and `advance()` call — is the one every real
+   * consumer goes through. Fixing one of two copies of a rule is invisible to a test that
+   * calls the other, so both spellings are now asserted through BOTH layers.
    */
   it('accepts a wrapped night written short (22 -> 6) and long (22 -> 30) as one window', () => {
     const shortForm = resolveSegments([{ id: 'night', name: '夜', fromHour: 22, toHour: 6 }], 24);
@@ -193,5 +199,30 @@ describe('resolveSegments — one window, two spellings', () => {
     expect(() =>
       resolveSegments([{ id: 'night', name: '夜', fromHour: 22, toHour: 50 }], 24),
     ).toThrow(TimeEngineError);
+  });
+
+  it('accepts the long spelling through calendarView, the call every consumer makes', () => {
+    const shortSpelled: Calendar = {
+      ...fantasyCalendar,
+      segments: [{ id: 'night', name: '夜', fromHour: 22, toHour: 4 }],
+    };
+    const longSpelled: Calendar = {
+      ...fantasyCalendar,
+      segments: [{ id: 'night', name: '夜', fromHour: 22, toHour: 30 }],
+    };
+    expect(() => calendarView(longSpelled)).not.toThrow();
+    // The fantasy day is 26 hours, so 22 -> 4 wraps to 22 -> 30; both spellings must resolve
+    // to one window through the entry point a real caller uses (`display`, `advance`).
+    const longView = calendarView(longSpelled);
+    const shortView = calendarView(shortSpelled);
+    expect(resolvedSegmentsOf(longSpelled, longView.hoursPerDay)).toEqual(
+      resolvedSegmentsOf(shortSpelled, shortView.hoursPerDay),
+    );
+    expect(resolvedSegmentsOf(longSpelled, longView.hoursPerDay)[0]).toMatchObject({
+      fromHour: 22,
+      toHour: 30,
+      hours: 8,
+      tag: 'overnight',
+    });
   });
 });

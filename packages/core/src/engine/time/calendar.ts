@@ -53,29 +53,46 @@ function isPositiveInt(value: unknown): value is number {
 }
 
 /**
- * A segment's `fromHour`/`toHour` must be whole hour indexes in
- * `[0, hoursPerDay]`. Note the inclusive upper bound: `toHour === hoursPerDay`
- * is how a window that runs to the end of the day is written, and 夜 is allowed
- * to run past midnight (`entities/world.ts`). Anything above that is a typo that
- * would otherwise silently name hours the day does not have.
+ * A segment's `fromHour` must be a whole hour index in `[0, hoursPerDay]`, and its
+ * `toHour` in `[0, fromHour + hoursPerDay]`. Note the inclusive upper bounds:
+ * `toHour === hoursPerDay` is how a window that runs to the end of the day is written,
+ * and a window that wraps midnight may be written EITHER short (`22 -> 4`) or long
+ * (`22 -> 30` on a 24-hour day). The long form is not a typo: `types.ts` documents it
+ * ("may exceed `hoursPerDay` for an overnight window"), `segments.ts`'s
+ * `resolveSegments` normalises the short form INTO it, and `hourWindowHolds` folds
+ * `toHour - hoursPerDay` to read it back. Bounding `toHour` at `hoursPerDay` therefore
+ * rejected a spelling the rest of the engine depends on — see the note below on why
+ * that mattered. `fromHour + hoursPerDay` admits exactly one wrap and nothing more.
  *
  * WHY THE CHECK IS HERE AND NOT ONLY IN `segments.ts`. `calendarView()` is the
  * one call every entry point makes, so validating here means a malformed
  * calendar fails on the way in — including for a caller that only ever wants a
  * date and would never call `resolveSegments` (`segments.ts` keeps its own,
  * more specific message for the same condition).
+ *
+ * WHICH IS ALSO WHY THIS FILE HELD THE BUG FOR SO LONG. Because the rule lives in two
+ * places, a repair applied to only one of them is invisible to a test that calls
+ * `resolveSegments` directly — and `display()`/`advance()`, the two calls every real
+ * consumer makes, go through THIS one. `segments.test.ts` therefore asserts the long
+ * form through `calendarView` as well as through the resolver.
  */
 function assertSegmentHours(segments: readonly DaySegment[], hoursPerDay: number): void {
   for (const segment of segments) {
-    for (const [name, hour] of [
-      ['fromHour', segment.fromHour],
-      ['toHour', segment.toHour],
-    ] as const) {
-      if (!Number.isInteger(hour) || hour < 0 || hour > hoursPerDay) {
-        throw new TimeEngineError(
-          `segment ${segment.id} ${name} must be a whole hour index in 0..${hoursPerDay}`,
-        );
-      }
+    if (
+      !Number.isInteger(segment.fromHour) ||
+      segment.fromHour < 0 ||
+      segment.fromHour > hoursPerDay
+    ) {
+      throw new TimeEngineError(
+        `segment ${segment.id} fromHour must be a whole hour index in 0..${hoursPerDay}`,
+      );
+    }
+    const maxToHour = segment.fromHour + hoursPerDay;
+    if (!Number.isInteger(segment.toHour) || segment.toHour < 0 || segment.toHour > maxToHour) {
+      throw new TimeEngineError(
+        `segment ${segment.id} toHour must be a whole hour index in 0..${maxToHour}` +
+          ` (a wrap may be written past the end of the day, e.g. 22 -> 30 on a 24-hour day)`,
+      );
     }
   }
 }
