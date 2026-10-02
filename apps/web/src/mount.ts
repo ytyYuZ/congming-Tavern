@@ -38,6 +38,7 @@ import { App, createAppRouter } from './app/app';
 import { resetDatabase } from './db/database';
 import { defaultTransport } from './platform/transport';
 import { configureChat } from './state/chat-store';
+import { configureCoCreate } from './state/co-create-store';
 
 export interface MountOptions {
   /** Transport override. `apps/desktop` injects its Rust-side HTTP client here. */
@@ -63,6 +64,11 @@ export interface MountOptions {
 export { closeDatabase, resetDatabase, subscribe } from './db/database';
 export { resetAppearanceStore, useAppearanceStore } from './state/appearance-store';
 export { configureChat, resetChat, useChatStore } from './state/chat-store';
+export {
+  configureCoCreate,
+  resetCoCreate,
+  useCoCreateStore,
+} from './state/co-create-store';
 export { resetContentStore, useContentStore } from './state/content-store';
 export { resetLocaleStore, useLocaleStore } from './state/locale-store';
 export { resetSettingsStore, useSettingsStore } from './state/settings-store';
@@ -85,7 +91,12 @@ export { resetSettingsStore, useSettingsStore } from './state/settings-store';
  */
 export function mountApp(root: HTMLElement, options: MountOptions = {}) {
   if (options.databaseName !== undefined) resetDatabase(options.databaseName);
-  configureChat({ transport: options.transport ?? defaultTransport() });
+  const transport = options.transport ?? defaultTransport();
+  configureChat({ transport });
+  // The co-creation panel talks to the same provider through its own store (it has no session and no
+  // transcript), so it is wired to the SAME transport object here — one place decides what the app
+  // sends with, and a screen cannot end up on a different transport from its sibling.
+  configureCoCreate({ transport });
 
   const router = createAppRouter();
   // `load()` resolves the first match; the render below is therefore the real view.

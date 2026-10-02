@@ -909,3 +909,92 @@ body {
   gap: 1rem;
   align-items: center;
 }
+
+/* --- AI 共创: the conversation and the live preview (M1-W2) ---------------- */
+
+/*
+ * Two panes: the conversation and the preview of the PROPOSED card. They are side by side because
+ * docs/01 §5.2 asks for exactly that (左侧对话，右侧实时预览世界卡) — the author reads the proposal
+ * and what it would change in one glance, which is what makes 采纳 a decision rather than a guess.
+ *
+ * `min-width: 0` on both children is load-bearing: a `<pre>` of a JSON payload is wider than its
+ * column, and without it the flex items refuse to shrink and the whole page scrolls sideways.
+ */
+.co-create {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.co-create-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-top: 0.6rem;
+}
+
+.co-create-chat,
+.co-create-preview {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+/* Same shape as the transcript's bubbles, so the two conversations in the app read alike. */
+.co-create-turns {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.co-create-turn {
+  max-width: 100%;
+  font-size: 0.95rem;
+}
+
+.co-create-turn-user {
+  align-self: flex-end;
+  background: var(--bg);
+}
+
+.co-create-op {
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.co-create-ops {
+  list-style: disc;
+  margin: 0.4rem 0 0.6rem;
+  padding-left: 1.2rem;
+}
+
+/*
+ * The proposed payload. Monospaced and scrollable rather than wrapping: the author is reading JSON,
+ * and a wrapped object is harder to follow than a horizontally scrolled one on the rare value that is
+ * long. `max-height` keeps the preview from pushing the 采纳 / 否决 pair off screen.
+ */
+.co-create-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 0.4rem 0 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre;
+}
+
+/* The undo belongs to the applied change, so it is set apart from the pending pair above it. */
+.co-create-undo {
+  border-top: 1px solid var(--line);
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+}

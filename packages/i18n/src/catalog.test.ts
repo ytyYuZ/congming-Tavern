@@ -17,9 +17,23 @@ import { LOCALES } from './locale';
  *
  * `world` and `character` were added by the two card editors (M1-W1 / M1-C1) and `session` by
  * the create-session flow (M1-S1), which is what this list is FOR: a new area is a deliberate
- * edit here rather than a prefix nobody reviewed.
+ * edit here rather than a prefix nobody reviewed. `co-create` was added by the AI co-creation
+ * panel (M1-W2) for the same reason: its sentences are the PROPOSAL FLOW's — a conversation, a
+ * patch, accept/reject, undo — not a world card's, and `M1-C2` and ADR-031's variable proposal
+ * are the two callers that make that a distinction rather than a taste.
  */
-const AREAS = ['common', 'nav', 'setup', 'home', 'session', 'world', 'character', 'play', 'error'];
+const AREAS = [
+  'common',
+  'nav',
+  'setup',
+  'home',
+  'session',
+  'world',
+  'co-create',
+  'character',
+  'play',
+  'error',
+];
 
 describe('message catalogs', () => {
   it('is not empty', () => {

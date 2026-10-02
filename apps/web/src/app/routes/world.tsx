@@ -55,6 +55,7 @@ import {
   WORLD_TEXT_FIELDS,
   worldIssues,
 } from '../../cards/world';
+import { CoCreatePanel } from '../../co-create/panel';
 import { useTranslation } from '../../i18n/use-translation';
 import { useContentStore } from '../../state/content-store';
 import {
@@ -109,6 +110,17 @@ export function WorldRoute({ worldId }: { worldId: string }) {
   const publish = useContentStore((state) => state.publishWorld);
   const discard = useContentStore((state) => state.discardWorldDraft);
   const [status, setStatus] = useState('');
+  /*
+   * Whether the AI co-creation panel is open (M1-W2).
+   *
+   * A toggle rather than an always-visible block: the panel carries its own composer, and a form that
+   * always ends in a second textarea makes 「发布新版本」 harder to find for the author who never asked
+   * for the AI. The flag is this ROUTE's (`useState`) rather than the store's because it is a layout
+   * choice rather than a fact about the draft — and the conversation itself lives in
+   * `state/co-create-store.ts`, which resets on a world change and NOT on a toggle, so closing and
+   * reopening the panel does not throw the discussion away.
+   */
+  const [coCreateOpen, setCoCreateOpen] = useState(false);
 
   // The route owns the open card's lifetime: opening another world (or unmounting) must not leave
   // the previous one's draft on screen (`state/content-store.ts`'s token does the same job there).
@@ -190,6 +202,17 @@ export function WorldRoute({ worldId }: { worldId: string }) {
             }}
           >
             {t('common.discardDraft')}
+          </button>
+          {/* AI 共创 (M1-W2): the panel is this card's conversation, so the control that opens it
+              belongs with the card's other acts rather than at the bottom of a long form. */}
+          <button
+            className="btn"
+            type="button"
+            data-action="co-create-toggle"
+            aria-expanded={coCreateOpen}
+            onClick={() => setCoCreateOpen((open) => !open)}
+          >
+            {coCreateOpen ? t('co-create.hide') : t('co-create.show')}
           </button>
         </div>
         {status === '' ? null : <p className="time-status">{status}</p>}
@@ -383,6 +406,14 @@ export function WorldRoute({ worldId }: { worldId: string }) {
           onChange={write}
         />
       </section>
+
+      {/*
+        AI 共创 (M1-W2). It sits at the END of the form rather than in a screen of its own because
+        the conversation is ABOUT the card above it: the preview pane and the editor render the same
+        draft value, so an accepted proposal appears in the form without a navigation, and the DOM
+        test that drives generate -> preview -> accept -> undo never has to leave the screen.
+      */}
+      {coCreateOpen ? <CoCreatePanel worldId={world.id} data={data} /> : null}
 
       <CustomFieldsPanel
         value={data.customFields}

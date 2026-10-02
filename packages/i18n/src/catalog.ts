@@ -352,6 +352,68 @@ export const zhCN = {
   'world.rhythmHint': '隐式推进默认关闭：关闭时，时间只在手动推进或读档回滚时移动。',
   'world.openingHooksLabel': '开场钩子',
 
+  /* ── co-create: the AI co-creation panel (M1-W2) ────────────────────────── */
+  /*
+   * 对话 + 补丁提案 + 右侧实时预览 (docs/01 §5.2, docs/06 §2.2 M1-W2).
+   *
+   * WHY THIS IS AN AREA OF ITS OWN AND NOT MORE `world.` KEYS
+   * The panel is about a WORLD CARD today, but nothing in it is about worlds: a conversation, a
+   * patch proposal, an accept/reject pair and an undo are the same objects for the character
+   * co-creation `M1-C2` asks for, and `docs/05` ADR-031 already records that the variable proposal
+   * flow will reuse this accept/refuse pair. `world.` holds the CARD's fields; these sentences are
+   * the PROPOSAL FLOW's, and a second caller is a certainty rather than a guess.
+   *
+   * WHY THE FINDINGS ARE SEPARATE KEYS AND NOT ONE SENTENCE
+   * A model that answered prose and a model that answered four hundred operations are two different
+   * problems with two different next moves ("ask again" versus "ask for fewer changes at once"), and
+   * the author is the one who has to choose. `{detail}` is where a local fact goes — the schema path a
+   * refused payload complained about.
+   */
+  'co-create.title': 'AI 共创',
+  'co-create.show': '打开 AI 共创',
+  'co-create.hide': '收起 AI 共创',
+  'co-create.hint': '与 AI 讨论这张世界卡：它每次回答都会给出一份补丁提案，采纳与否由你决定。',
+  'co-create.empty': '还没有对话。说出你想完善的方向，例如「补一个地区的设定」。',
+  'co-create.inputLabel': '对 AI 说的话',
+  'co-create.send': '发送',
+  'co-create.thinking': '思考中…',
+  'co-create.previewTitle': '实时预览',
+  'co-create.previewHint': '下面是采纳这份提案后卡片的内容——预览用的就是要写进草稿的那份数据。',
+  'co-create.noProposal': '当前没有待处理的提案。',
+  'co-create.accept': '采纳',
+  'co-create.reject': '否决',
+  'co-create.undo': '撤销这次采纳',
+  'co-create.undoHint': '撤销会把草稿恢复成采纳之前的样子。',
+  'co-create.verbAdd': '新增',
+  'co-create.verbRemove': '删除',
+  'co-create.verbReplace': '修改',
+  'co-create.opLine': '{op} {path}',
+  /** `{detail}` is the schema path the refused payload complained about. */
+  'co-create.refusedSchema': '这份提案会让卡片不合法（{detail}），没有应用。',
+  'co-create.refusedOp': '这份提案里的「{op} {path}」无法应用，没有应用任何修改。',
+  'co-create.notConfigured': '还没有配置模型服务，无法开始共创：请先在设置里填写服务地址与模型名。',
+  /*
+   * THE MALFORMED-ANSWER FINDINGS (docs/06 §2.2 M1-W2: the answer must be machine-readable, and an
+   * answer that is not has to be reported rather than crash).
+   *
+   * WHY EACH ONE ENDS WITH THE MODEL'S OWN WORDS (`{detail}`)
+   * "It was not a proposal" is not enough for the author to decide whether 「再试一次」 is worth
+   * pressing: a model that answered prose about the world and a model that answered nothing at all are
+   * two different situations. `{detail}` carries the answer VERBATIM — `state/co-create-store.ts` fills
+   * it from `readProposal`'s refusal — while the sentence around it says which SHAPE was missing, which
+   * is the half the author cannot see. The two halves are ONE message because a language that puts the
+   * answer first cannot be assembled from concatenated fragments (`chat/providers.ts` records the same
+   * rule for its connection notes).
+   */
+  'co-create.malformedNoJson':
+    'AI 的回答里没有可解析的 JSON 提案。草稿没有变化，可以再试一次。\n\nAI 的回答：{detail}',
+  'co-create.malformedNoOps':
+    'AI 的回答缺少 ops 字段，无法作为提案。草稿没有变化，可以再试一次。\n\nAI 的回答：{detail}',
+  'co-create.malformedNotAnOperation':
+    'AI 的回答里有一条不是合法的补丁操作。草稿没有变化，可以再试一次。\n\nAI 的回答：{detail}',
+  'co-create.malformedTooManyOps':
+    'AI 一次给出了太多条改动。草稿没有变化，请让它分几次来。\n\nAI 的回答：{detail}',
+
   /* ── character: the character-card library and editor (M1-C1) ────────────── */
   'character.libraryTitle': '角色卡库',
   'character.libraryHint': '角色卡兼容 SillyTavern V2/V3 字段，并保存发言档案与视觉档案。',
@@ -936,6 +998,44 @@ export const en: Messages = {
   'world.rhythmHint':
     'Implicit advance is off by default: while it is off, the clock only moves when you advance it or load a save point.',
   'world.openingHooksLabel': 'Opening hooks',
+
+  /* ── the AI co-creation panel (M1-W2) ───────────────────────────────────── */
+  'co-create.title': 'AI co-creation',
+  'co-create.show': 'Open AI co-creation',
+  'co-create.hide': 'Close AI co-creation',
+  'co-create.hint':
+    'Discuss this world card with the AI: every answer offers a patch proposal, and accepting it is your call.',
+  'co-create.empty':
+    'No conversation yet. Say what you want to flesh out — “add a region”, for instance.',
+  'co-create.inputLabel': 'What to say to the AI',
+  'co-create.send': 'Send',
+  'co-create.thinking': 'Thinking…',
+  'co-create.previewTitle': 'Live preview',
+  'co-create.previewHint':
+    'This is the card as it would be after accepting the proposal — the preview is computed from the very data applying it would write.',
+  'co-create.noProposal': 'There is no proposal waiting.',
+  'co-create.accept': 'Accept',
+  'co-create.reject': 'Reject',
+  'co-create.undo': 'Undo this acceptance',
+  'co-create.undoHint': 'Undoing restores the draft to exactly what it was before the acceptance.',
+  'co-create.verbAdd': 'add',
+  'co-create.verbRemove': 'remove',
+  'co-create.verbReplace': 'change',
+  'co-create.opLine': '{op} {path}',
+  'co-create.refusedSchema':
+    'This proposal would make the card invalid ({detail}); nothing was applied.',
+  'co-create.refusedOp':
+    'The operation “{op} {path}” in this proposal cannot be applied; nothing was changed.',
+  'co-create.notConfigured':
+    'No model service is configured yet, so co-creation cannot start: fill in the base URL and model name under Settings first.',
+  'co-create.malformedNoJson':
+    'The AI’s answer held no JSON proposal that could be read. The draft is unchanged, so try again.\n\nThe AI answered:\n{detail}',
+  'co-create.malformedNoOps':
+    'The AI’s answer has no ops field, so it is not a proposal. The draft is unchanged, so try again.\n\nThe AI answered:\n{detail}',
+  'co-create.malformedNotAnOperation':
+    'One entry of the AI’s answer is not a valid patch operation. The draft is unchanged, so try again.\n\nThe AI answered:\n{detail}',
+  'co-create.malformedTooManyOps':
+    'The AI proposed too many changes at once. The draft is unchanged; ask it to do them in smaller steps.\n\nThe AI answered:\n{detail}',
 
   /* ── the character-card library and editor (M1-C1) ──────────────────────── */
   'character.libraryTitle': 'Character cards',
