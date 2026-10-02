@@ -504,6 +504,7 @@ body {
 /* What the last press did. Not `role="status"`: see the world clock's note. */
 .time-status,
 .checkpoint-status,
+.fork-status,
 .variable-status {
   margin: 0.5rem 0 0;
   font-size: 0.9rem;
@@ -567,6 +568,39 @@ body {
 
 .checkpoint-label {
   font-weight: 600;
+}
+
+/*
+ * The fork panel (M1-M2). Same shape as the save-point panel below — a rule rather than a
+ * wrapper element — because a fork is offered AT a save point: the two panels are neighbours in
+ * the same column, and the list below repeats the save-point list's row shape so a row means the
+ * same thing in both (a name, and the acts that apply to it).
+ */
+.forks {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.fork-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Same `flex-wrap` reasoning as `.checkpoint-row`: the label is user text of unbounded length. */
+.fork-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
 }
 
 /*

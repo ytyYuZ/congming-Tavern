@@ -720,6 +720,34 @@ export const zhCN = {
   /** The second step of a delete, shown only after 「删除」 was pressed. */
   'play.checkpointDeleteConfirm': '确认删除',
   /*
+   * FORKING A TIMELINE (M1-M2) — a NEW session cut at a save point, or right now.
+   *
+   * `play.forkHint` is the sentence that must not be dropped: the user is about to get a second
+   * session, and what happens to the one on screen (nothing) and what the new one carries (the
+   * position, the clock, the variables, the cast and the save points up to the cut) are the two
+   * facts that make the act predictable. 「在当前进度分叉」 is the live position — the same thing a
+   * save point taken now would capture — and 「从此存档分叉」 is one row lower, on each save point.
+   *
+   * WHY `play.forkSuffix` IS A FRAGMENT AND NOT A `{title}` TEMPLATE: a session's title may sit
+   * at the schema's ceiling (200 characters), so `state/chat-store.ts`'s `forkTitleOf` cuts the
+   * ORIGIN'S title to leave room for this suffix and never cuts the suffix itself. A whole
+   * sentence with the title inside it could only be cut at the end, which would drop the one part
+   * that says what the session is.
+   */
+  'play.forkTitle': '分叉时间线',
+  'play.forkHint':
+    '分叉会新建一个会话：它带着所选位置的消息、时钟、变量与卡司状态，以及此前存档点的副本；原会话完全不受影响，其中的引用也全部指向新会话自己的消息。',
+  'play.forkAtHead': '在当前进度分叉',
+  'play.forkAtCheckpoint': '从此存档分叉',
+  /** The second step of a fork, shown only after one of the two labels above was pressed. */
+  'play.forkConfirm': '确认分叉',
+  /** Only shown when there is no save point: the live position is always a fork point. */
+  'play.forkNoSavePoints': '还没有存档点；也可以在任意时刻用「在当前进度分叉」。',
+  /** A fork that wrote nothing: the save point it named is gone (or belongs elsewhere). */
+  'play.forkRefused': '未能分叉：该存档点已不存在，或不属于当前会话。',
+  /** The suffix a forked session's title carries; see the note above for why it is a fragment. */
+  'play.forkSuffix': '（分叉）',
+  /*
    * THE STATUS BAR (M1-S6, ADR-031) — the open session's free variables.
    *
    * WHY THE HINT NAMES THE MACROS: this panel is the HUMAN half of the variable system, and
@@ -1432,6 +1460,15 @@ export const en: Messages = {
   'play.checkpointRestoreConfirm': 'Confirm rollback',
   'play.checkpointDelete': 'Delete',
   'play.checkpointDeleteConfirm': 'Confirm delete',
+  'play.forkTitle': 'Fork the timeline',
+  'play.forkHint':
+    'A fork creates a new session: it carries the messages, clock, variables and cast state of the chosen position, plus copies of the earlier save points. The session you are in is not affected at all, and every reference inside the new one points at its own messages.',
+  'play.forkAtHead': 'Fork from right now',
+  'play.forkAtCheckpoint': 'Fork from this save point',
+  'play.forkConfirm': 'Confirm fork',
+  'play.forkNoSavePoints': 'No save points yet; you can still fork from right now at any moment.',
+  'play.forkRefused': 'Could not fork: that save point is gone, or belongs to another session.',
+  'play.forkSuffix': ' (fork)',
   'play.variablesTitle': 'Status bar',
   'play.variablesHint':
     'Session-scoped free variables: {{getvar}} reads one, {{setvar}} assigns and {{addvar}} increments; a boolean is written true or false.',

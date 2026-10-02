@@ -160,6 +160,7 @@ import {
   createSession,
   deleteCheckpoint as deleteCheckpointRow,
   deleteLeafMessage,
+  forkSession as forkSessionRow,
   getChain,
   getCharacterVersion,
   getSession,
@@ -183,6 +184,7 @@ import {
   intervene,
   restoreIntervention,
 } from '../session/cast';
+import type { ForkPoint } from '../session/fork';
 import { type SessionDraft, sessionPinsOf } from '../session/roster';
 import {
   type CastMember,
@@ -466,6 +468,26 @@ export interface ChatState {
   restoreCheckpoint: (checkpointId: Id) => Promise<boolean>;
   /** Remove one save point. The live session is untouched. */
   deleteCheckpoint: (checkpointId: Id) => Promise<void>;
+  /**
+   * Create a NEW timeline that continues the open session from a save point - or from right now -
+   * and leave the open session exactly as it is (M1-M2, docs/06 section 2.6's row).
+   *
+   * WHAT A FORK IS: a new SESSION, not a branch. The row's two acceptance clauses are why the
+   * whole act is delegated to `db/repository.ts`'s `forkSession`: 原时间线不受影响 is a statement
+   * about the origin's ROWS and 新线引用一致 a statement about the new ones, so neither may be
+   * assembled in a component out of whatever a render happened to hold.
+   *
+   * WHY IT ANSWERS AN ID INSTEAD OF OPENING THE FORK: the caller navigates to
+   * `/play/$sessionId` for that id (`app/routes/play.tsx`'s `ForkPanel`), and that route's own
+   * effect opens the session - the split `create` already uses, one screen over. The session
+   * LIST is refreshed here, because the home screen has to show the new timeline whether or not
+   * the user ever goes back to it.
+   *
+   * Resolves the new session's id, or `undefined` when nothing was written: no open session, a
+   * fork point that no longer exists (or that belongs to another session's transcript), or a
+   * storage failure - which also lands in `error`.
+   */
+  fork: (forkPoint: ForkPoint) => Promise<Id | undefined>;
 }
 
 /**
@@ -1317,6 +1339,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       checkpoints: get().checkpoints.filter((candidate) => candidate.id !== checkpointId),
     });
   },
+
+  /** See the interface's `fork` for what this act is and why it answers an id. */
+  async fork(forkPoint: ForkPoint): Promise<Id | undefined> {
+    const session = get().session;
+    if (session === undefined) return undefined;
+    try {
+      const forked = await forkSessionRow({
+        sessionId: session.id,
+        forkPoint,
+        // The title is PERSISTED copy, so it is composed HERE, where the locale store is
+        // reachable (`create`'s title records the same split).
+        title: forkTitleOf(session.title),
+      });
+      if (forked === undefined) return undefined;
+      // The row is written first and the in-memory list adopts it: a fork the home screen cannot
+      // see is a timeline the user has to guess the existence of.
+      await get().load();
+      return forked.id;
+    } catch (cause) {
+      set({ error: localFailure(cause, 'unknown fork write failure') });
+      return undefined;
+    }
+  },
 }));
 
 /**
@@ -1412,6 +1457,29 @@ async function castMemberOf(pin: EntityPin): Promise<CastMember> {
  */
 function speakerNameOf(name: string | undefined): string {
   return name ?? translate('play.schedulerUnknownCard');
+}
+
+/**
+ * The ceiling `SessionSchema` puts on `title` (`z.string().min(1).max(200)`), restated here
+ * because the sentence that has to satisfy it is composed here.
+ */
+const TITLE_LIMIT = 200;
+
+/**
+ * The new timeline's title: the origin's title plus the catalog's fork suffix (M1-M2).
+ *
+ * WHY THE ORIGIN'S TITLE IS CUT AND NOT THE COMPOSED SENTENCE: a session's title may sit at the
+ * schema's ceiling, and a fork's title is that title PLUS a suffix - so the whole fork would be
+ * unwritable (the parse refuses the row and the transaction rolls back) exactly for the sessions
+ * whose names are most deliberate. Cutting the origin's title leaves room for the COMPLETE
+ * suffix, so "which timeline is this" never depends on how long its name happens to be. The cut
+ * is by CODE POINTS and not by UTF-16 units: a cut inside a surrogate pair would store a lone
+ * surrogate, which is not a character any renderer can show.
+ */
+function forkTitleOf(originTitle: string): string {
+  const suffix = translate('play.forkSuffix');
+  const room = TITLE_LIMIT - [...suffix].length;
+  return `${[...originTitle].slice(0, room).join('')}${suffix}`;
 }
 
 /**

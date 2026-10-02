@@ -24,6 +24,12 @@
  * walk is bounded, and a `visited` set stops a corrupted cycle at the first
  * repetition rather than after the bound.
  *
+ * THE WALK IS SHARED WITH THE FORK (M1-M2), which needs the same path read INSIDE its own write
+ * transaction (it copies the chain and the session row, and the two must be one instant) while
+ * `getChain` must read through `readTable` (a `liveQuery` querier may not open a read-write
+ * transaction — see the two doors above). So `walkChain` takes the row read as a parameter and
+ * both callers supply their own; one bound, one cycle rule, one parse.
+ *
  * WHY EVERY ROW IS PARSED WITH ITS SCHEMA ON THE WAY IN
  * `IdSchema` is a plain string and `TimestampSchema` a plain number, so a row read
  * back from IndexedDB is structurally indistinguishable from an unvalidated
@@ -108,7 +114,9 @@ import {
   encryptedSecretToJson,
   isEncryptedSecret,
 } from '../secrets/secret-crypto';
+import { type ForkAnchor, type ForkPoint, planFork } from '../session/fork';
 import type { TurnPlanDraft } from '../session/scheduler';
+import { copyState } from '../session/state-copy';
 import { readTable, write } from './database';
 
 /* ─────────────────────────────── identifiers ─────────────────────────────── */
@@ -799,33 +807,50 @@ export async function deleteLeafMessage(sessionId: Id, messageId: Id): Promise<b
 const CHAIN_LIMIT = 10_000;
 
 /**
- * Walk `parentId` from `session.headMessageId` up to a root and return the path in
- * chronological order, or `[]` when the session has no head yet.
+ * Walk `parentId` from `headMessageId` up to a root and return the path in chronological
+ * order, or `[]` when the head is `null`.
  *
  * Termination: `CHAIN_LIMIT` bounds how far a corrupted row can drag the walk, and
  * a `visited` set catches a cycle at the first repetition instead of after the
  * bound. Both are needed — the bound alone would still return a plausible-looking
  * duplicate chain.
+ *
+ * WHY THE READ IS A PARAMETER (M1-M2)
+ * The identical walk is needed on both sides of the port's doors: `getChain` reads through
+ * `readTable` because a `liveQuery` querier must not open a read-write transaction
+ * (`db/database.ts` measures that), while a fork reads INSIDE its own write transaction, because
+ * the chain it copies and the session row it copies from must be one instant. The two callers
+ * differ only in how they fetch a row, so the walk - and with it the bound, the cycle rule and
+ * the parse - lives here once and the caller supplies the read.
  */
-export async function getChain(sessionId: Id): Promise<Message[]> {
-  const session = await getSession(sessionId);
-  if (session === undefined || session.headMessageId === null) return [];
-  const messages = readTable<Message>(COLLECTIONS.messages);
+async function walkChain(
+  headMessageId: Id | null,
+  read: (messageId: Id) => Promise<Message | undefined>,
+): Promise<Message[]> {
   const reversed: Message[] = [];
   const visited = new Set<Id>();
-  let cursor: Id | null = session.headMessageId;
+  let cursor: Id | null = headMessageId;
 
   for (let step = 0; cursor !== null && step < CHAIN_LIMIT; step += 1) {
     if (visited.has(cursor)) break;
     visited.add(cursor);
-    const row = await messages.get(cursor);
+    const row = await read(cursor);
     if (row === undefined) break;
+    // Parsed on the way in like every other reader (ADR-016): the walk needs a trustworthy
+    // `parentId`, and a fork copies these very values.
     const message = MessageSchema.parse(row);
     reversed.push(message);
     cursor = message.parentId;
   }
 
   return reversed.reverse();
+}
+
+export async function getChain(sessionId: Id): Promise<Message[]> {
+  const session = await getSession(sessionId);
+  if (session === undefined || session.headMessageId === null) return [];
+  const messages = readTable<Message>(COLLECTIONS.messages);
+  return walkChain(session.headMessageId, (messageId) => messages.get(messageId));
 }
 
 /* ─────────────────────────────── checkpoints ─────────────────────────────── */
@@ -883,62 +908,14 @@ function characterVersionsOf(tx: Tx): Collection<CharacterVersion> {
   return tx.collection<CharacterVersion>(COLLECTIONS.characterVersions);
 }
 
-/**
- * A DEEP-ENOUGH COPY OF A SESSION STATE — the one place the snapshot's independence is
- * created.
- *
- * WHY NOT `structuredClone`: it exists in every browser this app targets, but it is a
- * global that `biome.json` bans for `packages/core` and that this workspace has not
- * adopted elsewhere; the state's shape is fixed by `SessionStateSchema` (a scene
- * object, the clock, the cast, four flat records, one array of flat objects), so an
- * explicit copy is shorter than the argument for the global and cannot throw on a
- * value the schema already forbids. A field-by-field copy also states, in code,
- * exactly which parts are shared by reference when they are not copied — `sheets`'
- * values are `unknown` to core, so they are the one place a nested mutation could
- * still be observed; that is called out at `copySheets` rather than hidden.
- *
- * `cast` IS COPIED ENTRY BY ENTRY (M1-S4): a save point's `castState` is taken from the
- * live record, and a copy that shared it would follow every later mute — the same
- * "then must not move" rule the whole function exists for, applied to the field the
- * user edits most often. The ENTRIES are copied one level deep: an entry's fields are
- * all primitives by schema, so there is nothing below them to share.
+/*
+ * THE STATE COPY MOVED; THE RULE DID NOT (M1-M2)
+ * `copyState` / `copyCast` / `copySheets` used to be declared here. They now live in
+ * `../session/state-copy.ts`, and the reason is the fork: a new timeline starts from a COPY of
+ * the save point it came from (`session/fork.ts`), and a pure module must not import the
+ * database layer to reach one function. One rule, one home — every snapshot in this file
+ * (`createCheckpoint`, `restoreCheckpoint`) imports it from there, and so does the fork.
  */
-function copyState(state: SessionState): SessionState {
-  return {
-    scene: { ...state.scene },
-    clock: state.clock,
-    ...(state.innerClock === undefined ? {} : { innerClock: { ...state.innerClock } }),
-    cast: copyCast(state.cast),
-    vars: { ...state.vars },
-    sheets: copySheets(state.sheets),
-    deadlines: state.deadlines.map((deadline) => ({ ...deadline })),
-  };
-}
-
-/** One new entry per cast member; see `copyState` for why this is a copy at all. */
-function copyCast(cast: SessionState['cast']): SessionState['cast'] {
-  const copy: NonNullable<SessionState['cast']> = {};
-  for (const [characterId, entry] of Object.entries(cast ?? {})) {
-    copy[characterId] = { ...entry };
-  }
-  return copy;
-}
-
-/**
- * A new object per sheet, and a new object per row inside it.
- *
- * The CELLS are copied one level deep and no further: a sheet cell is `unknown`
- * because the rule pack owns its schema, and a copy that recursed into it would be
- * guessing at a shape this layer must not know. So a cell that holds an OBJECT is
- * still shared — the same limitation `structuredClone` would not have — and it is
- * recorded here rather than discovered: nothing in M1 writes such a cell (`vars` is
- * primitives by schema and no rule pack ships yet).
- */
-function copySheets(sheets: SessionState['sheets']): SessionState['sheets'] {
-  const copy: SessionState['sheets'] = {};
-  for (const [actorId, row] of Object.entries(sheets)) copy[actorId] = { ...row };
-  return copy;
-}
 
 /**
  * Everything a save point captures, read from the session row — the "one instant".
@@ -1135,6 +1112,115 @@ export async function restoreCheckpoint(
     });
   });
   return { sessionId: checkpoint.sessionId, headMessageId };
+}
+
+/* ──────────────────────────────── forking ────────────────────────────────── */
+
+/**
+ * Create a NEW session that continues `input.sessionId` from a save point (or from right now),
+ * and leave the session it came from completely untouched (M1-M2).
+ *
+ * WHAT THIS FUNCTION OWNS, AND WHAT `session/fork.ts` OWNS
+ * `session/fork.ts`'s `planFork` decides what travels, mints the new ids and rewrites every
+ * internal reference. What it cannot do is what this function does: read the origin's rows and
+ * write the copies in ONE transaction, so the session row, the chain and the save points the
+ * fork is planned from are one instant rather than four reads that a concurrent write could land
+ * between. Nothing here mutates an origin row - the fork writes NEW rows and nothing else, which
+ * is exactly the acceptance's 原时间线不受影响.
+ *
+ * WHY THE ORIGIN IS RE-READ INSIDE THE TRANSACTION
+ * The caller holds a `Session` for the screen, and it can be a turn behind (a head the last turn
+ * moved, a table another tab wrote). The fork point must be resolved against the rows as this
+ * transaction sees them, and the anchor's message must be the tip of the chain built from the
+ * same rows - the two facts `planFork` re-checks. A fork planned from a stale pair would store a
+ * session whose `headMessageId` is not the end of its own transcript.
+ *
+ * WHY `undefined` AND NOT A THROW FOR A MISSING ROW
+ * A save point that was deleted, a save point of ANOTHER session, or an origin that no longer
+ * exists are all "there is no fork to make here" - the same silent no-op `writeSessionState`,
+ * `setHeadMessageId` and `createCheckpoint` answer with. The title is the one input the schema
+ * can refuse (empty, or over its ceiling), and that refusal is a throw from the `parse` below,
+ * which rolls the whole transaction back rather than storing a session the schema rejects
+ * (`appendMessage` and `createSession` fail the same way on a payload they cannot parse).
+ *
+ * The message rows and the save points are written with `putMany`: a fork is one act, and the
+ * port's bulk write is what the import path already uses for the same shape of work.
+ */
+export async function forkSession(input: {
+  sessionId: Id;
+  forkPoint: ForkPoint;
+  /**
+   * The new session's title. The CALLER chooses it, for the reason `createSession`'s title
+   * records: it is PERSISTED copy, written in the language that was active at the fork, and this
+   * module must not import the i18n layer (ADR-030's addendum).
+   */
+  title: string;
+}): Promise<Session | undefined> {
+  return write(async (tx) => {
+    const row = await sessionsOf(tx).get(input.sessionId);
+    if (row === undefined) return undefined;
+    const origin = SessionSchema.parse({ ...row, state: completeState(row) });
+    const anchor = await forkAnchorOf(tx, origin, input.forkPoint);
+    if (anchor === undefined) return undefined;
+
+    const messages = messagesOf(tx);
+    const chain = await walkChain(anchor.messageId, (messageId) => messages.get(messageId));
+    // Every save point of the origin, and `planFork` keeps the ones this fork can answer: a
+    // checkpoint whose message did not travel has no position in the new timeline.
+    const checkpoints = await checkpointsOf(tx).list(
+      { where: { sessionId: origin.id } },
+      'checkpoints_sessionId_createdAt',
+    );
+
+    const plan = planFork({
+      origin,
+      anchor,
+      chain,
+      checkpoints,
+      title: input.title,
+      at: Date.now(),
+      mintId: mintUuidV7,
+    });
+    if (plan === undefined) return undefined;
+
+    const session = SessionSchema.parse(plan.session);
+    await sessionsOf(tx).put(session);
+    if (plan.messages.length > 0) {
+      await messagesOf(tx).putMany(plan.messages.map((message) => MessageSchema.parse(message)));
+    }
+    if (plan.checkpoints.length > 0) {
+      await checkpointsOf(tx).putMany(
+        plan.checkpoints.map((checkpoint) => CheckpointSchema.parse(checkpoint) as CheckpointRow),
+      );
+    }
+    return session;
+  });
+}
+
+/**
+ * Resolve a `ForkPoint` to the facts `planFork` needs, inside the caller's transaction.
+ *
+ * A live-position fork takes the session's own `state` and `headMessageId` - the same pair a save
+ * point taken at this instant would snapshot, which is why it needs no row of its own.
+ *
+ * A save-point fork takes the checkpoint's `state` and `messageId`, and REFUSES a checkpoint that
+ * belongs to another session: its `messageId` is a position in a different transcript, so copying
+ * this session's chain "up to" it would produce a head that resolves nowhere (`state/chat-store
+ * .ts`'s `restoreCheckpoint` refuses the same cross-session case for the same reason).
+ */
+async function forkAnchorOf(
+  tx: Tx,
+  origin: Session,
+  point: ForkPoint,
+): Promise<ForkAnchor | undefined> {
+  if (point.kind === 'head') {
+    return { messageId: origin.headMessageId, state: origin.state };
+  }
+  const row = await checkpointsOf(tx).get(point.checkpointId);
+  if (row === undefined) return undefined;
+  const checkpoint = CheckpointSchema.parse(row);
+  if (checkpoint.sessionId !== origin.id) return undefined;
+  return { messageId: checkpoint.messageId, state: checkpoint.state, checkpointId: checkpoint.id };
 }
 
 /* ──────────────────────────────── turn plans ─────────────────────────────── */

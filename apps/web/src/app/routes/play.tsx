@@ -92,7 +92,7 @@
  */
 import type { MessageKey, Translator } from '@smarttavern/i18n';
 import type { Calendar, Checkpoint, Id, Message, Session } from '@smarttavern/schema';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useState } from 'react';
 import { clockOf, segmentStep, worldClockText } from '../../chat/clock';
 import type { SiblingView } from '../../chat/message-tree';
@@ -107,6 +107,7 @@ import {
 } from '../../chat/vars';
 import { useTranslation } from '../../i18n/use-translation';
 import { type CastIntervention, interventionOf } from '../../session/cast';
+import type { ForkPoint } from '../../session/fork';
 import { MAX_SPEAKERS_PER_ROUND, type TurnSchedule } from '../../session/scheduler';
 import {
   exclusionReasonText,
@@ -182,6 +183,7 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
           <TimeControls sessionId={session.id} session={session} calendar={calendar} />
           <StatusBar sessionId={session.id} session={session} />
           <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />
+          <ForkPanel sessionId={session.id} checkpoints={checkpoints} />
           <SchedulerPanel />
           <CastInterventionPanel sessionId={session.id} session={session} />
           {/* The opening choice is offered exactly while the session has not started (M1-S3);
@@ -605,6 +607,165 @@ function CheckpointPanel({
         </ul>
       )}
     </section>
+  );
+}
+
+/** The fork point key of the live position; the save points key themselves by their own id. */
+const HEAD_FORK = 'head';
+
+/**
+ * The timeline fork panel (M1-M2) - starting a NEW timeline from a save point, or from now.
+ *
+ * WHAT THE ROW SAYS, AND WHY THE PANEL OFFERS EXACTLY TWO KINDS OF FORK POINT
+ * docs/06 section 2.6: 「从任意存档点创建新时间线」, accepted by 「原时间线不受影响；新线引用一致」. A save
+ * point is what knows a POSITION AND A STATE (clock, vars, cast: `Checkpoint.state`), so it is
+ * the canonical fork point; 「在当前进度分叉」 is the same act with the state the session holds right
+ * now - the pair a save point taken this instant would snapshot, minus the write to the origin
+ * that taking one would perform. An arbitrary message is deliberately NOT offered: it carries no
+ * state, so a fork at one would have to invent the clock it starts from. A user who wants to cut
+ * at a particular message has 回溯 - `switchBranch` moves the head without writing a message -
+ * and the head fork then cuts exactly there.
+ *
+ * WHY THE PANEL WRITES NOTHING ITSELF
+ * `state/chat-store.ts`'s `fork` owns the act and `db/repository.ts`'s `forkSession` writes the
+ * rows in one transaction; this component decides where the controls are and what the catalog
+ * says. It offers the two-step confirmation every other row on this screen uses (see
+ * `ForkControl`), and it NAVIGATES to the new session once one exists, because a fork the user
+ * cannot see would look like a button that did nothing.
+ *
+ * WHY IT LISTS THE SAVE POINTS FROM THE STORE AND NOT FROM A READ OF ITS OWN: the list is per
+ * session and is already kept live by `open` for `CheckpointPanel` (`state/chat-store.ts`'s
+ * `checkpoints`), so a second read here would be a second, possibly staler, copy of the same
+ * rows - and the fork point the user picks must be one the repository can still resolve.
+ */
+function ForkPanel({
+  sessionId,
+  checkpoints,
+}: {
+  sessionId: Id;
+  checkpoints: readonly Checkpoint[];
+}) {
+  const { t } = useTranslation();
+  const fork = useChatStore((state) => state.fork);
+  const navigate = useNavigate();
+  /** The fork point whose confirmation is on screen, or `''` when none is armed. */
+  const [confirm, setConfirm] = useSessionDraft(sessionId, '');
+  const [busy, setBusy] = useSessionDraft(sessionId, false);
+  const [status, setStatus] = useSessionDraft(sessionId, '');
+
+  const onFork = async (forkPoint: ForkPoint): Promise<void> => {
+    setConfirm('');
+    setBusy(true);
+    try {
+      const forked = await fork(forkPoint);
+      // A refusal that is not a storage failure (the save point went away in another tab) is
+      // said out loud: the banner only carries the failures the store can name.
+      if (forked === undefined) {
+        setStatus(t('play.forkRefused'));
+        return;
+      }
+      await navigate({ to: '/play/$sessionId', params: { sessionId: forked } });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="forks">
+      <h2 className="section-title">{t('play.forkTitle')}</h2>
+      <p className="muted">{t('play.forkHint')}</p>
+
+      <div className="btn-row">
+        {/* The live position is a fork point whether or not a save point exists, so this control
+            is always offered - including for a session whose chain is still empty. */}
+        <ForkControl
+          field="head"
+          label={t('play.forkAtHead')}
+          armed={confirm === HEAD_FORK}
+          busy={busy}
+          onArm={() => setConfirm(HEAD_FORK)}
+          onFork={() => {
+            void onFork({ kind: 'head' });
+          }}
+        />
+      </div>
+
+      {checkpoints.length === 0 ? (
+        <p className="muted">{t('play.forkNoSavePoints')}</p>
+      ) : (
+        <ul className="fork-list">
+          {checkpoints.map((checkpoint) => (
+            <li key={checkpoint.id} className="fork-row">
+              <span className="checkpoint-label">{checkpoint.label}</span>
+              <ForkControl
+                field={checkpoint.id}
+                label={t('play.forkAtCheckpoint')}
+                armed={confirm === checkpoint.id}
+                busy={busy}
+                onArm={() => setConfirm(checkpoint.id)}
+                onFork={() => {
+                  void onFork({ kind: 'checkpoint', checkpointId: checkpoint.id });
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {status === '' ? null : <p className="fork-status">{status}</p>}
+    </section>
+  );
+}
+
+/**
+ * One two-step fork control: the first click ARMS the act, the second one performs it (M1-M2).
+ *
+ * WHY TWO STEPS, LIKE THE RESTORE AND THE DELETE BESIDE IT
+ * A fork writes a whole new session - a transcript, its save points and its own row - and it is
+ * reached from a row a user may have scrolled to by accident. The confirmation is a different
+ * label on the SAME row rather than a modal, because the fact being confirmed is WHICH fork point
+ * (this save point, or right now) and the row is what names it. The `data-field` names the fork
+ * point, so the two controls of a long list are distinguishable without reading their labels.
+ *
+ * `busy` disables both steps while the write is in flight: a second click during a fork would be
+ * a second copy of the same timeline.
+ */
+function ForkControl({
+  field,
+  label,
+  armed,
+  busy,
+  onArm,
+  onFork,
+}: {
+  field: string;
+  label: string;
+  armed: boolean;
+  busy: boolean;
+  onArm: () => void;
+  onFork: () => void;
+}) {
+  const { t } = useTranslation();
+  return armed ? (
+    <button
+      className="btn btn-primary"
+      type="button"
+      data-field={`fork-confirm-${field}`}
+      disabled={busy}
+      onClick={onFork}
+    >
+      {t('play.forkConfirm')}
+    </button>
+  ) : (
+    <button
+      className="btn"
+      type="button"
+      data-field={`fork-${field}`}
+      disabled={busy}
+      onClick={onArm}
+    >
+      {label}
+    </button>
   );
 }
 
