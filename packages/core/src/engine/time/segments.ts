@@ -44,7 +44,19 @@ export function resolveSegments(
 ): readonly ResolvedDaySegment[] {
   return segments.map((segment) => {
     assertHourIndex(segment.fromHour, `segment ${segment.id} fromHour`, hoursPerDay);
-    assertHourIndex(segment.toHour, `segment ${segment.id} toHour`, hoursPerDay);
+    // `toHour` is allowed PAST the end of the day, because that is the second spelling of
+    // a wrap this module documents (22 -> 30 on a 24-hour day is the same window as
+    // 22 -> 6). Bounding it at `fromHour + hoursPerDay` admits exactly one wrap and keeps
+    // the normalisation below total; bounding it at `hoursPerDay` rejected the documented
+    // form before it could be normalised, which is what a 293-file green suite could not
+    // see because no test wrote a wrap that way.
+    const maxToHour = segment.fromHour + hoursPerDay;
+    if (!Number.isInteger(segment.toHour) || segment.toHour < 0 || segment.toHour > maxToHour) {
+      throw new TimeEngineError(
+        `segment ${segment.id} toHour must be a whole hour index in 0..${maxToHour}` +
+          ` (a wrap may be written past the end of the day, e.g. 22 -> 30 on a 24-hour day)`,
+      );
+    }
     const { fromHour } = segment;
     const toHour = segment.toHour < fromHour ? segment.toHour + hoursPerDay : segment.toHour;
     const hours = toHour - fromHour;

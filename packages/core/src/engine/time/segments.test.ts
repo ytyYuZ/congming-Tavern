@@ -15,9 +15,9 @@
 import type { Calendar } from '@smarttavern/schema';
 import { describe, expect, it } from 'vitest';
 import { calendarView } from './calendar';
-import { resolvedSegmentsOf, segmentOf, segmentsAt } from './segments';
+import { resolvedSegmentsOf, resolveSegments, segmentOf, segmentsAt } from './segments';
 import { fantasyCalendar, gappyCalendar, plainCalendar, timelessCalendar } from './test-kit';
-import type { ResolvedDaySegment } from './types';
+import { type ResolvedDaySegment, TimeEngineError } from './types';
 
 function locate(calendar: Calendar): readonly ResolvedDaySegment[] {
   return resolvedSegmentsOf(calendar, calendarView(calendar).hoursPerDay);
@@ -170,5 +170,28 @@ describe('segmentOf — the worldbook condition shape', () => {
     const view = calendarView(fantasyCalendar);
     const segments = locate(fantasyCalendar);
     expect(segmentOf(view, segments, 0)).toEqual({ id: 'night', name: 'Night' });
+  });
+});
+
+describe('resolveSegments — one window, two spellings', () => {
+  /**
+   * The long form is documented in this module's header AND in `types.ts` ("may exceed
+   * `hoursPerDay` for an overnight window"), and `resolveSegments` normalises the short
+   * form INTO it — but the hour assertion used to bound `toHour` at `hoursPerDay`, so the
+   * documented long form was refused before it could be normalised. No test wrote it that
+   * way, which is exactly why a 293-file green suite could not see it: the short spelling
+   * folds before the bound is reached, so only the long one hit it.
+   */
+  it('accepts a wrapped night written short (22 -> 6) and long (22 -> 30) as one window', () => {
+    const shortForm = resolveSegments([{ id: 'night', name: '夜', fromHour: 22, toHour: 6 }], 24);
+    const longForm = resolveSegments([{ id: 'night', name: '夜', fromHour: 22, toHour: 30 }], 24);
+    expect(longForm).toEqual(shortForm);
+    expect(shortForm[0]).toMatchObject({ fromHour: 22, toHour: 30, hours: 8, tag: 'overnight' });
+  });
+
+  it('still refuses a window that would wrap more than once', () => {
+    expect(() =>
+      resolveSegments([{ id: 'night', name: '夜', fromHour: 22, toHour: 50 }], 24),
+    ).toThrow(TimeEngineError);
   });
 });
