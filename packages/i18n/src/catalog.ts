@@ -442,6 +442,13 @@ export const zhCN = {
   'co-create.stepNarrative': '叙事',
   'co-create.stepTelling': '题材、主题与开场',
   'co-create.stepField': '这个字段',
+  /* The character's steps (docs/06 §2.3 M1-C2): the same plan machinery, a character's own order. */
+  'co-create.stepIdentity': '身份与性格',
+  'co-create.stepScenario': '场景与系统提示',
+  'co-create.stepSpeech': '开场白与示例对话',
+  'co-create.stepVoice': '发言档案',
+  'co-create.stepLooks': '外貌与画风',
+  'co-create.stepCredits': '作者与备注',
   'co-create.stepStatePending': '待生成',
   'co-create.stepStateAccepted': '已采纳',
   'co-create.stepStateRejected': '已否决',
@@ -451,6 +458,9 @@ export const zhCN = {
   'co-create.generationBusy': '生成流程正在进行。先采纳、否决或停止当前步骤，再对单个字段操作。',
   'co-create.finishFirst': '还有一份提案没有处理。先采纳或否决它，再发起新的请求。',
   'co-create.genreFirst': '这张卡还只有名字：先在「题材」里写一两个词，AI 才知道要往哪个方向写。',
+  'co-create.characterFirst':
+    '这张角色卡还没有可依据的内容：先在「描述」「性格」或「场景」里写一两句，AI 才知道要生成什么样的角色。',
+  'co-create.wrongCard': '共创面板当前打开的是另一种卡片。先切回对应的编辑器，再发起请求。',
   /** `{detail}` is the pointer the model tried to write. */
   'co-create.outOfScope':
     'AI 这次改动超出了本步骤的范围（它写了 {detail}），整份提案都没有应用。草稿没有变化。',
@@ -472,6 +482,31 @@ export const zhCN = {
   'co-create.fieldOpTitle': '{op}：{field}',
   'co-create.fieldSetStart': '生成选中的字段',
   'co-create.selectedTitle': '已选字段',
+
+  /*
+   * 发言档案自动评估 (docs/06 §2.3 M1-C3): 依据角色卡自身的内容评估发言档案，提案形式.
+   *
+   * WHY THE REASON SITS BESIDE THE BUTTON AND NOT IN THE CARD
+   * 「生成欲望/能力值并给出理由」 asks for the reason to be READABLE; the card itself has no field for
+   * an assessment argument, and writing one into `creator_notes` would put a transient opinion into
+   * the author's own prose. So the reason is transcript copy, rendered while the proposal is pending.
+   *
+   * WHY TWO SENTENCES FOR "TOO THIN"
+   * One is the LOCAL precondition (nothing to judge, no request sent) and the other is the MODEL's own
+   * answer (`ops: []`): they are different facts, and merging them would tell an author whose card does
+   * say something that it says nothing.
+   */
+  'co-create.voiceTitle': '发言档案评估',
+  'co-create.voiceHint':
+    '依据角色卡自身的内容（描述、性格、场景、开场白…）评估发言档案：AI 只给出可判断的字段，并说明理由。',
+  'co-create.voiceEvaluate': '评估发言档案',
+  'co-create.voiceWorldLabel': '依据哪个世界生成',
+  'co-create.voiceWorldNone': '不指定世界',
+  'co-create.voiceReasoning': '评估理由：{detail}',
+  'co-create.voiceTooThin':
+    '这张卡还没有可判断的内容：先写「描述」「性格」或「场景」，AI 才有依据评估发言档案。',
+  'co-create.voiceNoSignal':
+    'AI 认为这张卡还不足以判断发言欲望与能力，没有给出数值。先把角色的描述写得具体一些，再试一次。',
 
   /* ── character: the character-card library and editor (M1-C1) ────────────── */
   'character.libraryTitle': '角色卡库',
@@ -1113,6 +1148,12 @@ export const en: Messages = {
   'co-create.stepNarrative': 'Narrative',
   'co-create.stepTelling': 'Genre, themes and hooks',
   'co-create.stepField': 'This field',
+  'co-create.stepIdentity': 'Identity and personality',
+  'co-create.stepScenario': 'Scenario and system prompt',
+  'co-create.stepSpeech': 'Opening line and example dialogue',
+  'co-create.stepVoice': 'Speaking profile',
+  'co-create.stepLooks': 'Appearance and art style',
+  'co-create.stepCredits': 'Creator and notes',
   'co-create.stepStatePending': 'to generate',
   'co-create.stepStateAccepted': 'accepted',
   'co-create.stepStateRejected': 'refused',
@@ -1127,6 +1168,10 @@ export const en: Messages = {
     'One proposal is still unanswered. Accept or refuse it before starting another request.',
   'co-create.genreFirst':
     'This card has nothing but a name: write a word or two under “Genre” first, so the AI knows which way to write.',
+  'co-create.characterFirst':
+    'This character card says nothing to build on: write a line or two under “Description”, “Personality” or “Scenario” first, so the AI knows what kind of character to generate.',
+  'co-create.wrongCard':
+    'The co-creation panel is open on the other kind of card. Switch back to the matching editor and start the request again.',
   'co-create.outOfScope':
     'This answer reached outside the current step (it wrote {detail}), so none of the proposal was applied. The draft is unchanged.',
 
@@ -1140,6 +1185,18 @@ export const en: Messages = {
   'co-create.fieldOpTitle': '{op}: {field}',
   'co-create.fieldSetStart': 'Generate the selected fields',
   'co-create.selectedTitle': 'Selected fields',
+
+  'co-create.voiceTitle': 'Speaking profile assessment',
+  'co-create.voiceHint':
+    'Assesses the speaking profile from what the card itself says (description, personality, scenario, first message). The AI fills only the fields it can judge, and says why.',
+  'co-create.voiceEvaluate': 'Assess the speaking profile',
+  'co-create.voiceWorldLabel': 'Generate against which world',
+  'co-create.voiceWorldNone': 'No world',
+  'co-create.voiceReasoning': 'Why: {detail}',
+  'co-create.voiceTooThin':
+    'This card says nothing to judge yet: write a description, a personality or a scenario first, so the AI has something to assess.',
+  'co-create.voiceNoSignal':
+    'The AI judged the card too thin to score speaking desire and ability, so it proposed no numbers. Describe the character in more detail and try again.',
 
   /* ── the character-card library and editor (M1-C1) ──────────────────────── */
   'character.libraryTitle': 'Character cards',

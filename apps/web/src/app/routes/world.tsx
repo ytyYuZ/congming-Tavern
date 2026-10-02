@@ -413,7 +413,7 @@ export function WorldRoute({ worldId }: { worldId: string }) {
         draft value, so an accepted proposal appears in the form without a navigation, and the DOM
         test that drives generate -> preview -> accept -> undo never has to leave the screen.
       */}
-      {coCreateOpen ? <CoCreatePanel worldId={world.id} data={data} /> : null}
+      {coCreateOpen ? <CoCreatePanel kind="world" id={world.id} data={data} /> : null}
 
       <CustomFieldsPanel
         value={data.customFields}

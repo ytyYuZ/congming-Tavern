@@ -26,7 +26,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { App, createAppRouter } from '../app/app';
 import { closeDatabase, readTable, resetDatabase } from '../db/database';
 import { deleteDatabase } from '../db/raw-indexeddb.test-helpers';
-import { worldDraftId, writeLocaleSetting, writeProviderSettings } from '../db/repository';
+import {
+  characterDraftId,
+  worldDraftId,
+  writeLocaleSetting,
+  writeProviderSettings,
+} from '../db/repository';
 import {
   coCreateRequests,
   configureChat,
@@ -509,5 +514,135 @@ describe('generation mode and field-level actions', () => {
     expect(fieldValue(host, '[data-field="world-era"]')).toBe('第三纪');
     await settle();
     expect(JSON.stringify(await storedValue(worldDraftId(worldId)))).toBe(before);
+  });
+});
+
+/*
+ * M1-C2 / M1-C3 THROUGH THE CHARACTER SCREEN.
+ *
+ * `state/character-co-create.test.ts` proves the transitions and the rows for a character; only a DOM test
+ * can show that the SAME panel reaches them when it is mounted with `kind="character"` — a panel that
+ * listed the world's fields, previewed against the world's schema, or hid the assessment button would be
+ * invisible on the store side and obvious to a user. So this suite clicks the real buttons on the real
+ * character route and ends every step at the draft ROW.
+ */
+describe('the co-creation panel on a character card (M1-C2 / M1-C3)', () => {
+  /** A character whose card already says something, so 「从零生成」 starts and M1-C3 has evidence. */
+  async function seedStartedCharacter(): Promise<string> {
+    const characterId = await useContentStore.getState().createCharacter('银松镇的莉安');
+    if (characterId === undefined) throw new Error('the character was not created');
+    await useContentStore.getState().openCharacter(characterId);
+    const draft = useContentStore.getState().characterDraft;
+    if (draft === undefined) throw new Error('the character has no draft');
+    await useContentStore.getState().editCharacter(
+      {
+        ...draft.data,
+        description: '莉安是银松镇的镇长，说话直接、声音很响，掌握着渡口与粮仓的账目。',
+      },
+      {},
+    );
+    return characterId;
+  }
+
+  it('walks a character step: preview differs from the form, 采纳 fills it, 撤销 puts it back', async () => {
+    const characterId = await seedStartedCharacter();
+    const before = JSON.stringify(await storedValue(characterDraftId(characterId)));
+    // The answer writes a field the draft row currently holds EMPTY, so "the editor shows the proposed
+    // value" cannot be confused with a field that already said something similar.
+    configureCoCreate({
+      transport: (() =>
+        Promise.resolve(
+          answer([
+            '{"message":"先写性格","ops":[{"op":"replace","path":"/personality",',
+            '"value":"急躁、护短"}]}',
+          ]),
+        )) as FetchLike,
+    });
+
+    const host = await mountAt(`/characters/${characterId}`, '发布新版本');
+    // The character route has the panel toggle the world route has (M1-C2's missing half).
+    await clickAction(host, 'co-create-toggle');
+    await waitForText(host, '生成模式');
+
+    /*
+     * 从零生成 STARTS THE CHARACTER'S OWN PLAN, and the panel lists it: `identity` is the first step and
+     * there are SIX of them, because the plan is the character's field inventory rather than the world's.
+     */
+    await clickAction(host, 'co-create-start');
+    await waitForText(host, '先写性格');
+    expect(coCreateRequests().at(-1)?.card).toBe('character');
+    expect(coCreateRequests().at(-1)?.step).toBe('identity');
+    expect(nextStep(host)).toBe('identity');
+    expect(host.querySelectorAll('[data-list="co-create-steps"] [data-step]')).toHaveLength(6);
+    // THE PREVIEW IS THE PROPOSED PAYLOAD, while the form still shows the empty draft field.
+    expect(host.querySelector('[data-status="co-create-preview"]')?.textContent).toContain(
+      '急躁、护短',
+    );
+    expect(fieldValue(host, '[data-field="character-personality"]')).toBe('');
+
+    // 采纳: the editor shows the proposed value and the draft ROW holds it.
+    await clickAction(host, 'co-create-accept');
+    await settle();
+    expect(fieldValue(host, '[data-field="character-personality"]')).toBe('急躁、护短');
+    expect(stepState(host, 'identity')).toBe('accepted');
+    await waitForText(host, '撤销这次采纳');
+
+    // 撤销 puts the form AND the row back, byte for byte.
+    await clickAction(host, 'co-create-undo');
+    await settle();
+    expect(fieldValue(host, '[data-field="character-personality"]')).toBe('');
+    expect(JSON.stringify(await storedValue(characterDraftId(characterId)))).toBe(before);
+  });
+
+  it('assesses the speaking profile from the card, shows the reason, and applies it on 采纳', async () => {
+    const characterId = await seedStartedCharacter();
+    const before = JSON.stringify(await storedValue(characterDraftId(characterId)));
+    configureCoCreate({
+      transport: (() =>
+        Promise.resolve(
+          answer([
+            JSON.stringify({
+              message: '我按描述评估了发言档案。',
+              rationale: '描述里她管着镇子和粮仓账目，所以说话主动、分量足。',
+              ops: [
+                { op: 'replace', path: '/voice/desire', value: 82 },
+                { op: 'replace', path: '/voice/ability', value: 64 },
+              ],
+            }),
+          ]),
+        )) as FetchLike,
+    });
+
+    const host = await mountAt(`/characters/${characterId}`, '发布新版本');
+    await clickAction(host, 'co-create-toggle');
+    await waitForText(host, '发言档案评估');
+    // The form starts on the blank profile's neutral middle, so the proposal is visibly a change.
+    expect(fieldValue(host, '[data-field="voice-desire"]')).toBe('50');
+
+    await clickAction(host, 'co-create-voice-evaluate');
+    await waitForText(host, '我按描述评估了发言档案。');
+
+    // The request was the assessment, scoped to the profile fields alone.
+    const requested = coCreateRequests().at(-1);
+    expect(requested?.kind).toBe('voice-profile');
+    expect(requested?.paths).toEqual(['/voice/desire', '/voice/ability', '/voice/roles']);
+    // 「并给出理由」 is ON SCREEN beside the numbers, and nothing is written yet.
+    const reason = host.querySelector('[data-status="co-create-voice-reason"]');
+    expect(reason?.textContent).toContain('粮仓账目');
+    expect(fieldValue(host, '[data-field="voice-desire"]')).toBe('50');
+    await settle();
+    expect(JSON.stringify(await storedValue(characterDraftId(characterId)))).toBe(before);
+
+    await clickAction(host, 'co-create-accept');
+    await settle();
+    expect(fieldValue(host, '[data-field="voice-desire"]')).toBe('82');
+    expect(fieldValue(host, '[data-field="voice-ability"]')).toBe('64');
+    // The scheduler's hard limits stay the author's own.
+    expect(fieldValue(host, '[data-field="voice-maxLinesPerRound"]')).toBe('1');
+
+    await clickAction(host, 'co-create-undo');
+    await settle();
+    expect(fieldValue(host, '[data-field="voice-desire"]')).toBe('50');
+    expect(JSON.stringify(await storedValue(characterDraftId(characterId)))).toBe(before);
   });
 });
