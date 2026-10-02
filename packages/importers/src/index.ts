@@ -27,6 +27,9 @@
  *   ./payload         the `data/` layout, canonical JSON and the row orderings
  *   ./sillytavern     SillyTavern character cards (PNG/JSON) and world info ⇄ our
  *                     entities, with the same "report, never throw" shape (M1-I1)
+ *   ./examples        the M1-I2 example content pack: readable source, a bundle
+ *                     builder, and the rows → session step that proves "import it
+ *                     and start playing" at the row level
  *   ./testing/fixtures one complete library, for tests and for the CLI's demo
  *
  * The in-package test doubles live in `./testing/`. The storage double IS
@@ -34,6 +37,7 @@
  */
 export * from './canonical-json';
 export * from './deep-equal';
+export * from './examples';
 export * from './export-package';
 export * from './identity';
 export * from './import-package';

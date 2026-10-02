@@ -9,9 +9,11 @@
  */
 import { parseArgs } from 'node:util';
 import {
+  type BuildExampleOptions,
   type CommonOptions,
   EXIT,
   type ImportOptions,
+  runBuildExample,
   runImport,
   runInspect,
   runUnpack,
@@ -20,17 +22,19 @@ import {
 } from './commands';
 import { type CliIo, defaultCliIo } from './format';
 
-export const USAGE = `stpack — inspect, validate, unpack and import .stpack packages
+export const USAGE = `stpack — inspect, validate, unpack, import and build .stpack packages
 
 Usage:
   stpack validate <file>          check a package, exit 1 if it is not importable
   stpack inspect  <file>          print the manifest summary and the content list
   stpack unpack   <file> <dir>    extract a package into <dir> (manifest first)
   stpack import   <file> <lib>    import into a JSON library and print the report
+  stpack example  <file>          build the built-in example content pack (docs/06 M1-I2)
 
 Options:
   --json          machine-readable output on stdout
   --force         unpack: overwrite files that already exist
+                  example: overwrite an existing .stpack
   --dry-run       import: report what would happen, write nothing
   --select a,b    import: only these payload categories (worlds, characters, …)
   -h, --help      show this message
@@ -138,6 +142,14 @@ export async function main(argv: readonly string[], io: CliIo = defaultCliIo): P
         ...(only === undefined ? {} : { only }),
       };
       return runImport(file, library, importOptions, io);
+    }
+    case 'example': {
+      if (file === undefined) {
+        io.err('stpack: example needs a <file>');
+        return EXIT.usage;
+      }
+      const exampleOptions: BuildExampleOptions = { ...options, force: values.force === true };
+      return runBuildExample(file, exampleOptions, io);
     }
     default: {
       io.err(`stpack: unknown command ${JSON.stringify(command)}`);
