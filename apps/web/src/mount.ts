@@ -65,6 +65,7 @@ export { closeDatabase, resetDatabase, subscribe } from './db/database';
 export { resetAppearanceStore, useAppearanceStore } from './state/appearance-store';
 export { configureChat, resetChat, useChatStore } from './state/chat-store';
 export {
+  coCreateRequests,
   configureCoCreate,
   resetCoCreate,
   useCoCreateStore,

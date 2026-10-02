@@ -112,6 +112,62 @@ const PATH_LABELS: ReadonlyMap<string, MessageKey> = new Map([
 ]);
 
 /**
+ * Every GROUP a descriptor of the form names, with the heading it introduces.
+ *
+ * WHY A GROUP IS NOT SIMPLY THE PARENT OF A PATH: a descriptor group can be two tokens deep
+ * (`visual.style`, `visual.appearance`), and the path `/narrative/themes` has no descriptor of its own
+ * — so the heading to fall back on is the NEAREST ANCESTOR that is a group, found by walking `/`-token
+ * prefixes from the longest down. Building this from `GROUP_PATH_ENTRIES` (instead of writing it out)
+ * is what keeps the walk from naming a group the form does not have: `/narrative/themes` finds
+ * `narrative` because `narrative.conflict` declares it, and a second list could not know that.
+ */
+const PATH_GROUP_LABELS: ReadonlyMap<string, MessageKey> = groupLabels();
+
+/** The `/a`, `/a/b` prefixes of one dotted path, longest first (`a.b.c` -> `/a/b/c`, `/a/b`, `/a`). */
+function candidateKeys(dotted: string): string[] {
+  const parts = dotted.split('.');
+  let pointer = '';
+  const keys: string[] = [];
+  for (const part of parts) {
+    pointer = `${pointer}/${part}`;
+    keys.push(pointer);
+  }
+  return keys;
+}
+
+/** The shortest `/`-prefix of a path: its TOP-LEVEL group (`a.b.c` -> `/a`, `name` -> `/name`). */
+function rootKey(dotted: string): string {
+  return candidateKeys(dotted)[0] ?? '';
+}
+
+/** One `/`-prefix as the dotted spelling `PATH_LABELS` is keyed by (`/rulesOfNature/taboos`). */
+function labelKey(pointer: string): string {
+  return dottedOf(pointer);
+}
+
+/**
+ * Every group heading the descriptor tables introduce.
+ *
+ * The prefixes are walked LONGEST FIRST so that a two-token group wins over its own parent: the group
+ * `visual.style` must be read before `visual`, or every style field would be labelled with the visual
+ * bible's heading instead of its own.
+ */
+function groupLabels(): ReadonlyMap<string, MessageKey> {
+  const found = new Map<string, MessageKey>();
+  for (const [dotted, label] of GROUP_PATH_ENTRIES) {
+    // The last token is the FIELD's own name; the prefix before it names the group it lives in.
+    const keys = candidateKeys(dotted);
+    const group = keys[keys.length - 2];
+    if (group !== undefined && !found.has(group)) found.set(group, label);
+  }
+  for (const [dotted, label] of COMPOSITE_PATH_ENTRIES) {
+    const key = rootKey(dotted);
+    if (key !== '' && !found.has(key)) found.set(key, label);
+  }
+  return found;
+}
+
+/**
  * Every payload path a proposal may name, in the order `cards/world.ts` declares the form's fields.
  *
  * WHY IT IS DERIVED FROM `WORLD_FORM_PATHS` AND NOT WRITTEN OUT HERE
@@ -134,8 +190,15 @@ function pointerOf(dotted: string): string {
   return `/${dotted.split('.').join('/')}`;
 }
 
-/** One pointer as a dotted path, with every token unescaped. */
-function dottedOf(pointer: string): string {
+/**
+ * One pointer as a dotted path, with every token unescaped.
+ *
+ * EXPORTED FOR THE STEP AND FIELD-SCOPE MODULES (M1-W3 / M1-W4): a step covers a whole GROUP of
+ * fields (`calendar.months`), so the gate has to ask whether one path is a prefix of another in the
+ * form's own vocabulary rather than in pointer text, where `/calendar/month` would read as a prefix
+ * of `/calendar/months`. This is the one function that turns a pointer back into that vocabulary.
+ */
+export function dottedOf(pointer: string): string {
   if (pointer === '') return '';
   return pointer
     .split('/')
@@ -144,12 +207,26 @@ function dottedOf(pointer: string): string {
     .join('.');
 }
 
-/** The label for one dotted path: its own descriptor, else its group's heading. */
+/**
+ * The label for one dotted path: its own descriptor, else the nearest GROUP heading that HAS a label.
+ *
+ * WHY IT WALKS UP INSTEAD OF CHECKING THE IMMEDIATE PARENT: the form's descriptors are as deep as
+ * `visual.style.preset`, so the parent of a path without one of its own is often a group with no label
+ * either (`visual.style`, `narrative`) — and the one-token version answered `common.customFieldsTitle`
+ * for `/narrative/themes`, which is a WRONG label rather than a missing one, printed beside the
+ * control the field belongs to. The walk stops at a path with a descriptor (`/narrative`) or at a
+ * composite heading (`/calendar`, `/openingHooks`), and the generic fallback is reached only when the
+ * path is under no named group at all — a `customFields` key, which has no heading by design.
+ */
 function labelFor(dotted: string): MessageKey {
-  const exact = PATH_LABELS.get(dotted);
-  if (exact !== undefined) return exact;
-  const parent = dotted.slice(0, Math.max(0, dotted.lastIndexOf('.')));
-  return PATH_LABELS.get(parent) ?? 'common.customFieldsTitle';
+  const keys = candidateKeys(dotted);
+  for (let index = keys.length - 1; index >= 0; index -= 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
+    const label = PATH_LABELS.get(labelKey(key)) ?? PATH_GROUP_LABELS.get(key);
+    if (label !== undefined) return label;
+  }
+  return 'common.customFieldsTitle';
 }
 
 /**

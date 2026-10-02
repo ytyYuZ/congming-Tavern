@@ -414,6 +414,65 @@ export const zhCN = {
   'co-create.malformedTooManyOps':
     'AI 一次给出了太多条改动。草稿没有变化，请让它分几次来。\n\nAI 的回答：{detail}',
 
+  /*
+   * ── co-create: 生成模式与字段级操作 (M1-W3 / M1-W4, docs/06 §2.5) ───────────
+   *
+   * WHY THE STEP NAMES ARE THEIR OWN KEYS RATHER THAN `world.` LABELS
+   * A step is named for the GROUP of fields it writes (「世界设定」), and a group is not a field: the
+   * form renders a label per control, and a step covering three of them has no single one to borrow.
+   * The keys are listed in the plan's own order, so a reviewer can read the flow here.
+   *
+   * WHY THE SCOPE FINDINGS NAME A PATH (`{detail}`)
+   * "The AI edited something else" is not actionable; 「它写了 /era」 is. The path is the model's own
+   * pointer, quoted verbatim, because that is what the author would send back to it.
+   */
+  'co-create.generateTitle': '生成模式',
+  'co-create.generateHint':
+    '让 AI 按步骤把这张卡写出来：每个步骤单独请求一次，你逐步骤采纳或否决，草稿随之逐步长出来。',
+  'co-create.generateStart': '从零生成',
+  'co-create.generateNext': '生成下一步',
+  'co-create.generateSkip': '跳过这一步',
+  'co-create.generateStop': '停止生成',
+  'co-create.generateStepOf': '第 {current} / {total} 步',
+  'co-create.stepPremise': '一句话概要',
+  'co-create.stepBasics': '世界设定',
+  'co-create.stepPlaces': '地区',
+  'co-create.stepPowers': '势力',
+  'co-create.stepRules': '规则与禁忌',
+  'co-create.stepNarrative': '叙事',
+  'co-create.stepTelling': '题材、主题与开场',
+  'co-create.stepField': '这个字段',
+  'co-create.stepStatePending': '待生成',
+  'co-create.stepStateAccepted': '已采纳',
+  'co-create.stepStateRejected': '已否决',
+  'co-create.stepStateSkipped': '已跳过',
+  'co-create.nothingSelected': '还没有选择要生成的字段。勾选至少一个字段，再点「生成选中的字段」。',
+  'co-create.noGeneration': '当前没有正在进行的生成流程。先点「从零生成」或「生成选中的字段」。',
+  'co-create.generationBusy': '生成流程正在进行。先采纳、否决或停止当前步骤，再对单个字段操作。',
+  'co-create.finishFirst': '还有一份提案没有处理。先采纳或否决它，再发起新的请求。',
+  'co-create.genreFirst': '这张卡还只有名字：先在「题材」里写一两个词，AI 才知道要往哪个方向写。',
+  /** `{detail}` is the pointer the model tried to write. */
+  'co-create.outOfScope':
+    'AI 这次改动超出了本步骤的范围（它写了 {detail}），整份提案都没有应用。草稿没有变化。',
+
+  /*
+   * 字段级 AI 操作 (docs/06 §2.5 M1-W4): 选中字段 → 重写 / 扩写 / 精简.
+   *
+   * WHY THE THREE GESTURES ARE LABELS AND NOT A MENU
+   * They are the three the milestone names, they take the same argument (one field), and each is one
+   * clickable word. A `<select>` would hide two of them behind a second gesture for no gain.
+   */
+  'co-create.fieldTitle': '字段级 AI 操作',
+  'co-create.fieldHint':
+    '选择一个字段，让 AI 只改这一个字段：提案只会落在它上面，动到别处的提案会被直接拒绝。',
+  'co-create.fieldSelectLabel': '选择字段',
+  'co-create.fieldRewrite': '重写',
+  'co-create.fieldExpand': '扩写',
+  'co-create.fieldCondense': '精简',
+  'co-create.fieldOpTitle': '{op}：{field}',
+  'co-create.fieldSetStart': '生成选中的字段',
+  'co-create.selectedTitle': '已选字段',
+
   /* ── character: the character-card library and editor (M1-C1) ────────────── */
   'character.libraryTitle': '角色卡库',
   'character.libraryHint': '角色卡兼容 SillyTavern V2/V3 字段，并保存发言档案与视觉档案。',
@@ -1036,6 +1095,51 @@ export const en: Messages = {
     'One entry of the AI’s answer is not a valid patch operation. The draft is unchanged, so try again.\n\nThe AI answered:\n{detail}',
   'co-create.malformedTooManyOps':
     'The AI proposed too many changes at once. The draft is unchanged; ask it to do them in smaller steps.\n\nThe AI answered:\n{detail}',
+
+  /* ── 生成模式与字段级操作 (M1-W3 / M1-W4, docs/06 §2.5) ─────────────────── */
+  'co-create.generateTitle': 'Generation',
+  'co-create.generateHint':
+    'Have the AI write this card in steps: each step is one request of its own, and you accept or refuse them one at a time, so the draft grows as you go.',
+  'co-create.generateStart': 'Generate from scratch',
+  'co-create.generateNext': 'Generate this step',
+  'co-create.generateSkip': 'Skip this step',
+  'co-create.generateStop': 'Stop generating',
+  'co-create.generateStepOf': 'Step {current} of {total}',
+  'co-create.stepPremise': 'One-line premise',
+  'co-create.stepBasics': 'World facts',
+  'co-create.stepPlaces': 'Regions',
+  'co-create.stepPowers': 'Factions',
+  'co-create.stepRules': 'Rules and taboos',
+  'co-create.stepNarrative': 'Narrative',
+  'co-create.stepTelling': 'Genre, themes and hooks',
+  'co-create.stepField': 'This field',
+  'co-create.stepStatePending': 'to generate',
+  'co-create.stepStateAccepted': 'accepted',
+  'co-create.stepStateRejected': 'refused',
+  'co-create.stepStateSkipped': 'skipped',
+  'co-create.nothingSelected':
+    'No field is selected yet. Tick at least one field, then press “Generate the selected fields”.',
+  'co-create.noGeneration':
+    'No generation is running. Start one with “Generate from scratch” or “Generate the selected fields”.',
+  'co-create.generationBusy':
+    'A generation is running. Accept, refuse or stop the current step before working on a single field.',
+  'co-create.finishFirst':
+    'One proposal is still unanswered. Accept or refuse it before starting another request.',
+  'co-create.genreFirst':
+    'This card has nothing but a name: write a word or two under “Genre” first, so the AI knows which way to write.',
+  'co-create.outOfScope':
+    'This answer reached outside the current step (it wrote {detail}), so none of the proposal was applied. The draft is unchanged.',
+
+  'co-create.fieldTitle': 'Field-level AI actions',
+  'co-create.fieldHint':
+    'Pick a field and let the AI change only that one: the proposal lands on it alone, and a proposal that touches anything else is refused.',
+  'co-create.fieldSelectLabel': 'Field',
+  'co-create.fieldRewrite': 'Rewrite',
+  'co-create.fieldExpand': 'Expand',
+  'co-create.fieldCondense': 'Condense',
+  'co-create.fieldOpTitle': '{op}: {field}',
+  'co-create.fieldSetStart': 'Generate the selected fields',
+  'co-create.selectedTitle': 'Selected fields',
 
   /* ── the character-card library and editor (M1-C1) ──────────────────────── */
   'character.libraryTitle': 'Character cards',
