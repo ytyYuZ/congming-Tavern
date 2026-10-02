@@ -93,6 +93,7 @@ const WORLD_ISSUE_LABELS: ReadonlyMap<string, MessageKey> = new Map<string, Mess
     ['calendar', 'world.calendarNameLabel'],
     ['startMinute', 'world.startMinuteLabel'],
     ['openingHooks', 'world.openingHooksLabel'],
+    ['customFields', 'common.customFieldsTitle'],
   ] as const satisfies readonly (readonly [string, MessageKey])[]),
 ]);
 
@@ -384,10 +385,8 @@ export function WorldRoute({ worldId }: { worldId: string }) {
       </section>
 
       <CustomFieldsPanel
-        extensions={extensions}
-        onChange={(next) => {
-          void edit(data, next);
-        }}
+        value={data.customFields}
+        onChange={(customFields) => write({ ...data, customFields })}
       />
     </>
   );

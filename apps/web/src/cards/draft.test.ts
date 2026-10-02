@@ -65,12 +65,28 @@ describe('the world draft row', () => {
   it('round-trips through the JSON a settings row holds', () => {
     const draft = {
       baseVersion: 2,
-      data: { ...blankWorldData('草稿'), premise: '改过的设定' },
-      extensions: { 'x-custom.weather': { label: '天气', value: '暴雪' } },
+      data: { ...blankWorldData('草稿'), premise: '改过的设定', customFields: { 天气: '暴雪' } },
+      // A PLUGIN key: the bag travels with the draft so a plugin's data survives a user edit,
+      // while the user's own fields are payload members (`cards/custom-fields.ts`).
+      extensions: { 'x-mythos.sanity': 9 },
     };
     const value: JsonValue = worldDraftValue(draft);
     const read = readWorldDraft(toJson(value), baseWorldVersion);
     expect(read).toEqual(draft);
+  });
+
+  it('folds a legacy x-custom.* bag into the payload record on the way in', () => {
+    // A draft row written before the ruling: the user's field is in the envelope's bag, the
+    // payload record is empty. Opening the card must show the field where it now lives, and the
+    // bag must come back without it so the next publish does not carry it forever.
+    const stored = toJson({
+      baseVersion: 2,
+      data: { ...jsonObject(toJson(blankWorldData('草稿'))), customFields: {} },
+      extensions: { 'x-custom.weather': { label: '天气', value: '暴雪' }, 'x-mythos.sanity': 9 },
+    });
+    const read = readWorldDraft(stored, baseWorldVersion);
+    expect(read?.data.customFields).toEqual({ 天气: '暴雪' });
+    expect(read?.extensions).toEqual({ 'x-mythos.sanity': 9 });
   });
 
   it('keeps a half-typed payload and completes only what it cannot read', () => {
@@ -127,14 +143,18 @@ describe('the character draft row', () => {
   it('round-trips through the JSON a settings row holds', () => {
     const draft = {
       baseVersion: 5,
-      data: { ...blankCharacterData('草稿'), description: '改过的描述' },
-      extensions: { 'x-custom.faction': { label: '阵营', value: '中立' } },
+      data: {
+        ...blankCharacterData('草稿'),
+        description: '改过的描述',
+        customFields: { 阵营: '中立' },
+      },
+      extensions: { 'x-plugin.note': 'kept' },
     };
     const value: JsonValue = characterDraftValue(draft);
     expect(readCharacterDraft(toJson(value), baseCharacterVersion)).toEqual(draft);
   });
 
-  it('reads a half-typed card and keeps both foreign bags', () => {
+  it('reads a half-typed card and keeps the foreign bag as well as the custom record', () => {
     const read = readCharacterDraft(
       {
         baseVersion: 5,
@@ -152,5 +172,14 @@ describe('the character draft row', () => {
     expect(read?.data.description).toBe(baseCharacterVersion.data.description);
     expect(read?.data.stExtensions).toEqual({ talkativeness: 0.5 });
     expect(read?.data.customFields).toEqual({ 阵营: '中立' });
+  });
+
+  it('leaves an ABSENT custom record absent when the bag holds nothing to move', () => {
+    // `CharacterData.customFields` is optional: a card that never had one must not gain `{}`.
+    const read = readCharacterDraft(
+      { baseVersion: 5, data: { name: 'x' }, extensions: {} },
+      baseCharacterVersion,
+    );
+    expect(read?.data).not.toHaveProperty('customFields');
   });
 });

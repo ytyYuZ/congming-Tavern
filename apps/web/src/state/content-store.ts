@@ -110,8 +110,15 @@ export interface ContentState {
   openCharacter: (characterId: Id) => Promise<void>;
   /** Forget the open card. Called by the route on unmount. */
   close: () => void;
-  /** Autosave one world edit. Resolves whether the draft row was written. */
+  /**
+   * Autosave one world edit. Resolves whether the draft row was written.
+   *
+   * `extensions` is the VERSION ENVELOPE's plugin bag, not the user's own fields — those are
+   * payload data (`cards/custom-fields.ts`). The editor renders no part of it; it travels through
+   * the draft so a plugin's data survives a user edit instead of being dropped by the next publish.
+   */
   editWorld: (data: WorldData, extensions: Extensions) => Promise<boolean>;
+  /** The same, for a character card. */
   editCharacter: (data: CharacterData, extensions: Extensions) => Promise<boolean>;
   /** Publish the open world's draft as a new version. See the header for the order. */
   publishWorld: () => Promise<boolean>;

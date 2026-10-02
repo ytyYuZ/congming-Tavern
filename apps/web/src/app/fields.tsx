@@ -23,14 +23,13 @@
  * `positive()` rule is what should say so — reported, not clamped.
  */
 import type { MessageKey } from '@smarttavern/i18n';
-import type { Extensions } from '@smarttavern/schema';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import {
   customFieldsOf,
   withCustomField,
   withCustomFieldValue,
   withoutCustomField,
-} from '../cards/extensions';
+} from '../cards/custom-fields';
 import {
   appendItem,
   type BooleanFieldSpec,
@@ -437,38 +436,40 @@ export function RowList<T>({
 /* ───────────────────────────── 自定义字段 (M1-W1) ─────────────────────────── */
 
 /**
- * The custom-field panel: the user's own key/value pairs, stored in the version envelope's
- * `extensions` bag (`cards/extensions.ts` records why that is the only channel).
+ * The custom-field panel: the user's own key/value pairs, stored in the payload's `customFields`
+ * record (`cards/custom-fields.ts` records why that is the user's channel and `extensions` is the
+ * plugin's).
  *
- * WHY THE LABEL IS NOT EDITABLE IN PLACE: the derived key IS the field's identity, so renaming is
- * a delete plus an add — the same rule the status bar's variable rows follow, and the reason the
- * panel's hint says so out loud. WHY A REFUSAL IS A SENTENCE AND NOT A SILENT NO-OP: a label with
- * no letter or digit has no key, and a duplicate would silently overwrite the field it collides
- * with; both are refused before anything is written.
+ * WHY THE LABEL IS NOT EDITABLE IN PLACE: the key IS the field's identity, so renaming is a delete
+ * plus an add — the same rule the status bar's variable rows follow, and the reason the panel's
+ * hint says so out loud. WHY A REFUSAL IS A SENTENCE AND NOT A SILENT NO-OP: a blank label names
+ * nothing, and a duplicate would overwrite the field it collides with; both are refused before
+ * anything is written.
  */
 export function CustomFieldsPanel({
-  extensions,
+  value,
   onChange,
 }: {
-  extensions: Extensions;
-  onChange: (next: Extensions) => void;
+  /** The payload's own record; an absent optional record is passed as `{}`. */
+  value: Readonly<Record<string, string>>;
+  onChange: (next: Record<string, string>) => void;
 }) {
   const { t } = useTranslation();
-  const fields = customFieldsOf(extensions);
+  const fields = customFieldsOf(value);
   const [name, setName] = useState('');
-  const [value, setValue] = useState('');
+  const [text, setText] = useState('');
   const [refused, setRefused] = useState(false);
 
   const onAdd = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    const next = withCustomField(extensions, name, value);
+    const next = withCustomField(value, name, text);
     if (next === undefined) {
       setRefused(true);
       return;
     }
     setRefused(false);
     setName('');
-    setValue('');
+    setText('');
     onChange(next);
   };
 
@@ -482,23 +483,21 @@ export function CustomFieldsPanel({
       ) : (
         <ul className="custom-list">
           {fields.map((field) => (
-            <li className="custom-row" key={field.key} data-custom={field.key}>
+            <li className="custom-row" key={field.label} data-custom={field.label}>
               <label className="field">
                 <span className="variable-name">{field.label}</span>
                 <input
-                  data-field={`custom-${field.key}`}
+                  data-field={`custom-${field.label}`}
                   value={field.value}
                   onChange={(event) => {
-                    onChange(
-                      withCustomFieldValue(extensions, field.key, field.label, event.target.value),
-                    );
+                    onChange(withCustomFieldValue(value, field.label, event.target.value));
                   }}
                 />
               </label>
               <button
                 className="btn btn-small"
                 type="button"
-                onClick={() => onChange(withoutCustomField(extensions, field.key))}
+                onClick={() => onChange(withoutCustomField(value, field.label))}
               >
                 {t('common.removeItem')}
               </button>
@@ -524,9 +523,9 @@ export function CustomFieldsPanel({
         <input
           id="custom-field-value"
           data-field="custom-field-value"
-          value={value}
+          value={text}
           placeholder={t('common.customFieldValueLabel')}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => setText(event.target.value)}
         />
         <button className="btn btn-primary" type="submit">
           {t('common.customFieldAdd')}

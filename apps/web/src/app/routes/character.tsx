@@ -86,6 +86,7 @@ const CHARACTER_ISSUE_LABELS: ReadonlyMap<string, MessageKey> = new Map<string, 
     ['visual.references', 'character.referencesLabel'],
     ['sampling.stop', 'character.samplingStopLabel'],
     ['sampling.reasoningEffort', 'character.samplingReasoningLabel'],
+    ['customFields', 'common.customFieldsTitle'],
   ] as const satisfies readonly (readonly [string, MessageKey])[]),
 ]);
 
@@ -408,10 +409,8 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
       </section>
 
       <CustomFieldsPanel
-        extensions={extensions}
-        onChange={(next) => {
-          void edit(data, next);
-        }}
+        value={data.customFields ?? {}}
+        onChange={(customFields) => write({ ...data, customFields })}
       />
     </>
   );

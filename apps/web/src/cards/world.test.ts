@@ -25,7 +25,6 @@ import {
   blankWorldData,
   completeWorldData,
   WORLD_DELEGATED_PATHS,
-  WORLD_ENVELOPE_PATHS,
   WORLD_FORM_PATHS,
   worldIssues,
 } from './world';
@@ -102,11 +101,7 @@ const fullWorld: WorldData = {
 
 describe('the form inventory', () => {
   it('covers every leaf of WorldDataSchema, or delegates it on purpose', () => {
-    const declared = new Set([
-      ...WORLD_FORM_PATHS,
-      ...WORLD_DELEGATED_PATHS,
-      ...WORLD_ENVELOPE_PATHS,
-    ]);
+    const declared = new Set([...WORLD_FORM_PATHS, ...WORLD_DELEGATED_PATHS]);
     const missing = leafPaths(WorldDataSchema).filter((path) => !declared.has(path));
     expect(missing).toEqual([]);
   });
@@ -119,11 +114,12 @@ describe('the form inventory', () => {
     expect(unknown).toEqual([]);
   });
 
-  it('delegates exactly one payload field, and says which', () => {
-    // The payload's own `customFields` record: superseded for new data by the envelope's
-    // `extensions`, and preserved by hydration rather than edited.
-    expect(WORLD_DELEGATED_PATHS).toEqual(['customFields']);
-    expect(WORLD_ENVELOPE_PATHS).toEqual(['extensions']);
+  it('delegates NOTHING: every member of WorldData has exactly one control', () => {
+    // `customFields` included — it is the payload's own record, not the plugin bag
+    // (`cards/custom-fields.ts`). An empty answer is pinned rather than assumed, so a later edit
+    // that quietly drops a control has to say so here.
+    expect(WORLD_DELEGATED_PATHS).toEqual([]);
+    expect(WORLD_FORM_PATHS).toContain('customFields');
   });
 });
 

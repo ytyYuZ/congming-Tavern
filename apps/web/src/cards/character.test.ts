@@ -9,8 +9,9 @@
  *    the SESSION, and a card that grew one would fight the session that owns it. The only
  *    speaking-role vocabulary a card has is `voice.roles`, which says how a card speaks, never
  *    who is playing whom.
- * 3. The two foreign bags (`stExtensions`, `customFields`) survive hydration VERBATIM: they are
- *    I1's round trip and other people's data, and nothing here may decide they can be dropped.
+ * 3. The two BAGS stay separate and both survive hydration VERBATIM: `stExtensions` is another
+ *    program's keys (I1's round trip, never rendered), while `customFields` is the author's own
+ *    record and has a control — nothing here may decide either can be dropped or merged.
  * 4. `completeCharacterData` is total: a damaged draft falls back field by field and never throws.
  */
 import { type CharacterData, CharacterDataSchema, UUID_V7_PATTERN } from '@smarttavern/schema';
@@ -21,7 +22,6 @@ import {
   blankOutfit,
   blankReference,
   CHARACTER_DELEGATED_PATHS,
-  CHARACTER_ENVELOPE_PATHS,
   CHARACTER_FORM_PATHS,
   characterIssues,
   completeCharacterData,
@@ -89,11 +89,7 @@ const fullCard: CharacterData = {
 
 describe('the form inventory', () => {
   it('covers every leaf of CharacterDataSchema, or delegates it on purpose', () => {
-    const declared = new Set([
-      ...CHARACTER_FORM_PATHS,
-      ...CHARACTER_DELEGATED_PATHS,
-      ...CHARACTER_ENVELOPE_PATHS,
-    ]);
+    const declared = new Set([...CHARACTER_FORM_PATHS, ...CHARACTER_DELEGATED_PATHS]);
     const missing = leafPaths(CharacterDataSchema).filter((path) => !declared.has(path));
     expect(missing).toEqual([]);
   });
@@ -106,11 +102,12 @@ describe('the form inventory', () => {
     expect(unknown).toEqual([]);
   });
 
-  it('delegates the two foreign bags, and says which', () => {
-    // `stExtensions` holds other people's ST keys; `customFields` is superseded for new data by
-    // the envelope's `extensions`. Both are preserved by hydration, neither is rendered.
-    expect(CHARACTER_DELEGATED_PATHS).toEqual(['stExtensions', 'customFields']);
-    expect(CHARACTER_ENVELOPE_PATHS).toEqual(['extensions']);
+  it('delegates the FOREIGN bag and nothing else', () => {
+    // `stExtensions` holds other people's ST keys (talkativeness, depth_prompt, …) that this app
+    // does not model, so it is preserved verbatim and never rendered. `customFields` is the
+    // author's OWN record and HAS a control — the contrast is the point (`cards/custom-fields.ts`).
+    expect(CHARACTER_DELEGATED_PATHS).toEqual(['stExtensions']);
+    expect(CHARACTER_FORM_PATHS).toContain('customFields');
   });
 });
 

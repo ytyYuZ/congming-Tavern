@@ -97,20 +97,20 @@ export const zhCN = {
   'common.issuesNone': '没有校验问题，可以发布。',
   'common.issue': '{field}：{detail}',
   /*
-   * 自定义字段 (docs/01 §F2-1 「含自定义字段增删」) live in the version envelope's `extensions`,
-   * because `common.ts` rule 1 makes that the only sanctioned channel for data outside the
-   * domain fields. A user's label is not a legal extension key (`x-[a-z0-9-]` per segment), so
-   * the key is derived from it and the label itself is stored beside the value
-   * (`cards/extensions.ts` records the whole design).
+   * 自定义字段 (docs/01 §F2-1 「含自定义字段增删」) live in the card's OWN `customFields` record
+   * (`docs/02` §4), where the key is the label the user typed — no key minting, no slug. They are
+   * deliberately NOT in `extensions`: that bag is the plugin namespace, and a reader of `x-*` keys
+   * must not find the author's own notes among them. Renaming is remove-and-add because the key IS
+   * the field's identity (`cards/custom-fields.ts` records the whole rule).
    */
   'common.customFieldsTitle': '自定义字段',
   'common.customFieldsHint':
-    '自定义字段保存在版本信封的 extensions（x-custom.*）里：键由字段名推导，字段名本身存在值里，所以改名等于删除后重新添加。',
+    '自定义字段保存在卡片数据的 customFields 里，字段名就是键，所以改名等于删除后重新添加。',
   'common.customFieldNameLabel': '字段名',
   'common.customFieldValueLabel': '字段值',
   'common.customFieldAdd': '添加字段',
   'common.customFieldEmpty': '还没有自定义字段。',
-  'common.customFieldRefused': '字段名需要至少一个字母或数字，且不能与已有字段重名',
+  'common.customFieldRefused': '字段名不能为空，且不能与已有字段重名',
 
   /* ── nav: the shell's navigation ─────────────────────────────────────────── */
   /**
@@ -702,13 +702,12 @@ export const en: Messages = {
   'common.issue': '{field}: {detail}',
   'common.customFieldsTitle': 'Custom fields',
   'common.customFieldsHint':
-    'Custom fields are stored in the version envelope’s extensions (x-custom.*): the key is derived from the field name and the name itself is stored in the value, so renaming means removing and adding again.',
+    'Custom fields are stored in the card data’s customFields record, where the field name IS the key — so renaming means removing and adding again.',
   'common.customFieldNameLabel': 'Field name',
   'common.customFieldValueLabel': 'Field value',
   'common.customFieldAdd': 'Add a field',
   'common.customFieldEmpty': 'No custom fields yet.',
-  'common.customFieldRefused':
-    'A field name needs at least one letter or digit, and must not repeat an existing one',
+  'common.customFieldRefused': 'A field name cannot be blank, and must not repeat an existing one',
 
   /* ── nav ────────────────────────────────────────────────────────────────── */
   'nav.language': 'Language',

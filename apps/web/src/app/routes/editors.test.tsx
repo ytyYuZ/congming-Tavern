@@ -223,9 +223,25 @@ describe('the world editor', () => {
     // The validation panel is always visible, and this payload has nothing wrong with it.
     expect(host.querySelector('[data-status="issues-none"]')).not.toBeNull();
 
+    // 自定义字段: the label the user typed IS the key, with no minting in between, and a blank one
+    // is refused with a sentence instead of writing nothing silently.
+    await clickButton(host, '添加字段');
+    expect(host.textContent).toContain('字段名不能为空');
+    await typeInto(host, '[data-field="custom-field-name"]', '天气');
+    await typeInto(host, '[data-field="custom-field-value"]', '暴雪');
+    await clickButton(host, '添加字段');
+    const withField = await waitForRow(async () => {
+      const stored = await storedValue(worldDraftId(worldId));
+      return JSON.stringify(stored ?? null).includes('暴雪') ? stored : undefined;
+    });
+    expect(JSON.stringify(withField)).toContain('"天气":"暴雪"');
+    // ...and it is NOT in the plugin bag.
+    expect(JSON.stringify(withField)).not.toContain('x-custom');
+
     await clickButton(host, '发布新版本');
     const second = await waitForRow(() => getWorldVersion(worldId, 2));
     expect(second.data.name).toBe('银松群岛');
+    expect(second.data.customFields).toEqual({ 天气: '暴雪' });
     expect(second.lineage?.parentVersion).toBe(1);
     expect(await storedValue(worldDraftId(worldId))).toBeUndefined();
     expect((await getWorld(worldId))?.headVersion).toBe(2);

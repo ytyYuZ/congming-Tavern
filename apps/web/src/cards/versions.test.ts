@@ -54,7 +54,7 @@ describe('planWorldVersion', () => {
       head,
       base: { anchor: base, reason: '由世界卡编辑器发布' },
       data: frozenData,
-      extensions: { 'x-custom.weather': { label: '天气', value: '暴雪' } },
+      extensions: { 'x-mythos.sanity': 9 },
       id: MINTED_ID,
       at: AT,
     });
@@ -66,9 +66,7 @@ describe('planWorldVersion', () => {
     expect(plan.version.createdAt).toBe(AT);
     expect(plan.version.updatedAt).toBe(AT);
     expect(plan.version.data).toBe(frozenData);
-    expect(plan.version.extensions).toEqual({
-      'x-custom.weather': { label: '天气', value: '暴雪' },
-    });
+    expect(plan.version.extensions).toEqual({ 'x-mythos.sanity': 9 });
     // The lineage sentence is the caller's, in the language active at the save.
     expect(plan.version.lineage).toEqual({
       parentId: PAST_VERSION_ID,
@@ -160,7 +158,7 @@ describe('planCharacterVersion', () => {
       head: character,
       base: { anchor: Object.freeze({ id: PAST_VERSION_ID, version: 1 }), reason: 'reason' },
       data,
-      extensions: { 'x-custom.faction': { label: '阵营', value: '中立' } },
+      extensions: { 'x-mythos.faction': '中立' },
       id: MINTED_ID,
       at: AT + 1,
     });
@@ -173,7 +171,7 @@ describe('planCharacterVersion', () => {
     expect(plan.character.name).toBe(data.name);
   });
 
-  it('leaves the head’s own extensions bag alone, because the envelope owns the channel', () => {
+  it('leaves the head’s own extensions bag alone, because the envelope owns the plugin channel', () => {
     const withPlugin: Character = Object.freeze({
       ...character,
       extensions: { 'x-plugin.note': 'kept' },
@@ -182,13 +180,14 @@ describe('planCharacterVersion', () => {
       head: withPlugin,
       base: undefined,
       data: Object.freeze(blankCharacterData('莉安')),
-      extensions: { 'x-custom.a': { label: 'a', value: 'b' } },
+      extensions: { 'x-mythos.sanity': 9 },
       id: MINTED_ID,
       at: AT,
     });
-    // One plugin slot per artefact: the version's. The head's existing bag is preserved as it
-    // was and never becomes the place custom fields are written.
+    // One plugin slot per artefact: the version's. The head's existing bag is preserved as it was,
+    // and the user's own custom fields are payload members rather than bag entries.
     expect(plan.character.extensions).toEqual({ 'x-plugin.note': 'kept' });
-    expect(plan.version.extensions).toEqual({ 'x-custom.a': { label: 'a', value: 'b' } });
+    expect(plan.version.extensions).toEqual({ 'x-mythos.sanity': 9 });
+    expect(plan.version.data.customFields).toBeUndefined();
   });
 });

@@ -25,9 +25,10 @@
  * one. This editor therefore stores the id and says so in the panel's own hint; it does not
  * build an upload path, which is M2-I5's.
  *
- * 自定义字段 live in the version envelope's `extensions` (`cards/extensions.ts`), never in the
- * payload's `customFields` record — which hydration carries through untouched, because an
- * imported card may have one.
+ * 自定义字段 live in the payload's own `customFields` record (`docs/02` §4's shape for both card
+ * kinds), rendered by the same panel a world uses and governed by `cards/custom-fields.ts`: they
+ * are the author's data, so they do not belong in the plugin namespace — `stExtensions` is the bag
+ * that holds OTHER programs' keys, and the contrast is the reason both exist.
  */
 
 import type { MessageKey } from '@smarttavern/i18n';
@@ -564,23 +565,18 @@ export const CHARACTER_FORM_PATHS: readonly string[] = [
   'sampling.seed',
   'sampling.stop',
   'sampling.reasoningEffort',
+  'customFields',
 ];
 
 /**
- * The VERSION ENVELOPE's slot the custom-field panel edits.
+ * Payload fields the editor does NOT render, and why: exactly one.
  *
- * Not a payload path: `versionedEntity` owns the plugin channel and `common.ts` rule 1 makes it
- * the only sanctioned one (`cards/extensions.ts`). Listed so the completeness check can tell
- * "rendered" from "forgotten" without pretending `extensions` is a field of `CharacterData`.
+ * `stExtensions` holds FOREIGN SillyTavern extension keys (`talkativeness`, `depth_prompt`, …) that
+ * this app does not model. I1's import/export round trip needs them preserved verbatim, and a form
+ * that rendered them would have to invent a type for each key.
+ *
+ * `customFields` is deliberately NOT here: it is the user's own record, it has a control of its
+ * own, and the contrast with `stExtensions` is the point — one bag is the author's, the other is
+ * another program's (`cards/custom-fields.ts`).
  */
-export const CHARACTER_ENVELOPE_PATHS: readonly string[] = ['extensions'];
-
-/**
- * Payload fields the editor does NOT render, and why:
- * - `stExtensions` holds FOREIGN SillyTavern extension keys (talkativeness, depth_prompt, …)
- *   that this app does not model. I1's import/export round trip needs them preserved verbatim,
- *   and a form that rendered them would have to invent a type for each key.
- * - `customFields` is the payload's own custom-field record, superseded for new data by the
- *   envelope's `extensions` (`cards/extensions.ts`); hydration preserves it, never edits it.
- */
-export const CHARACTER_DELEGATED_PATHS: readonly string[] = ['stExtensions', 'customFields'];
+export const CHARACTER_DELEGATED_PATHS: readonly string[] = ['stExtensions'];

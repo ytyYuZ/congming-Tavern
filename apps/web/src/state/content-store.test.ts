@@ -152,19 +152,23 @@ describe('the world editor’s storage round trip', () => {
     expect(draft).toBeDefined();
     if (draft === undefined) return;
     const edited = populated(draft.data);
-    // A CJK value in a nested group, so the row is proven to survive a real character set too.
+    // A CJK value in a nested group and in the user's own field record, so the row is proven to
+    // survive a real character set in both places.
     const withText: WorldData = {
       ...edited,
       premise: '永冬之海上的群岛。',
       regions: [{ id: 'silverpine', name: '银松镇', description: '终年积雪。', tags: ['城镇'] }],
+      customFields: { 天气: '暴雪' },
     };
-    const extensions = { 'x-custom.weather': { label: '天气', value: '暴雪' } };
+    // The plugin bag travels with the draft and is never rendered (`cards/custom-fields.ts`).
+    const extensions = { 'x-mythos.sanity': 9 };
     await expect(store().editWorld(withText, extensions)).resolves.toBe(true);
 
     // THE ROW, not the form: the draft row holds exactly what was edited...
     const value = await storedValue(worldDraftId(worldId));
     expect(JSON.stringify(value)).toContain('永冬之海上的群岛。');
-    expect(JSON.stringify(value)).toContain('x-custom.weather');
+    expect(JSON.stringify(value)).toContain('暴雪');
+    expect(JSON.stringify(value)).toContain('x-mythos.sanity');
     const base = await getWorldVersion(worldId, 1);
     if (base === undefined) throw new Error('version 1 disappeared');
     expect((await readStoredWorldDraft(worldId, base))?.data).toEqual(withText);
@@ -178,6 +182,38 @@ describe('the world editor’s storage round trip', () => {
     expect(store().worldDraft?.data).toEqual(withText);
     expect(store().worldDraft?.extensions).toEqual(extensions);
     expect(store().worldDirty).toBe(true);
+  });
+
+  it('opens a card whose user fields are still in the legacy x-custom.* bag', async () => {
+    // The read-boundary repair, end to end: a row written by the earlier iteration must open with
+    // the field where it now lives, and publishing must persist it in the payload.
+    const worldId = await store().createWorld('w');
+    if (worldId === undefined) throw new Error('the world was not created');
+    const published = await getWorldVersion(worldId, 1);
+    if (published === undefined) throw new Error('version 1 is missing');
+    await write(async (tx) => {
+      await tx.collection<{ id: string; value: JsonValue }>(COLLECTIONS.settings).put({
+        id: worldDraftId(worldId),
+        value: {
+          baseVersion: 1,
+          data: published.data,
+          extensions: {
+            'x-custom.weather': { label: '天气', value: '暴雪' },
+            'x-mythos.sanity': 9,
+          },
+        },
+      });
+    });
+
+    await store().openWorld(worldId);
+    expect(store().worldDraft?.data.customFields).toEqual({ 天气: '暴雪' });
+    expect(store().worldDraft?.extensions).toEqual({ 'x-mythos.sanity': 9 });
+
+    await expect(store().publishWorld()).resolves.toBe(true);
+    const second = await getWorldVersion(worldId, 2);
+    // The next publish persists it in the payload record and does not carry the legacy key on.
+    expect(second?.data.customFields).toEqual({ 天气: '暴雪' });
+    expect(second?.extensions).toEqual({ 'x-mythos.sanity': 9 });
   });
 
   it('keeps a half-typed payload, and refuses to publish it', async () => {
@@ -329,17 +365,16 @@ describe('the character editor’s storage round trip', () => {
       },
       sampling: { temperature: 0.9, stop: ['\n\n'], reasoningEffort: 'high' },
       stExtensions: { talkativeness: 0.5 },
+      customFields: { 阵营: '中立' },
     };
-    await expect(
-      store().editCharacter(edited, { 'x-custom.faction': { label: '阵营', value: '中立' } }),
-    ).resolves.toBe(true);
-    // The foreign bag and the custom bag both survive the row round trip.
+    // The PLUGIN bag travels with the draft; the author's own field is payload data.
+    const extensions = { 'x-mythos.sanity': 9 };
+    await expect(store().editCharacter(edited, extensions)).resolves.toBe(true);
+    // The foreign bag, the plugin bag and the custom record all survive the row round trip.
     resetContentStore();
     await store().openCharacter(characterId);
     expect(store().characterDraft?.data).toEqual(edited);
-    expect(store().characterDraft?.extensions).toEqual({
-      'x-custom.faction': { label: '阵营', value: '中立' },
-    });
+    expect(store().characterDraft?.extensions).toEqual(extensions);
 
     await expect(store().publishCharacter()).resolves.toBe(true);
     const second = await getCharacterVersion(characterId, 2);

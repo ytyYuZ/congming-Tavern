@@ -43,6 +43,7 @@ import {
   type WorldVersion,
 } from '@smarttavern/schema';
 import { completeCharacterData } from './character';
+import { foldLegacyCustomFields } from './custom-fields';
 import { asNumber, jsonObject, memberValue, toJson } from './fields';
 import { completeWorldData } from './world';
 
@@ -60,16 +61,31 @@ export interface CharacterDraft {
   readonly extensions: Extensions;
 }
 
-/** The draft a published version would show if no draft row exists — the editor's fallback. */
+/**
+ * The draft a published version would show if no draft row exists — the editor's fallback.
+ *
+ * It also folds a legacy `x-custom.*` bag into the payload record on the way (`custom-fields.ts`),
+ * so a card whose user fields are still in the envelope opens with them visible and the next
+ * publish persists them in the right place.
+ */
 export function worldDraftOf(version: WorldVersion): WorldDraft {
-  return { baseVersion: version.version, data: version.data, extensions: version.extensions ?? {} };
+  const folded = foldLegacyCustomFields(version.data.customFields, version.extensions);
+  return {
+    baseVersion: version.version,
+    data: { ...version.data, customFields: folded.customFields ?? {} },
+    extensions: folded.extensions,
+  };
 }
 
 export function characterDraftOf(version: CharacterVersion): CharacterDraft {
+  const folded = foldLegacyCustomFields(version.data.customFields, version.extensions);
   return {
     baseVersion: version.version,
-    data: version.data,
-    extensions: version.extensions ?? {},
+    data: {
+      ...version.data,
+      ...(folded.customFields === undefined ? {} : { customFields: folded.customFields }),
+    },
+    extensions: folded.extensions,
   };
 }
 
@@ -79,8 +95,8 @@ export function characterDraftOf(version: CharacterVersion): CharacterDraft {
  * A key that is not `x-` namespaced cannot be written back (the payload's own `extensions` is
  * the version envelope's, and `ExtensionsSchema` would refuse the whole row), so a damaged entry
  * is DROPPED here rather than carried into a draft that could never be published. Everything
- * else — including the foreign keys a plugin owns — is kept verbatim, because the bag belongs to
- * the entity and not to this editor.
+ * else — including the foreign keys a plugin owns, and the legacy `x-custom.*` entries the fold
+ * still has to look at — is kept verbatim, because the bag belongs to the entity, not to us.
  */
 function extensionsOf(member: JsonValue | undefined): Extensions {
   const extensions: Extensions = {};
@@ -122,6 +138,10 @@ function baseVersionOf(
  * `base` is the version the draft is completed against — the latest published one, which is the
  * only version an editor opens with. `undefined` means "there is no draft", i.e. the editor shows
  * the published payload, which is also what an unreadable row degrades to.
+ *
+ * The legacy fold runs AFTER completion, and the order is the rule: the draft's own
+ * `data.customFields` wins over anything the old bag still holds, so re-opening a half-edited card
+ * cannot have a stale slug overwrite the field the user just typed.
  */
 export function readWorldDraft(
   value: JsonValue | undefined,
@@ -129,10 +149,15 @@ export function readWorldDraft(
 ): WorldDraft | undefined {
   const stored = jsonObject(value);
   if (stored === undefined) return undefined;
+  const data = completeWorldData(base.data, memberValue(stored, 'data'));
+  const folded = foldLegacyCustomFields(
+    data.customFields,
+    extensionsOf(memberValue(stored, 'extensions')),
+  );
   return {
     baseVersion: baseVersionOf(stored, base.version),
-    data: completeWorldData(base.data, memberValue(stored, 'data')),
-    extensions: extensionsOf(memberValue(stored, 'extensions')),
+    data: { ...data, customFields: folded.customFields ?? {} },
+    extensions: folded.extensions,
   };
 }
 
@@ -142,9 +167,17 @@ export function readCharacterDraft(
 ): CharacterDraft | undefined {
   const stored = jsonObject(value);
   if (stored === undefined) return undefined;
+  const data = completeCharacterData(base.data, memberValue(stored, 'data'));
+  const folded = foldLegacyCustomFields(
+    data.customFields,
+    extensionsOf(memberValue(stored, 'extensions')),
+  );
   return {
     baseVersion: baseVersionOf(stored, base.version),
-    data: completeCharacterData(base.data, memberValue(stored, 'data')),
-    extensions: extensionsOf(memberValue(stored, 'extensions')),
+    data: {
+      ...data,
+      ...(folded.customFields === undefined ? {} : { customFields: folded.customFields }),
+    },
+    extensions: folded.extensions,
   };
 }

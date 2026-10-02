@@ -17,11 +17,11 @@
  * belongs to the author. Nothing here re-implements calendar arithmetic: the editor edits
  * data, and every minute -> date conversion stays in `engine/time/`.
  *
- * WHERE 自定义字段 LIVE: the version envelope's `extensions` (`cards/extensions.ts`), NOT the
- * payload's `customFields` record. That record is part of the frozen payload contract and is
- * carried through hydration untouched — an imported world may have one — but this app's own
- * custom fields use the one sanctioned channel. `WORLD_DELEGATED_PATHS` names it so the
- * completeness check can see the decision instead of tripping over it.
+ * WHERE 自定义字段 LIVE: the payload's OWN `customFields` record (`docs/02` §4), which this form
+ * renders like any other field and `cards/custom-fields.ts` owns the rules for. It is domain data,
+ * so `common.ts` rule 1 — "third-party data goes in `extensions`" — does not apply to it; the
+ * version envelope's `extensions` bag stays the PLUGIN channel, and this editor only carries it
+ * through a draft so a plugin's data survives a user edit (`cards/draft.ts`).
  */
 import { calendarView } from '@smarttavern/core';
 import {
@@ -445,21 +445,16 @@ export const WORLD_FORM_PATHS: readonly string[] = [
   'timeRhythm.advanceEveryTurns',
   'timeRhythm.stepMinutes',
   'openingHooks',
+  'customFields',
 ];
 
 /**
- * The VERSION ENVELOPE's slot the custom-field panel edits.
+ * Payload fields the editor does NOT render — and for a world that set is EMPTY.
  *
- * Not a payload path at all — `versionedEntity` puts the plugin channel on the envelope, and
- * `common.ts` rule 1 makes that the only sanctioned place for it (`cards/extensions.ts`). It is
- * listed here so the completeness check can tell "rendered" from "forgotten" without pretending
- * `extensions` is a field of `WorldData`.
+ * The list exists rather than being left out so the completeness check has one place to look, and
+ * so "nothing is delegated" is a checked statement rather than an omission: every member of
+ * `WorldData` has exactly one control, `customFields` included. Those are the payload's OWN record
+ * (`cards/custom-fields.ts`) — the plugin bag on the version envelope is a different owner's data,
+ * which this editor only carries through a draft.
  */
-export const WORLD_ENVELOPE_PATHS: readonly string[] = ['extensions'];
-
-/**
- * Payload fields the editor does NOT render, and why: `customFields` is the payload's own
- * custom-field record, superseded for new data by the envelope's `extensions`
- * (`cards/extensions.ts`). It is preserved by hydration, never edited here.
- */
-export const WORLD_DELEGATED_PATHS: readonly string[] = ['customFields'];
+export const WORLD_DELEGATED_PATHS: readonly string[] = [];

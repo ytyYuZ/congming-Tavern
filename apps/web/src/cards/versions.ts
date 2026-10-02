@@ -24,10 +24,11 @@
  * new row is a change the user made to that base, not a descendant of a version they never saw.
  *
  * WHAT IS DELIBERATELY NOT TOUCHED
- * The head's own `extensions` bag. `versionedEntity`'s envelope owns the plugin channel, and
- * that is where this app's custom fields go (`cards/extensions.ts`); writing them onto the
- * head as well would give one plugin two slots that can disagree (`world.ts` says the same
- * about a payload that grows its own `extensions`).
+ * The head's own `extensions` bag. `versionedEntity`'s envelope owns the PLUGIN channel, and the
+ * head is an index row rather than a payload: writing a plugin's bag onto it as well would give
+ * one plugin two slots that can disagree (`world.ts` says the same about a payload that grows its
+ * own `extensions`). The user's own custom fields are payload data and travel in `data`
+ * (`cards/custom-fields.ts`), so they are planned like every other field.
  */
 import type {
   Character,
