@@ -318,11 +318,16 @@ async function waitForState(predicate: () => boolean, timeoutMs = 4_000): Promis
  * Built through `clockOf` + `worldClockText` — the same pair the view renders through — so
  * the assertion follows a catalog wording change instead of breaking on it, and still
  * proves the DOM shows the value the database holds. A hand-typed sentence would not.
+ *
+ * The CALENDAR comes from the store, which is the same value the view reads (M1-T1
+ * follow-up): a test that hardcoded one would stop noticing if the store resolved another.
+ * These sessions pin `test-world`, a world no row carries, so the value here is the built-in
+ * fallback — which is itself worth asserting (see `state/chat-store.test.ts`).
  */
 async function rememberedClock(sessionId: string): Promise<string> {
   const session = await getSession(sessionId);
   if (session === undefined) throw new Error(`no session ${sessionId}`);
-  return worldClockText(clockOf(session), translate);
+  return worldClockText(clockOf(useChatStore.getState().calendar, session), translate);
 }
 
 describe('route smoke tests', () => {
@@ -498,10 +503,10 @@ describe('route smoke tests', () => {
  * control the user clicks, then reads BOTH the DOM and the persisted row.
  *
  * WHY THE EXPECTED CLOCK SENTENCE IS BUILT, NOT TYPED
- * `worldClockText(clockOf(session), translate)` is the same pair of functions the view
- * renders through, so the assertion follows a wording change instead of breaking on it —
- * and it still proves the DOM shows the value the database holds, which a hardcoded
- * sentence would not.
+ * `worldClockText(clockOf(calendar, session), translate)` — with the store's own calendar, the
+ * one the view renders with (M1-T1 follow-up) — is the same pair of functions the view renders
+ * through, so the assertion follows a wording change instead of breaking on it and it still
+ * proves the DOM shows the value the database holds, which a hardcoded sentence would not.
  */
 describe('M1-T2: the manual time advance', () => {
   it('moves the clock by each preset step, immediately, in the DOM and in the row', async () => {
@@ -517,7 +522,10 @@ describe('M1-T2: the manual time advance', () => {
       readonly label: string;
       readonly expectClock: (from: number) => number;
     }[] = [
-      { label: '+1 时段', expectClock: (from) => from + segmentStep(session.state) },
+      {
+        label: '+1 时段',
+        expectClock: (from) => from + segmentStep(useChatStore.getState().calendar, session.state),
+      },
       { label: '+1 小时', expectClock: (from) => from + hour },
       { label: '+1 天', expectClock: (from) => from + day },
     ];

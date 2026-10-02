@@ -16,7 +16,7 @@
 import 'fake-indexeddb/auto';
 import { renderParts } from '@smarttavern/core';
 import { createTranslator } from '@smarttavern/i18n';
-import type { Message, PromptPreset } from '@smarttavern/schema';
+import type { Calendar, Message, PromptPreset } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, resetDatabase } from '../db/database';
 import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
@@ -37,7 +37,7 @@ import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
 import { errorSentence } from '../state/chat-store';
 import { useLocaleStore } from '../state/locale-store';
 import { resetSettingsStore, useSettingsStore } from '../state/settings-store';
-import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
+import { BUILTIN_BUDGET, BUILTIN_CALENDAR, BUILTIN_PRESET } from './builtin-content';
 import { clockOf, composeTurn, promptContext, promptSlots, worldClockText } from './clock';
 import { type SendTurnResult, sendTurn } from './send-turn';
 
@@ -512,6 +512,21 @@ describe('sendTurn', () => {
 /* ─────────────── the two engines, actually wired into the app (M1) ────────────── */
 
 /**
+ * A world calendar the built-in face cannot imitate: a 100-minute hour, a 26-hour day and a
+ * month named `Frostmoon`. Used by the calendar test below to prove the time block follows the
+ * `Calendar` the CALLER supplies rather than the module's default (M1-T1 follow-up).
+ */
+const TWO_MOON: Calendar = {
+  id: 'two-moon',
+  name: 'Two-moon reckoning',
+  minutesPerHour: 100,
+  hoursPerDay: 26,
+  months: [{ name: 'Frostmoon', days: 20 }],
+  epochLabel: 'Third Age',
+  segments: [{ id: 'first-watch', name: 'First Watch', fromHour: 0, toHour: 13 }],
+};
+
+/**
  * The app used to hand-assemble its wire messages (`chat/prompt.ts`, deleted). These
  * four assertions are what makes the replacement real rather than merely compiled:
  * the `TimeEngine`'s reading reaches the prompt, the `PromptComposer`'s slot fill
@@ -532,7 +547,7 @@ describe('the engines are wired in', () => {
     const session = await createSession({ title: 'macro-session' });
     const composed = composeTurn(
       BUILTIN_PRESET,
-      promptContext(session, [], '第一句', clockOf(session)),
+      promptContext(session, [], '第一句', clockOf(BUILTIN_CALENDAR, session)),
       BUILTIN_BUDGET,
       promptSlots(session),
     );
@@ -564,9 +579,36 @@ describe('the engines are wired in', () => {
       .filter((message) => message.role === 'system')
       .map((message) => message.content)
       .join('\n');
-    expect(system).toContain(renderParts(clockOf(session)));
+    expect(system).toContain(renderParts(clockOf(BUILTIN_CALENDAR, session)));
     expect(system).toContain('晨');
     expect(system).toContain('test-world');
+  });
+
+  /**
+   * M1-T1 follow-up: the CALENDAR the caller supplies is the one the model is told.
+   *
+   * This session pins `test-world` (`db/session.test-helpers.ts`), a world no row carries, so
+   * the store's read path resolves the built-in face for it — which is exactly why this test
+   * passes a two-moon calendar explicitly and in a 100-minute hour: if `composeRequest` ignored
+   * `deps.calendar`, the time block would carry the built-in month names and this fails.
+   */
+  it('renders the time block in the calendar the caller supplies (M1-T1 follow-up)', async () => {
+    const session = await createSession({ title: 'pinned-calendar-session' });
+    const wire = fakeWire(() => sseResponse(['好']));
+
+    await sendTurn(
+      { config: CONFIG, transport: wire.fetch, calendar: TWO_MOON },
+      { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
+    );
+
+    const system = (wire.lastBody()?.messages ?? [])
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    expect(system).toContain('Frostmoon');
+    expect(system).toContain('First Watch');
+    // The built-in face's own month name, which a built-in read would have produced instead.
+    expect(system).not.toContain('一月');
   });
 
   /**
@@ -607,7 +649,7 @@ describe('the engines are wired in', () => {
    */
   it('translates the clock around the reading, not the reading itself', async () => {
     const session = await createSession({ title: 'clock-text-session' });
-    const reading = clockOf(session);
+    const reading = clockOf(BUILTIN_CALENDAR, session);
     const date = renderParts(reading);
 
     expect(worldClockText(reading, createTranslator('zh-CN').t)).toBe(`当前 ${date}（晨）`);

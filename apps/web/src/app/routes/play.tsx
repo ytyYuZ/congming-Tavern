@@ -26,7 +26,10 @@
  * decision rather than an oversight. It reads `session.state.clock` — the session's
  * LIVE minute (ADR-032) — through `chat/clock.ts` (`clockOf`), the same function the
  * prompt's clock comes from, so the date on screen and the date in the request cannot
- * disagree.
+ * disagree. `clockOf` is asked with the SESSION'S OWN calendar (M1-T1 follow-up) — the
+ * store resolves it from the pinned world version once per open — so the month names, the
+ * hours-per-day and the steps below belong to the world being played rather than to the
+ * built-in face, which is another world's.
  *
  * WHY THE ADVANCE CONTROLS SIT UNDER THE CLOCK AND NOWHERE ELSE (M1-T2)
  * They move that same `session.state.clock`, so they belong to the one screen that
@@ -35,7 +38,8 @@
  * that move it are one widget. The ARITHMETIC is not here either: each button hands the
  * store a number of minutes and the store calls the engine (`chat/clock.ts`'s
  * `advanceState`), so this screen never computes a date — it only prints the one the
- * engine and the catalog produced.
+ * engine and the catalog produced. The three preset AMOUNTS are derived from the same
+ * calendar (`advanceButtons`), or 「+1 小时」 would move 60 minutes in a 100-minute world.
  *
  * WHY THE SAVE-POINT PANEL DOES NOT RE-READ THE SESSION AFTER A RESTORE
  * `state/chat-store.ts` derives the restored `session` and `messageChain` from the very
@@ -78,10 +82,9 @@
  * a single message being copied or rewritten.
  */
 import type { MessageKey } from '@smarttavern/i18n';
-import type { Checkpoint, Id, Message, Session } from '@smarttavern/schema';
+import type { Calendar, Checkpoint, Id, Message, Session } from '@smarttavern/schema';
 import { Link } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useState } from 'react';
-import { BUILTIN_HOURS_PER_DAY, BUILTIN_MINUTES_PER_HOUR } from '../../chat/builtin-content';
 import { clockOf, segmentStep, worldClockText } from '../../chat/clock';
 import type { SiblingView } from '../../chat/message-tree';
 import {
@@ -102,6 +105,7 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
   const session = useChatStore((state) => state.session);
   const messageChain = useChatStore((state) => state.messageChain);
   const checkpoints = useChatStore((state) => state.checkpoints);
+  const calendar = useChatStore((state) => state.calendar);
   const draft = useChatStore((state) => state.draft);
   const regenerating = useChatStore((state) => state.regenerating);
   const status = useChatStore((state) => state.status);
@@ -157,8 +161,8 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
 
       {session === undefined ? null : (
         <>
-          <WorldClock session={session} />
-          <TimeControls sessionId={session.id} session={session} />
+          <WorldClock session={session} calendar={calendar} />
+          <TimeControls sessionId={session.id} session={session} calendar={calendar} />
           <StatusBar sessionId={session.id} session={session} />
           <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />
           {/* The opening choice is offered exactly while the session has not started (M1-S3);
@@ -250,12 +254,15 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
  * `role="status"` is deliberately NOT used, because a clock that announced itself on
  * every render would interrupt a transcription for a value that is not news.
  *
- * WHY IT TAKES THE SESSION AS A PROP: `clockOf` is a pure function of it, so the
- * component needs nothing else and cannot subscribe to a store slice it does not use.
+ * WHY IT TAKES THE SESSION AS A PROP: `clockOf` is a pure function of it and of the calendar,
+ * so the component needs nothing else and cannot subscribe to a store slice it does not use —
+ * the route reads both and passes them down. `calendar` is the session's PINNED world's face
+ * (M1-T1 follow-up, `state/chat-store.ts`), so the month names and the hours-per-day on screen
+ * are the world's own and not another world's.
  */
-function WorldClock({ session }: { session: Session }) {
+function WorldClock({ session, calendar }: { session: Session; calendar: Calendar }) {
   const { t } = useTranslation();
-  const sentence = worldClockText(clockOf(session), t);
+  const sentence = worldClockText(clockOf(calendar, session), t);
   return (
     // The label is a visually hidden FIRST WORD rather than an `aria-label`: a bare
     // element has no role to attach a name to, `role="group"` would be rejected in
@@ -309,17 +316,24 @@ interface AdvanceButton {
 }
 
 /**
- * The three preset advances. `undefined` is the segment step (see `AdvanceButton`).
+ * The three preset advances, in the units of `calendar` — the session's PINNED world's face
+ * (M1-T1 follow-up). `undefined` is the segment step (see `AdvanceButton`), which is computed
+ * at click time from the same calendar.
  *
- * The hour and the day come from the built-in calendar's own constants rather than from
- * literals: a world with a 100-minute hour or a 26-hour day is legal data (ADR-012), and
- * writing `60` / `1440` here would make this file the third place that fact is spelled.
+ * WHY THE STEPS ARE DERIVED AND NOT A MODULE CONSTANT: an hour and a day are the CALENDAR's
+ * quantities. A world with a 100-minute hour or a 26-hour day is legal data (ADR-012), so a
+ * table frozen from the built-in constants would silently move 60 and 1440 minutes in a world
+ * that has no such units — the wrong-calendar bug the clock reading had, one button over. This
+ * is also what the comment above always claimed: the numbers come from a calendar, and the
+ * calendar that matters is the session's.
  */
-const ADVANCE_BUTTONS: readonly AdvanceButton[] = [
-  { label: 'play.advanceSegment', minutes: undefined },
-  { label: 'play.advanceHour', minutes: BUILTIN_MINUTES_PER_HOUR },
-  { label: 'play.advanceDay', minutes: BUILTIN_HOURS_PER_DAY * BUILTIN_MINUTES_PER_HOUR },
-];
+function advanceButtons(calendar: Calendar): readonly AdvanceButton[] {
+  return [
+    { label: 'play.advanceSegment', minutes: undefined },
+    { label: 'play.advanceHour', minutes: calendar.minutesPerHour },
+    { label: 'play.advanceDay', minutes: calendar.hoursPerDay * calendar.minutesPerHour },
+  ];
+}
 
 /**
  * The manual time controls (M1-T2) — three presets and a custom amount, next to the
@@ -340,7 +354,15 @@ const ADVANCE_BUTTONS: readonly AdvanceButton[] = [
  * Both local values go through `useSessionDraft`, so a session switch clears them (see
  * that hook for why the reset is not a `key` and not an effect).
  */
-function TimeControls({ sessionId, session }: { sessionId: Id; session: Session }) {
+function TimeControls({
+  sessionId,
+  session,
+  calendar,
+}: {
+  sessionId: Id;
+  session: Session;
+  calendar: Calendar;
+}) {
   const { t } = useTranslation();
   const advance = useChatStore((state) => state.advance);
   const [custom, setCustom] = useSessionDraft(sessionId, '');
@@ -348,7 +370,7 @@ function TimeControls({ sessionId, session }: { sessionId: Id; session: Session 
 
   /** Run one advance and report it. `delta` is `undefined` for the segment step. */
   const run = async (delta: number | undefined): Promise<void> => {
-    const minutes = delta ?? segmentStep(session.state);
+    const minutes = delta ?? segmentStep(calendar, session.state);
     const clock = await advance(minutes);
     if (clock === undefined) return;
     setStatus(
@@ -356,8 +378,12 @@ function TimeControls({ sessionId, session }: { sessionId: Id; session: Session 
         minutes: String(minutes),
         // Built from the state the advance RETURNED, not from a re-read: the store has
         // already applied this minute, so the sentence and the clock above it are the
-        // same value by construction.
-        date: worldClockText(clockOf({ ...session, state: { ...session.state, clock } }), t),
+        // same value by construction. The calendar is the session's own, so the
+        // confirmation names the date the world's face produces.
+        date: worldClockText(
+          clockOf(calendar, { ...session, state: { ...session.state, clock } }),
+          t,
+        ),
       }),
     );
   };
@@ -377,7 +403,7 @@ function TimeControls({ sessionId, session }: { sessionId: Id; session: Session 
     <section className="time-controls">
       <h2 className="section-title">{t('play.advanceTitle')}</h2>
       <div className="btn-row">
-        {ADVANCE_BUTTONS.map((button) => (
+        {advanceButtons(calendar).map((button) => (
           <button
             key={button.label}
             className="btn"

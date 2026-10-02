@@ -63,7 +63,19 @@ export const WorldbookEntrySchema = z.object({
   priority: z.number().int(),
   /** CLOSED injection slot from the PromptComposer (docs/02 §5.1). */
   position: z.enum(['pre_history', 'in_history', 'post_history']),
-  /** How many recent turns are scanned for `keywords`; 0 = the latest turn only. */
+  /**
+   * How DEEP into the history the content is injected, counting messages back from
+   * the END of it (the same convention as `PromptBlock.depth`).
+   *
+   * WHY THE INJECTION MEANING AND NOT "how many recent turns are scanned for
+   * `keywords`": injection is what the composer does with this number.
+   * `packages/core/src/engine/prompt/compose.ts` resolves it in `insertionIndex` as
+   * `historyLength - depth` — its header states the rule in as many words, "depth
+   * counts messages BACK FROM THE END of the history": 0 is immediately before the
+   * current user input, 1 is before the last stored turn, and a depth beyond the
+   * history clamps to its beginning. Nothing there scans the conversation by this
+   * number, so the keyword window is not this field.
+   */
   depth: z.number().int().nonnegative(),
   /** Roll chance 0-100 (SillyTavern convention), so 100 = always inject. */
   probability: z.number().int().min(0).max(100),

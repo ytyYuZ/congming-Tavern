@@ -10,6 +10,14 @@
  * this store owns is `draft` — the assistant text that has arrived but is not yet a
  * row — plus `status`, the turn's lifecycle.
  *
+ * WHAT M1-T1'S FOLLOW-UP ADDED: THE SESSION'S OWN CALENDAR
+ * `calendar` is a READ this store keeps — the `Calendar` of the open session's pinned world
+ * version — resolved ONCE in `open` (`pinnedCalendar`) rather than per render, so the clock
+ * sentence, the advance arithmetic and the turn's time block cannot disagree about which
+ * world's units they are in. A session whose world or version row is gone (or whose row
+ * cannot be parsed) still opens on `BUILTIN_CALENDAR`: content may be deleted, the
+ * conversation may not.
+ *
  * WHY THE PROVIDER CONFIGURATION IS READ AT SEND TIME AND NOT HELD
  * `send()` calls `useSettingsStore.getState()` when the turn starts. A copy held here
  * would go stale the moment the user edits the setup form, and a saved key that the
@@ -87,9 +95,10 @@
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
-import type { Checkpoint, Id, Message, Session, SessionState } from '@smarttavern/schema';
+import type { Calendar, Checkpoint, Id, Message, Session, SessionState } from '@smarttavern/schema';
 import { create } from 'zustand';
-import { advanceState } from '../chat/clock';
+import { BUILTIN_CALENDAR } from '../chat/builtin-content';
+import { advanceState, calendarOf } from '../chat/clock';
 import { promptMessageFor, type SiblingView, siblingViewOf } from '../chat/message-tree';
 import { sendTurn, type TurnAppend } from '../chat/send-turn';
 import {
@@ -106,6 +115,7 @@ import {
   deleteLeafMessage,
   getChain,
   getSession,
+  getWorldVersion,
   hasChildren,
   listCheckpoints,
   listChildren,
@@ -164,6 +174,20 @@ export interface ChatState {
    * a cost this list does not need.
    */
   checkpoints: Checkpoint[];
+  /**
+   * The `Calendar` the OPEN session plays under (M1-T1 follow-up): the one its pinned world
+   * version carries (`Session.refs.world` -> `worldVersions.data.calendar`), or
+   * `BUILTIN_CALENDAR` when that row is gone or unreadable.
+   *
+   * WHY IT IS STORE STATE AND READ ONCE PER `open`: only this layer may reach
+   * `db/repository.ts` (ADR-017), so a view cannot resolve the pin itself — and the value has
+   * to be the SAME one for the clock sentence on screen, the advance arithmetic and the time
+   * block of the turn's prompt, or the date the user reads and the date the model is told
+   * could differ. The pin is immutable (ADR-010), so one read per open is the whole story.
+   * Before any session is open it is the built-in calendar; that value is never rendered,
+   * because the clock is only rendered with a session.
+   */
+  calendar: Calendar;
   draft: StreamingDraft;
   /**
    * The message a NEW ANSWER is being generated for (M1-S2), or `null`.
@@ -362,6 +386,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   session: undefined,
   messageChain: [],
   checkpoints: [],
+  calendar: BUILTIN_CALENDAR,
   draft: { ...IDLE_DRAFT },
   regenerating: null,
   status: 'idle',
@@ -420,12 +445,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const token = openToken;
     const session = await getSession(sessionId);
     if (token !== openToken) return;
+    // The calendar follows the SAME token as the session row: a late answer for a session the
+    // user has already left must not install its world's month names against the new one.
+    const calendar = session === undefined ? BUILTIN_CALENDAR : await pinnedCalendar(session);
+    if (token !== openToken) return;
     // Read BEFORE the single `set`, and only then applied: the list is a second async
     // read, and awaiting it inside the `set` argument would let a close or a new `open`
     // run in between and be overwritten by this one's result.
     const checkpoints = await listCheckpoints(sessionId);
     if (token !== openToken) return;
-    set({ session, checkpoints, error: undefined, status: 'idle', draft: { ...IDLE_DRAFT } });
+    set({
+      session,
+      calendar,
+      checkpoints,
+      error: undefined,
+      status: 'idle',
+      draft: { ...IDLE_DRAFT },
+    });
     // The transcript is a live query, so a message written by this turn OR by
     // another tab lands in the view without anyone re-fetching it by hand.
     unsubscribe = subscribe(
@@ -458,6 +494,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       session: undefined,
       messageChain: [],
       checkpoints: [],
+      // The calendar belonged to the session that just closed; leaving it would let the next
+      // session's first frame render this world's month names before `open` resolves.
+      calendar: BUILTIN_CALENDAR,
       draft: { ...IDLE_DRAFT },
       regenerating: null,
       status: 'idle',
@@ -834,7 +873,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async advance(delta: number): Promise<number | undefined> {
     const session = get().session;
     if (session === undefined || !Number.isInteger(delta) || delta === 0) return undefined;
-    const nextState = advanceState(session.state, delta);
+    // The calendar this session plays under, not the built-in face: the engine walks in the
+    // world's own units (a 100-minute hour is legal data), and the same value is what the
+    // clock above the buttons renders from.
+    const nextState = advanceState(get().calendar, session.state, delta);
     set({ session: { ...session, state: nextState } });
     try {
       await writeSessionState(session.id, nextState);
@@ -961,6 +1003,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }));
 
 /**
+ * The calendar of the session's PINNED world version, or the built-in one (M1-T1 follow-up).
+ *
+ * TWO FAILURES, ONE ANSWER. `session.refs.world` names `{id, version}`, and the row carrying
+ * the calendar is the `worldVersions` row `getWorldVersion` reads: it answers `undefined` when
+ * no such row exists (the world was deleted, or the pin names a version nobody published) and
+ * it THROWS when a row is there but cannot be parsed (`WorldVersionSchema.parse`) — which is
+ * how "its calendar is unreadable" reaches this function. Both are the same fact to a session
+ * that only wants to open: there is no calendar to read, so the built-in face is used and the
+ * session plays on. Rejecting here would take the whole play screen — the transcript included
+ * — down with a content row, which is the failure `db/repository.ts`'s `completeState` exists
+ * to avoid one layer down.
+ *
+ * The read happens ONCE, in `open`, and is guarded by that action's token: `calendarOf` owns
+ * WHICH calendar an absent row means, and this function owns only the two ways a row can fail
+ * to arrive.
+ */
+async function pinnedCalendar(session: Session): Promise<Calendar> {
+  try {
+    return calendarOf(await getWorldVersion(session.refs.world.id, session.refs.world.version));
+  } catch {
+    return calendarOf(undefined);
+  }
+}
+
+/**
  * Refuse a turn when the app cannot send one, and report which fact is missing.
  *
  * Returns the CATALOG KEY of the refusal (so `regenerate` and `continueWriting` can hand
@@ -1053,6 +1120,10 @@ async function runTurn(
     const result = await sendTurn(
       {
         config,
+        // The session's calendar, so the time block the model is sent is in the world's own
+        // month names and hours — the SAME value the clock on screen renders from
+        // (`WorldClock`), which is the point of reading it once in `open`.
+        calendar: useChatStore.getState().calendar,
         ...(transport === undefined ? {} : { transport }),
         // The streaming render: the answer appears as it arrives, because nothing is
         // persisted until the turn ends (see the partial-text policy in `send-turn`).
@@ -1173,6 +1244,7 @@ export function resetChat(): void {
     session: undefined,
     messageChain: [],
     checkpoints: [],
+    calendar: BUILTIN_CALENDAR,
     draft: { ...IDLE_DRAFT },
     regenerating: null,
     status: 'idle',

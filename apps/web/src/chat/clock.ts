@@ -25,6 +25,21 @@
  * Reading it in ONE place (`clockOf`) is what made that swap a change here rather
  * than at every call site.
  *
+ * WHY THE CALENDAR IS A PARAMETER (M1-T1 follow-up)
+ * Every function here that maps a minute to text or walks the day takes the session's
+ * `Calendar` as its first argument. Until M1-S1 there was exactly one calendar in the app —
+ * the built-in constant — so reading it inside this module was not a choice, and every world
+ * really did have the same face. A session now PINS a world version (`Session.refs.world`),
+ * and that version carries the world's own `Calendar`
+ * (`WorldVersionSchema.data.calendar`, `packages/schema/src/entities/world.ts`), so the
+ * built-in face is ANOTHER WORLD'S: wrong month names, wrong `hoursPerDay`, and — the part
+ * that is arithmetic rather than cosmetics — a wrong `minutesPerHour`, because
+ * `advanceState` and `segmentStep` state their steps in those units and a 26-hour day with a
+ * 100-minute hour is legal data (ADR-012; `CalendarSchema` bounds neither at 24 nor at 60).
+ * Threading it in keeps these functions pure: the only layer that may read a row is the
+ * caller (`state/chat-store.ts`, through `calendarOf` below), so "which calendar is this"
+ * is answerable at the call site and nowhere else.
+ *
  * WHERE THIS MODULE SITS. It is the seam between three layers that must not import
  * each other: `@smarttavern/core` (the engine, which computes), the app's built-in
  * content (the data, which the app owns until M1-W1/I2), and `packages/i18n` (the
@@ -47,12 +62,43 @@ import {
   resolveSegments,
 } from '@smarttavern/core';
 import type { Translator } from '@smarttavern/i18n';
-import type { Message, PromptPreset, Session, SessionState } from '@smarttavern/schema';
+import type { Calendar, Message, PromptPreset, Session, SessionState } from '@smarttavern/schema';
 import { BUILTIN_CALENDAR, type BuiltinSlot } from './builtin-content';
 
-/** The clock reading of a session, as structured parts. See the header for `initialClock`. */
-export function clockOf(session: Session): ClockDisplay {
-  return clockDisplay(BUILTIN_CALENDAR, session.state.clock);
+/**
+ * The `Calendar` a session plays under: the one its PINNED world version carries, or the
+ * built-in calendar when there is no row to read.
+ *
+ * WHY THE FALLBACK IS APPLIED HERE (M1-T1 follow-up)
+ * `session.refs.world` is a pin — `{id, version}` — and the calendar lives on that version
+ * row, so a world with a 26-hour day or a 100-minute hour is read in ITS units. But a pin is
+ * not a guarantee that the row still exists: a world can be deleted, a version row can fail
+ * to parse (that read throws, and `state/chat-store.ts` catches it into `undefined`), and a
+ * session whose content is gone must still OPEN — refusing to render a transcript because a
+ * card was deleted would lose the conversation too. So an absent or unusable row degrades to
+ * `BUILTIN_CALENDAR` here, at the point where an untrusted row becomes a value a caller may
+ * use: the same read-boundary rule `db/repository.ts`'s `completeState` and
+ * `readLocaleSetting` follow. `BUILTIN_CALENDAR` stays exactly that — the fallback, not a
+ * default anybody sets — and today it is the only calendar a world without a published
+ * version has.
+ *
+ * WHY THE SHAPE IS LOOSE AND NOT A `WorldVersion`: this function needs ONE field of the row,
+ * and a test that pins a calendar should not have to build an envelope (`id`, `version`,
+ * `createdAt`, `worldId`, …) to state its subject. A real `WorldVersion` satisfies it
+ * structurally, so the loose type costs no caller anything.
+ */
+export function calendarOf(
+  version: { readonly data: { readonly calendar: Calendar } } | undefined,
+): Calendar {
+  return version?.data.calendar ?? BUILTIN_CALENDAR;
+}
+
+/**
+ * The clock reading of a session, as structured parts. See the header for `initialClock`,
+ * and `calendarOf` for where the calendar comes from.
+ */
+export function clockOf(calendar: Calendar, session: Session): ClockDisplay {
+  return clockDisplay(calendar, session.state.clock);
 }
 
 /**
@@ -91,6 +137,11 @@ export function worldClockText(reading: ClockDisplay, t: Translator['t']): strin
  * engine operation (docs/02 §5.7's "time went back but the state did not" must be
  * inexpressible).
  *
+ * `calendar` IS THE SESSION'S OWN, and it is the caller's to supply (`calendarOf` above):
+ * a walk is only correct in the units of the world being played, so the one thing this
+ * function must not do is reach for the built-in face — with a 100-minute hour, "+1 hour"
+ * would then move 60 minutes and land on a clock the world does not have.
+ *
  * WHY ONLY `clock` MOVES: `session.state.clock` is what `clockOf` reads and what the
  * prompt's time block is built from (ADR-032), so it is the one field a manual advance
  * has to write. `scene.time` is the SCENE's own timestamp — a transcription of when
@@ -110,8 +161,8 @@ export function worldClockText(reading: ClockDisplay, t: Translator['t']): strin
  * controls on the play screen are the one caller today, and their whole policy is
  * "the user pressed the button".
  */
-export function advanceState(state: SessionState, delta: number): SessionState {
-  const step = advance({ delta, calendar: BUILTIN_CALENDAR, fromMinute: state.clock });
+export function advanceState(calendar: Calendar, state: SessionState, delta: number): SessionState {
+  const step = advance({ delta, calendar, fromMinute: state.clock });
   return { ...state, clock: step.toMinute };
 }
 
@@ -135,10 +186,15 @@ export function advanceState(state: SessionState, delta: number): SessionState {
  * one hour. That is the one number this module states rather than derives, and it is
  * deliberately the same quantity the 「+1 小时」 button moves: with nothing named about
  * the day, "the next part of the day" has no meaning and an hour is the honest step.
+ * "One hour" here means the CALENDAR's hour — `view.minutesPerHour`, the same number the
+ * engine walks — so the fallback is still the session's own unit.
+ *
+ * The calendar is a parameter for the same reason it is one on `advanceState`: the windows,
+ * the hour count and the minutes-per-hour that this returns a step in are the world's.
  */
-export function segmentStep(state: SessionState): number {
-  const view = calendarView(BUILTIN_CALENDAR);
-  const segments = resolveSegments(BUILTIN_CALENDAR.segments, view.hoursPerDay);
+export function segmentStep(calendar: Calendar, state: SessionState): number {
+  const view = calendarView(calendar);
+  const segments = resolveSegments(calendar.segments, view.hoursPerDay);
   if (segments.length === 0) return view.minutesPerHour;
 
   const { hour, minute } = hourOfDayAt(view, state.clock);

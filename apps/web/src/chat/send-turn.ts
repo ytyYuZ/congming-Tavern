@@ -60,7 +60,7 @@
  */
 import type { ChatMessage, PromptBudget, StreamEvent, VariableChange } from '@smarttavern/core';
 import { type FetchLike, LLM_ERROR_CODES, OpenAICompatibleProvider } from '@smarttavern/providers';
-import type { Id, Message, PromptPreset, Session } from '@smarttavern/schema';
+import type { Calendar, Id, Message, PromptPreset, Session } from '@smarttavern/schema';
 import {
   appendMessage,
   getChain,
@@ -70,7 +70,7 @@ import {
   writeSessionState,
 } from '../db/repository';
 import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
-import { BUILTIN_BUDGET, BUILTIN_PRESET } from './builtin-content';
+import { BUILTIN_BUDGET, BUILTIN_CALENDAR, BUILTIN_PRESET } from './builtin-content';
 import { clockOf, composeTurn, promptContext, promptSlots } from './clock';
 import { applyVariableChanges } from './vars';
 
@@ -100,6 +100,20 @@ export interface SendTurnDeps {
   preset?: PromptPreset;
   /** Budget override, for the same reason as `preset`. */
   budget?: PromptBudget;
+  /**
+   * The `Calendar` of the session's PINNED world version (M1-T1 follow-up): the time block's
+   * date, hour and segment are rendered from it, so the model is told the moment in the
+   * WORLD's own units — its month names, its `minutesPerHour`, its `hoursPerDay` — rather than
+   * in the built-in face's.
+   *
+   * WHY IT IS OPTIONAL WITH A BUILT-IN DEFAULT, UNLIKE THE SESSION: `state/chat-store.ts`
+   * always supplies the calendar it read for the open session (see `pinnedCalendar`), and a
+   * caller that has no world to read — a test whose session pins content that does not exist —
+   * gets the same value such a session resolves to, which is exactly
+   * `chat/clock.ts`'s `calendarOf` fallback. So the default cannot disagree with the read path:
+   * it is the bottom of it.
+   */
+  calendar?: Calendar;
 }
 
 /**
@@ -195,7 +209,7 @@ function composeRequest(
 ): Composed {
   const result = composeTurn(
     deps.preset ?? BUILTIN_PRESET,
-    promptContext(session, chain, text, clockOf(session)),
+    promptContext(session, chain, text, clockOf(deps.calendar ?? BUILTIN_CALENDAR, session)),
     deps.budget ?? BUILTIN_BUDGET,
     promptSlots(session),
   );
