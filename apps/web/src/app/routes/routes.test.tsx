@@ -22,25 +22,29 @@
  */
 /** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
-import { createTranslator } from '@smarttavern/i18n';
+import { createTranslator, type MessageKey, type TranslateParams } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
-import type { Message, SessionState } from '@smarttavern/schema';
+import type { Id, Message, SessionState, VoiceProfile } from '@smarttavern/schema';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, createAppRouter } from '../../app/app';
+import { blankCharacterData } from '../../cards/character';
 import { BUILTIN_HOURS_PER_DAY, BUILTIN_MINUTES_PER_HOUR } from '../../chat/builtin-content';
 import { clockOf, segmentStep, worldClockText } from '../../chat/clock';
 import { snapshotAllRows } from '../../db/raw-indexeddb.test-helpers';
 import {
   appendMessage,
+  createCharacter,
   createCheckpoint,
+  createSession as createSessionRow,
   deleteLeafMessage,
   getChain,
   getMessage,
   getSession,
   listCheckpoints,
   listChildren,
+  listTurnPlans,
   readProviderSettings,
   setHeadMessageId,
   writeLocaleSetting,
@@ -65,6 +69,11 @@ import {
   useLocaleStore,
   useSettingsStore,
 } from '../../mount';
+import {
+  exclusionReasonText,
+  type ReasonText,
+  speakerReasonText,
+} from '../../session/scheduler-text';
 
 const API_KEY = 'sk-route-smoke-key';
 const BASE_URL = 'https://gateway.test/v1';
@@ -1825,5 +1834,384 @@ describe('M1-S3: the opening panel', () => {
     // write as a second root.
     await expect(useChatStore.getState().generateOpening()).resolves.toBe(false);
     expect(await listChildren(session.id, null)).toHaveLength(1);
+  });
+});
+
+/* ────────────────────── M1-S5: the turn scheduler panel ───────────────────── */
+
+/**
+ * WHY THESE DRIVE THE REAL VIEW, THE REAL STORE, THE REAL CARD ROWS AND THE REAL TURN PATH
+ * Every clause of the M1-S5 row is a fact about an END STATE rather than about a function: the
+ * caps decide who the SCREEN offers, the manual assignment has to reach the assistant ROW, and
+ * "the TurnPlan is stored" is a row in `turnPlans` that a message points at. A unit test of the
+ * pure rule (`session/scheduler.test.ts`) cannot see any of that, so the cases below build the
+ * cast out of real cards (`createCharacter`), mount the real play route, and let the scheduled
+ * turn stream through the app's one turn path over a hand-written SSE body.
+ *
+ * WHY THE CAST CARDS ARE REAL AND NOT STUBBED
+ * The scheduler reads each cast pin's IMMUTABLE version row (`getCharacterVersion`), which is
+ * exactly the path a session created by M1-S1 takes. Seeding the store with a cast object would
+ * make the one interesting wiring question - does a session's `{id, version}` pin resolve to the
+ * voice profile the rule then uses - unasked.
+ */
+describe('M1-S5: the turn scheduler', () => {
+  /** The panel's copy, read from the zh-CN catalog directly (`M1-S3`'s argument, repeated). */
+  const zh = createTranslator('zh-CN');
+
+  /** A catalog sentence with its parameters filled, in the language this file pins. */
+  function t(key: MessageKey, params?: TranslateParams): string {
+    return zh.t(key, params);
+  }
+
+  /** One reason, rendered exactly the way the panel renders it. */
+  function reasonSentence(text: ReasonText): string {
+    return t(text.key, text.params);
+  }
+
+  /** The pin a session records for one cast card. */
+  interface CastPin {
+    readonly id: Id;
+    readonly version: number;
+    readonly name: string;
+  }
+
+  /** One cast card with the voice profile a case needs, published as version 1. */
+  async function castCard(name: string, overrides: Partial<VoiceProfile>): Promise<CastPin> {
+    const blank = blankCharacterData(name);
+    const created = await createCharacter({
+      name,
+      data: { ...blank, voice: { ...blank.voice, ...overrides } },
+    });
+    if (created === undefined) throw new Error(`the card ${name} was not written`);
+    return { id: created.character.id, version: created.version.version, name };
+  }
+
+  /** A session whose cast is exactly these cards, in this order (the pins M1-S1 writes). */
+  function castSession(cards: readonly CastPin[]) {
+    return createSessionRow({
+      title: 'scheduler',
+      refs: {
+        world: { id: 'test-world', version: 1 },
+        playerCharacter: { id: 'test-player', version: 1 },
+        cast: cards.map((card) => ({ id: card.id, version: card.version })),
+        promptPreset: { id: 'builtin-default', version: 1 },
+      },
+      initialClock: 0,
+    });
+  }
+
+  /**
+   * A transport that answers one text, counts the requests, and remembers the bodies.
+   *
+   * The BODY is what proves the schedule reached the prompt: the instruction the store composes
+   * names the character the plan chose, so a turn that ignored the plan would send a request
+   * without that name.
+   */
+  function answeringWire(text: string): {
+    fetch: FetchLike;
+    calls: () => number;
+    bodies: () => string[];
+  } {
+    let calls = 0;
+    const bodies: string[] = [];
+    const encoder = new TextEncoder();
+    return {
+      calls: () => calls,
+      bodies: () => [...bodies],
+      fetch: (_url: string, init: RequestInit) => {
+        if (typeof init.body === 'string') bodies.push(init.body);
+        calls += 1;
+        const payloads = [
+          `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+          'data: [DONE]\n\n',
+        ];
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const payload of payloads) controller.enqueue(encoder.encode(payload));
+            controller.close();
+          },
+        });
+        return Promise.resolve(
+          new Response(stream, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          }),
+        );
+      },
+    };
+  }
+
+  /** Store the provider row and substitute the transport, the way `mountApp` wires them. */
+  async function armTheProvider(wire: { readonly fetch: FetchLike }): Promise<void> {
+    await writeProviderSettings({
+      baseUrl: BASE_URL,
+      model: MODEL,
+      secret: { kind: 'plaintext', apiKey: API_KEY },
+    });
+    configureChat({ transport: wire.fetch });
+  }
+
+  /** Wait until the settings row is loaded, so a scheduled turn is not refused by `turnGate`. */
+  async function waitForSettings(): Promise<void> {
+    const deadline = Date.now() + 4_000;
+    while (!useSettingsStore.getState().loaded) {
+      if (Date.now() > deadline) throw new Error('settings never loaded');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    }
+  }
+
+  /**
+   * One round already played: the player spoke, and the cast member answered.
+   *
+   * `speakerId` is what makes the round readable to the scheduler (`session/scheduler.ts` counts
+   * each character's lines from it), so this fixture is the position a scheduled turn leaves
+   * behind - and the reason these cases can be about caps at all.
+   */
+  async function playedRound(
+    sessionId: Id,
+    speakerId: Id,
+    content: string,
+  ): Promise<{ question: Message; answer: Message }> {
+    const question = await appendMessage({
+      sessionId,
+      parentId: null,
+      role: 'user',
+      content: '我推开门',
+    });
+    const answer = await appendMessage({
+      sessionId,
+      parentId: question.id,
+      role: 'assistant',
+      content,
+      speakerId,
+    });
+    await setHeadMessageId(sessionId, answer.id);
+    return { question, answer };
+  }
+
+  /**
+   * Wait until the scheduled turn has settled in the ROW, not merely on the screen.
+   *
+   * WHY NOT `waitForText` ALONE: the answer renders as a streaming DRAFT before it is a
+   * `messages` row (`chat/send-turn.ts`'s partial-text policy), so a text assertion can pass
+   * while the write is still in flight - and every assertion that follows is about the stored
+   * row (`speakerId`, `meta.turnPlanId`, the plan it points at). Polling the table and the
+   * turn's own status is what makes those reads about a finished turn.
+   */
+  async function waitForSpokenRow(sessionId: Id): Promise<Message> {
+    const deadline = Date.now() + 4_000;
+    let spoken: Message | undefined;
+    for (;;) {
+      // THE READ AND THE SLEEP BOTH HAPPEN INSIDE `act`, because the panel's own scheduler
+      // effect (`proposeNextTurn`) resolves on the same promise chain: a read taken outside it
+      // lets that store update land unwrapped, which React reports even when the test passes.
+      await act(async () => {
+        spoken = (await getChain(sessionId)).find((message) => message.role === 'assistant');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+      if (spoken !== undefined && useChatStore.getState().status === 'idle') {
+        // One settle for the proposal the finished turn triggers, so the assertions that follow
+        // read a rendered panel rather than one halfway through an update.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        return spoken;
+      }
+      if (Date.now() > deadline) throw new Error('the scheduled turn never wrote a row');
+    }
+  }
+
+  it('[TurnPlan 落库] shows who speaks next and why, then takes the turn through the one turn path', async () => {
+    // Two cards the rule can tell apart: 莉安 is the stronger speaker by desire and ability, so
+    // the proposal has to be hers - and the reason has to say which numbers decided it.
+    const lian = await castCard('莉安', {
+      desire: 90,
+      ability: 80,
+      maxLinesPerRound: 2,
+      cooldown: 0,
+    });
+    const milla = await castCard('米拉', {
+      desire: 20,
+      ability: 20,
+      maxLinesPerRound: 1,
+      cooldown: 0,
+    });
+    const session = await castSession([milla, lian]);
+    const wire = answeringWire('莉安抬了抬眼，没有说话。');
+    await armTheProvider(wire);
+
+    const host = await mountAt(`/play/${session.id}`, t('play.schedulerTitle'));
+    await waitForSettings();
+
+    // THE PROPOSAL AND ITS REASON. The sentence is built from the SAME structured reason the
+    // plan stores (`session/scheduler-text.ts`), so a wording change in the catalog does not
+    // break this test and a change of SPEAKER does.
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '莉安',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 90, ability: 80 }),
+        ),
+      }),
+    );
+    // Every cast member is listed, so the user can see the roster the rule is choosing from.
+    expect(host.querySelector(`[data-cast="${lian.id}"]`)).not.toBeNull();
+    expect(host.querySelector(`[data-cast="${milla.id}"]`)).not.toBeNull();
+
+    // ASK FOR THE NEXT TURN, through the panel's own control.
+    await clickButton(host, t('play.schedulerSpeak'));
+    await waitForText(host, '莉安抬了抬眼，没有说话。');
+
+    const spoken = await waitForSpokenRow(session.id);
+    // ONE ROW, AND NO USER ROW: the instruction is a director's note on the wire, not something
+    // the player said (the same policy `generateOpening` follows).
+    expect(await getChain(session.id)).toHaveLength(1);
+    expect(spoken.role).toBe('assistant');
+    // WHO SPOKE is recorded on the row - the column the next round's caps are counted from.
+    expect(spoken.speakerId).toBe(lian.id);
+
+    // THE MILESTONE'S SECOND CLAUSE: the TurnPlan is stored, and the message names it.
+    const plans = await listTurnPlans(session.id);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.mode).toBe('user');
+    expect(plans[0]?.round).toBe(0);
+    expect(plans[0]?.entries.map((entry) => entry.characterId)).toEqual([lian.id, milla.id]);
+    expect(plans[0]?.entries[0]).toEqual({
+      characterId: lian.id,
+      order: 0,
+      linesBudget: 2,
+      score: 170,
+      reasons: ['rank=desire+ability', 'desire=90', 'ability=80'],
+    });
+    expect(plans[0]?.excluded).toEqual([]);
+    expect(spoken.meta.turnPlanId).toBe(plans[0]?.id);
+
+    // ONE REQUEST, and its body names the character the plan chose: the schedule really reached
+    // the prompt rather than merely decorating the screen.
+    expect(wire.calls()).toBe(1);
+    expect(wire.bodies()[0] ?? '').toContain('莉安');
+  });
+
+  it('[上限被硬性强制执行] marks a capped character as not selectable, with the reason, and proposes the one who can', async () => {
+    // 卡普 is the strongest speaker by a wide margin, and its card allows it ONE line per round -
+    // which it has already taken this round. The limit, not the score, decides the turn.
+    const capped = await castCard('卡普', { desire: 95, ability: 95, maxLinesPerRound: 1 });
+    const free = await castCard('芙蕾', { desire: 10, ability: 10, maxLinesPerRound: 2 });
+    const session = await castSession([capped, free]);
+    await playedRound(session.id, capped.id, '卡普看了你一眼。');
+    const wire = answeringWire('芙蕾点了点头。');
+    await armTheProvider(wire);
+
+    const host = await mountAt(`/play/${session.id}`, t('play.schedulerTitle'));
+
+    // THE PROPOSAL IS THE OTHER CARD, with the score reason.
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '芙蕾',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 10, ability: 10 }),
+        ),
+      }),
+    );
+
+    // AND THE BLOCKED ONE IS SHOWN AS BLOCKED, before any click: the sentence names the cap, and
+    // its control is disabled with that sentence as the tooltip.
+    const blockedRow = host.querySelector(`[data-cast="${capped.id}"]`);
+    const blocked = reasonSentence(
+      exclusionReasonText({ kind: 'capped', limit: 1, linesTaken: 1 }),
+    );
+    expect(blockedRow?.textContent ?? '').toContain(blocked);
+    const blockedButton = blockedRow?.querySelector('button');
+    expect(blockedButton instanceof HTMLButtonElement && blockedButton.disabled).toBe(true);
+    expect(blockedButton?.getAttribute('title')).toBe(blocked);
+  });
+
+  it('hands the turn to a character the user assigns, and records the override', async () => {
+    const strong = await castCard('斯特朗', { desire: 90, ability: 90, maxLinesPerRound: 2 });
+    const quiet = await castCard('奎特', { desire: 10, ability: 10, maxLinesPerRound: 1 });
+    const session = await castSession([strong, quiet]);
+    const wire = answeringWire('奎特终于开口了。');
+    await armTheProvider(wire);
+
+    const host = await mountAt(`/play/${session.id}`, t('play.schedulerTitle'));
+    await waitForSettings();
+    // The default proposal is the strong speaker; the assignment is what changes it.
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '斯特朗',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 90, ability: 90 }),
+        ),
+      }),
+    );
+
+    const row = host.querySelector(`[data-cast="${quiet.id}"]`);
+    const assign = Array.from(row?.querySelectorAll('button') ?? []).find(
+      (candidate) => candidate.textContent === t('play.schedulerAssign'),
+    );
+    if (!(assign instanceof HTMLButtonElement)) throw new Error('no assign control on the row');
+    await act(async () => {
+      assign.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await waitForText(host, '奎特终于开口了。');
+
+    // THE PLAN SAYS THE USER OVERRODE IT (`TurnPlan.overriddenByUser`, the field M2-S2 builds on),
+    // and the entry's reason is the ASSIGNMENT rather than the score.
+    const plans = await listTurnPlans(session.id);
+    expect(plans[0]?.overriddenByUser).toBe(true);
+    expect(plans[0]?.entries[0]).toEqual({
+      characterId: quiet.id,
+      order: 0,
+      linesBudget: 1,
+      score: 20,
+      reasons: ['assigned-order=1', 'desire=10', 'ability=10'],
+    });
+    // ...and the row that was written is that character's.
+    const spoken = await waitForSpokenRow(session.id);
+    expect(spoken.speakerId).toBe(quiet.id);
+    expect(wire.calls()).toBe(1);
+  });
+
+  it('states that nobody can speak, and records that finding instead of stalling silently', async () => {
+    // A one-character cast whose single line of the round is spent: every candidate (the only
+    // one) is capped, which is the "no valid candidate" position the milestone must make visible.
+    const only = await castCard('独苗', { desire: 50, ability: 50, maxLinesPerRound: 1 });
+    const session = await castSession([only]);
+    await playedRound(session.id, only.id, '独苗只说了一句。');
+    const wire = answeringWire('不应该发生。');
+    await armTheProvider(wire);
+
+    const host = await mountAt(`/play/${session.id}`, t('play.schedulerTitle'));
+
+    // THE OUTCOME IS ON SCREEN: a named sentence, not an empty panel and not a spinner.
+    await waitForText(host, t('play.schedulerNobody'));
+    const speak = Array.from(host.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent === t('play.schedulerSpeak'),
+    );
+    expect(speak instanceof HTMLButtonElement && speak.disabled).toBe(true);
+
+    // AND ASKING ANYWAY IS A NAMED ANSWER, not `undefined`: the store reports the reason, writes
+    // the finding (a plan with no entries and the exclusion that explains it) and sends nothing.
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await useChatStore.getState().speakNextTurn();
+    });
+    expect(outcome).toEqual({ kind: 'nobody', reason: { kind: 'nobody-eligible' } });
+    const plans = await listTurnPlans(session.id);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.entries).toEqual([]);
+    expect(plans[0]?.excluded).toEqual([
+      { characterId: only.id, reason: 'capped=maxLinesPerRound(1),lines=1' },
+    ]);
+    expect(wire.calls()).toBe(0);
+    // The screen still says why, which is what makes this a stated outcome rather than a stall.
+    expect(host.textContent).toContain(t('play.schedulerNobody'));
   });
 });

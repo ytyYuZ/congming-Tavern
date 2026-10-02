@@ -81,7 +81,7 @@
  * `parentId` from the head, so the other answer (and everything after it) appears without
  * a single message being copied or rewritten.
  */
-import type { MessageKey } from '@smarttavern/i18n';
+import type { MessageKey, Translator } from '@smarttavern/i18n';
 import type { Calendar, Checkpoint, Id, Message, Session } from '@smarttavern/schema';
 import { Link } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useState } from 'react';
@@ -97,6 +97,12 @@ import {
   variableText,
 } from '../../chat/vars';
 import { useTranslation } from '../../i18n/use-translation';
+import { MAX_SPEAKERS_PER_ROUND, type TurnSchedule } from '../../session/scheduler';
+import {
+  exclusionReasonText,
+  type ReasonText,
+  speakerReasonText,
+} from '../../session/scheduler-text';
 import { errorSentence, useChatStore } from '../../state/chat-store';
 import { useSettingsStore } from '../../state/settings-store';
 
@@ -165,6 +171,7 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
           <TimeControls sessionId={session.id} session={session} calendar={calendar} />
           <StatusBar sessionId={session.id} session={session} />
           <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />
+          <SchedulerPanel />
           {/* The opening choice is offered exactly while the session has not started (M1-S3);
               see `OpeningPanel` for why the head and the chain are both consulted, and why
               跳过 is the one choice that writes nothing. `skipped` is this screen's own
@@ -587,6 +594,161 @@ function CheckpointPanel({
       )}
     </section>
   );
+}
+
+/**
+ * The turn scheduler (M1-S5): who speaks next and WHY, who cannot speak and why, and the two
+ * ways a person acts on it - accept the proposal, or hand the turn to somebody else.
+ *
+ * WHY THE REASON IS ON SCREEN AND NOT ONLY IN THE PLAN ROW
+ * docs/02 §5.6 requires a `TurnPlan` whose reasons explain every placement, and docs/01 §9's
+ * MVP list requires the scheduling result to be VISIBLE ("who speaks, and why"). A panel that
+ * showed a name without the reason would be a black box with a nice font, and the row it
+ * stored would be the only place the answer lived - which is the wrong place for something
+ * the user is deciding about. So the sentence is rendered from the SAME structured reason the
+ * plan stores, through the catalog (`session/scheduler-text.ts`); nothing is parsed back.
+ *
+ * WHY THE PANEL DOES NOT COMPUTE A SINGLE ELIGIBILITY ITSELF, NOR ASK FOR ONE
+ * The limits are facts about the TRANSCRIPT, and the only layer that reads the transcript is
+ * the store (`state/chat-store.ts`, ADR-017) - which is also where the proposal is kept live:
+ * `open`'s `liveQuery` subscription recomputes it on every emit, so this component renders
+ * `schedule` and nothing else. Its disabled controls are therefore a CONSEQUENCE of that value
+ * rather than a second opinion about it, and an effect here would only be a third opinion -
+ * one whose dependencies (`sessionId`, the transcript) the effect body would never read, which
+ * is exactly the shape Biome's `useExhaustiveDependencies` is right to reject.
+ *
+ * The write refuses a stale click for the same reason the button looks disabled:
+ * `speakNextTurn` re-runs the pure rule and answers `not-selectable`.
+ */
+function SchedulerPanel() {
+  const { t } = useTranslation();
+  const schedule = useChatStore((state) => state.schedule);
+  const speakNextTurn = useChatStore((state) => state.speakNextTurn);
+  const streaming = useChatStore((state) => state.status) === 'streaming';
+
+  return (
+    <section className="scheduler">
+      <h2 className="section-title">{t('play.schedulerTitle')}</h2>
+      <p className="muted">
+        {t('play.schedulerHint', {
+          speakers: String(schedule?.maxSpeakersPerRound ?? MAX_SPEAKERS_PER_ROUND),
+        })}
+      </p>
+
+      {schedule === undefined ? null : (
+        <>
+          <p className="scheduler-next">{nextSentence(schedule, t)}</p>
+          <div className="btn-row">
+            <button
+              className="btn btn-primary"
+              type="button"
+              // A turn cannot start while one is streaming, and there is nothing to start when
+              // nobody is selectable - in which case the sentence above already says why.
+              disabled={streaming || schedule.next.kind !== 'speaker'}
+              onClick={() => {
+                // The store owns the `await` (a rejection here would be an unhandled one), and
+                // a refusal is already rendered: the exclusion list below is the reason, and an
+                // app-level refusal goes to the banner.
+                void speakNextTurn();
+              }}
+            >
+              {t('play.schedulerSpeak')}
+            </button>
+          </div>
+
+          <h3 className="section-title">{t('play.schedulerCastTitle')}</h3>
+          <ul className="scheduler-cast">
+            {schedule.entries.map((entry) => (
+              <li key={entry.characterId} className="scheduler-row" data-cast={entry.characterId}>
+                <span className="scheduler-name">{nameOf(entry.name, t)}</span>
+                <span className="muted">{t('play.schedulerSelectable')}</span>
+                <button
+                  className="btn btn-small"
+                  type="button"
+                  disabled={streaming}
+                  aria-label={t('play.schedulerAssignLabel', { name: nameOf(entry.name, t) })}
+                  onClick={() => {
+                    void speakNextTurn(entry.characterId);
+                  }}
+                >
+                  {t('play.schedulerAssign')}
+                </button>
+              </li>
+            ))}
+            {schedule.excluded.map((excluded) => {
+              const sentence = sentenceOf(t, exclusionReasonText(excluded.reason));
+              return (
+                <li
+                  key={excluded.characterId}
+                  className="scheduler-row"
+                  data-cast={excluded.characterId}
+                >
+                  <span className="scheduler-name">{nameOf(excluded.name, t)}</span>
+                  {/* The sentence is both the visible reason and the control's tooltip: a
+                      disabled button whose refusal is only discoverable by clicking is the
+                      thing this panel exists to avoid (the same shape M1-S2's delete uses). */}
+                  <span className="muted">{sentence}</span>
+                  <button
+                    className="btn btn-small"
+                    type="button"
+                    disabled
+                    title={sentence}
+                    aria-label={t('play.schedulerAssignLabel', { name: nameOf(excluded.name, t) })}
+                  >
+                    {t('play.schedulerAssign')}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The character's name, or the catalog's sentence for a card that cannot be read.
+ *
+ * The fallback is reachable: a session pins `{id, version}` pairs, and the row behind one can
+ * be gone (M1-M3 records that a deleted card leaves dangling pins rather than refusing the
+ * import). The scheduler reports that character as `card-missing` with this same sentence, so
+ * a nameless row is labelled and explained rather than shown as a bare id.
+ */
+function nameOf(name: string | undefined, t: Translator['t']): string {
+  return name ?? t('play.schedulerUnknownCard');
+}
+
+/** One reason, in the active language: the catalog owns the sentence, the core the facts. */
+function sentenceOf(t: Translator['t'], text: ReasonText): string {
+  return t(text.key, text.params);
+}
+
+/**
+ * The one line that says what will happen: the next speaker and why, the refusal of a named
+ * assignment, or the fact that nobody can speak.
+ *
+ * WHY THE NOBODY CASE HAS TWO SENTENCES AND NOT ONE: an empty cast and a fully blocked cast
+ * are different facts with different fixes (add cards, or wait a round). Collapsing them into
+ * "nobody can speak" would leave the user unable to tell which one they are looking at.
+ */
+function nextSentence(schedule: TurnSchedule, t: Translator['t']): string {
+  const next = schedule.next;
+  if (next.kind === 'speaker') {
+    return t('play.schedulerNext', {
+      name: nameOf(next.speaker.name, t),
+      reason: sentenceOf(t, speakerReasonText(next.speaker.reason)),
+    });
+  }
+  if (next.kind === 'refused') {
+    return t('play.schedulerRefused', {
+      name: nameOf(next.name, t),
+      reason: sentenceOf(t, exclusionReasonText(next.reason)),
+    });
+  }
+  return next.reason.kind === 'empty-cast'
+    ? t('play.schedulerEmptyCast')
+    : t('play.schedulerNobody');
 }
 
 /**

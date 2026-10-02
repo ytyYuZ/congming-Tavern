@@ -671,6 +671,52 @@ body {
   color: var(--muted);
 }
 
+/*
+ * The turn scheduler (M1-S5). Same shape as the panels above - a rule rather than a wrapper
+ * element - because it belongs to the same one open session and they may move together.
+ *
+ * WHY A ROW PER CANDIDATE AND NOT A TABLE: every row carries its OWN control and its OWN
+ * reason, so "this character, this reason, this button" has to be one unit. A table would let
+ * a narrow window separate the button from the sentence that explains why it is disabled, and
+ * that sentence is the whole point of the panel.
+ */
+.scheduler {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+/* The decision itself: the next speaker and why, or the reason nobody can speak. */
+.scheduler-next {
+  margin: 0.6rem 0 0.4rem;
+  font-weight: 600;
+}
+
+.scheduler-cast {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.scheduler-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.scheduler-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 /* --- the card libraries and editors (M1-W1 / M1-C1) ---------------------- */
 
 /*

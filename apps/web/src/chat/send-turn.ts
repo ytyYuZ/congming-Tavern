@@ -276,6 +276,20 @@ export async function sendTurn(
     text: string;
     signal: AbortSignal;
     append?: TurnAppend;
+    /**
+     * Who the LOCAL schedule said should speak (M1-S5). It is written onto the ASSISTANT row
+     * as `speakerId`, and that field is the whole reason a later round can tell who has
+     * already spoken: the scheduler reads the transcript to count each character's lines, so a
+     * turn that spoke for a card without recording which card makes every cap unenforceable.
+     *
+     * WHY IT IS OPTIONAL AND NOT A REQUIRED PART OF EVERY TURN: an ordinary composer turn
+     * (`send`) has no local plan - the player speaks, not a card - so the field's absence is
+     * the honest value for it, and a message with no `speakerId` is one docs/02 §7 already
+     * documents ("absent for narration/system output").
+     */
+    speakerId?: Id;
+    /** The stored plan this turn came from (M1-S5), recorded as `Message.meta.turnPlanId`. */
+    turnPlanId?: Id;
   },
 ): Promise<SendTurnResult> {
   const session = await getSession(params.sessionId);
@@ -360,7 +374,10 @@ export async function sendTurn(
     };
   }
 
-  return recordOutcome(deps, session.id, asked, draft, params.signal.aborted);
+  return recordOutcome(deps, session.id, asked, draft, params.signal.aborted, {
+    ...(params.speakerId === undefined ? {} : { speakerId: params.speakerId }),
+    ...(params.turnPlanId === undefined ? {} : { turnPlanId: params.turnPlanId }),
+  });
 }
 
 /** The provider id recorded on the session. `OpenAICompatibleProvider.id` is per-host. */
@@ -425,6 +442,12 @@ async function recordOutcome(
   asked: Message | undefined,
   draft: TurnDraft,
   aborted: boolean,
+  /**
+   * The local schedule's answer, when this turn came from one (M1-S5): which card spoke and
+   * which plan decided it. Empty for every other caller, so the two fields stay absent on a
+   * row that no schedule produced.
+   */
+  speaking: { readonly speakerId?: Id; readonly turnPlanId?: Id },
 ): Promise<SendTurnResult> {
   const failed = draft.error !== undefined;
   const keepPartial = !failed && draft.text !== '';
@@ -453,12 +476,19 @@ async function recordOutcome(
     parentId: await tip(),
     role: 'assistant',
     content: draft.text,
+    // WHO SPOKE, when a local schedule said so (M1-S5). The field is what makes the NEXT
+    // round's caps enforceable, because the scheduler counts each character's lines by
+    // reading this column (`session/scheduler.ts`).
+    ...(speaking.speakerId === undefined ? {} : { speakerId: speaking.speakerId }),
     // `model` is the id the user configured — a label, never a credential
     // (HANDOFF §4.1 invariant 6). `tokens` is present only when the vendor
     // actually reported usage.
     meta: {
       model: deps.config.model,
       ...(draft.usage === undefined ? {} : { tokens: draft.usage.output }),
+      // The plan that decided this turn, so "why did this character speak" is answerable
+      // from the transcript itself (docs/02 §4's `MessageMeta.turnPlanId`).
+      ...(speaking.turnPlanId === undefined ? {} : { turnPlanId: speaking.turnPlanId }),
     },
     extensions: {
       'x-finish-reason': draft.finishReason ?? (aborted ? 'aborted' : 'unknown'),

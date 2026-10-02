@@ -54,6 +54,24 @@
  * the only copy that cannot be stale (the `advance` failure path resyncs for the same
  * reason), and the same read refreshes the `headMessageId` the turn just moved.
  *
+ * WHAT M1-S5 ADDED: A PROPOSAL, A VALIDATED ASSIGNMENT, AND A STORED PLAN
+ * The turn scheduler's decision is a pure rule (`session/scheduler.ts`), and this store is
+ * what gives it DATA: `proposeNextTurn` resolves the session's cast pins to their voice
+ * profiles, hands the rule the active chain, and publishes the answer as `schedule`;
+ * `speakNextTurn` does the same for a named character, writes the `turnPlans` row and then
+ * runs the turn through the one path every other turn uses. The proposal is refreshed from
+ * the `liveQuery` subscription `open` installs, because the cast and the transcript ARE its
+ * inputs - which is what leaves the panel a renderer rather than a second place where the
+ * limits are interpreted. The two actions are separate on purpose: M1's honesty rule is "a
+ * reason beside a proposal", so the reason has to be on screen BEFORE the act, and a proposal
+ * that wrote rows as it was computed would make looking at the screen a database event.
+ *
+ * WHY A NAMED CHOICE IS VALIDATED HERE AND NOT IN THE PANEL
+ * The limits (lines per round, cooldown, speakers per round) are facts about the TRANSCRIPT,
+ * which only this layer reads. A panel that disabled a control from its own copy of the chain
+ * would be enforcing a second, staler version of the same rule - so the panel offers the
+ * assignment and this action refuses it, with the reason the same pure rule produced.
+ *
  * WHAT M1-S2 ADDED TO THIS STORE, AND WHAT IT DELIBERATELY DID NOT
  * The message tree's three mutating acts are here — `regenerate`, `editMessage` and
  * `deleteMessage` — plus `switchBranch`, which is the read-shaped one. Each is a POINTER
@@ -95,7 +113,15 @@
  */
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
-import type { Calendar, Checkpoint, Id, Message, Session, SessionState } from '@smarttavern/schema';
+import type {
+  Calendar,
+  Checkpoint,
+  EntityPin,
+  Id,
+  Message,
+  Session,
+  SessionState,
+} from '@smarttavern/schema';
 import { create } from 'zustand';
 import { BUILTIN_CALENDAR } from '../chat/builtin-content';
 import { advanceState, calendarOf } from '../chat/clock';
@@ -114,6 +140,7 @@ import {
   deleteCheckpoint as deleteCheckpointRow,
   deleteLeafMessage,
   getChain,
+  getCharacterVersion,
   getSession,
   getWorldVersion,
   hasChildren,
@@ -123,16 +150,43 @@ import {
   readSessions,
   restoreCheckpoint as restoreCheckpointRow,
   setHeadMessageId,
+  type TurnPlanRow,
   writeSessionState,
+  writeTurnPlan,
 } from '../db/repository';
 import { KEY_LOCKED_CODE, messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
 import { translate } from '../i18n/translate';
 import { type SessionDraft, sessionPinsOf } from '../session/roster';
+import {
+  type CastMember,
+  type NoSpeakerReason,
+  planDraftOf,
+  planTurn,
+  type RefusalReason,
+  type SchedulerInput,
+  spokenLineOf,
+  type TurnSchedule,
+} from '../session/scheduler';
 import { isProviderReady, useSettingsStore } from './settings-store';
 import { writeErrorName } from './write-error';
 
 /** The turn lifecycle: nothing in flight, a stream arriving, or the last turn failed. */
 export type ChatStatus = 'idle' | 'streaming' | 'error';
+
+/**
+ * What asking for the next turn did (M1-S5).
+ *
+ * FOUR NAMED OUTCOMES, AND NONE OF THEM IS `undefined`: "the turn went out", "nobody was
+ * selectable and here is why", "the character you named cannot speak and here is why", and
+ * "the app could not start a turn at all" (the same refusals `turnGate` reports, whose
+ * sentence is already in the banner). A caller can therefore tell a decision from a refusal
+ * without inspecting state, which is what the panel's own rendering rests on.
+ */
+export type SpeakOutcome =
+  | { readonly kind: 'started' }
+  | { readonly kind: 'nobody'; readonly reason: NoSpeakerReason }
+  | { readonly kind: 'not-selectable'; readonly characterId: Id; readonly reason: RefusalReason }
+  | { readonly kind: 'refused'; readonly key: MessageKey };
 
 /** The live assistant text of the turn in flight. */
 export interface StreamingDraft {
@@ -174,6 +228,18 @@ export interface ChatState {
    * a cost this list does not need.
    */
   checkpoints: Checkpoint[];
+  /**
+   * The turn scheduler's current PROPOSAL for the open session (M1-S5): who the local rule
+   * would put next, why, and who cannot speak this round.
+   *
+   * WHY IT IS STORE STATE AND NOT THE PANEL'S OWN: computing it needs the cast's PINNED
+   * card versions, and only this layer may reach `db/repository.ts` (ADR-017) - so a view
+   * cannot resolve a `Session.refs.cast` pin itself. It is a copy of the pure rule's output
+   * (`session/scheduler.ts`), refreshed by `proposeNextTurn` and by every turn this store
+   * starts, and it is cleared when the session changes so a proposal can never be rendered
+   * against another session's cast.
+   */
+  schedule: TurnSchedule | undefined;
   /**
    * The `Calendar` the OPEN session plays under (M1-T1 follow-up): the one its pinned world
    * version carries (`Session.refs.world` -> `worldVersions.data.calendar`), or
@@ -313,6 +379,30 @@ export interface ChatState {
    */
   advance: (delta: number) => Promise<number | undefined>;
   /**
+   * Recompute the scheduler's proposal for the open session and publish it (M1-S5).
+   *
+   * It writes NOTHING: a proposal is a thing to look at, and M1's honesty rule ("a reason
+   * beside a proposal") is about showing the reason BEFORE the act, not after it. The
+   * decision is recorded when it is taken (`speakNextTurn`).
+   *
+   * Resolves to the schedule it computed, or `undefined` when there is no open session.
+   * A read that resolves after the session changed is dropped, so a late card lookup cannot
+   * publish a proposal for a session the user has left (the same token rule `open` uses).
+   */
+  proposeNextTurn: () => Promise<TurnSchedule | undefined>;
+  /**
+   * Ask for the next turn: the scheduler's proposal, or the character a person assigned
+   * (M1-S5). The named choice is VALIDATED against the hard limits; a blocked choice is
+   * reported as `not-selectable` and nothing is written or sent.
+   *
+   * WHAT IT WRITES, AND IN WHICH ORDER: the `turnPlans` row first (the milestone's
+   * "TurnPlan 落库"), then the turn itself through the ONE existing path
+   * (`chat/send-turn.ts`, with the plan id and the speaker on the assistant row). A
+   * "nobody can speak" outcome is a decision too, so its plan row is written and its reason
+   * is left in `schedule` for the panel to render - never a silent stall.
+   */
+  speakNextTurn: (characterId?: Id) => Promise<SpeakOutcome>;
+  /**
    * Assign one free variable of the open session and persist it (M1-S6, ADR-031).
    * Resolves to `true` only when the row was written; a name no macro can address is
    * refused by the pure transition (`chat/vars.ts`) and answers `false`.
@@ -386,6 +476,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   session: undefined,
   messageChain: [],
   checkpoints: [],
+  schedule: undefined,
   calendar: BUILTIN_CALENDAR,
   draft: { ...IDLE_DRAFT },
   regenerating: null,
@@ -458,6 +549,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       session,
       calendar,
       checkpoints,
+      // The proposal belonged to whichever session was open before this read resolved; a fresh
+      // session starts with none, and the `liveQuery` subscription installed below recomputes
+      // one from the rows as soon as it emits (M1-S5).
+      schedule: undefined,
       error: undefined,
       status: 'idle',
       draft: { ...IDLE_DRAFT },
@@ -466,7 +561,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // another tab lands in the view without anyone re-fetching it by hand.
     unsubscribe = subscribe(
       () => readChain(sessionId),
-      (messageChain) => set({ messageChain }),
+      (messageChain) => {
+        set({ messageChain });
+        // THE PROPOSAL IS A FUNCTION OF THE CAST AND THE TRANSCRIPT (M1-S5), so every emit of
+        // this subscription is one of its inputs changing. Refreshing it HERE is what keeps the
+        // panel's "next speaker" from going stale after a turn, a branch switch or a rollback -
+        // and it keeps the panel a pure renderer, because a screen that watched the transcript
+        // itself would have to depend on values its effect never reads.
+        void get().proposeNextTurn();
+      },
       // A live query does not throw: it reports. A closed database (a closed tab, or a
       // test that closed it mid-flight) must not become an unhandled rejection — the
       // store turns it into the error state the view already knows how to show.
@@ -494,6 +597,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       session: undefined,
       messageChain: [],
       checkpoints: [],
+      // The proposal named THIS session's cast and round; leaving it would let the next
+      // session's first frame render another roster's answer (M1-S5).
+      schedule: undefined,
       // The calendar belonged to the session that just closed; leaving it would let the next
       // session's first frame render this world's month names before `open` resolves.
       calendar: BUILTIN_CALENDAR,
@@ -845,6 +951,95 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return undefined;
   },
 
+  /** See the interface's `proposeNextTurn` for what this is and is not. */
+  async proposeNextTurn(): Promise<TurnSchedule | undefined> {
+    const session = get().session;
+    if (session === undefined) return undefined;
+    const schedule = planTurn(
+      await schedulerInputOf(session, await getChain(session.id), undefined),
+    );
+    // The card rows are read one await at a time, so a close or a session switch can land in
+    // the middle of them. The stale answer is DROPPED rather than published: a proposal built
+    // from another session's cast is exactly the kind of value the panel would render as if it
+    // were this one's (the same guard `open` keeps for its calendar).
+    if (get().session?.id !== session.id) return undefined;
+    set({ schedule });
+    return schedule;
+  },
+
+  /** See the interface's `speakNextTurn` for the order of the write and the turn. */
+  async speakNextTurn(characterId?: Id): Promise<SpeakOutcome> {
+    const state = get();
+    const session = state.session;
+    if (session === undefined) return { kind: 'refused', key: 'error.messageMissing' };
+    // A second turn cannot be started while one is streaming, and an opening holds the same
+    // claim (it is the chain's first write). Both are unreachable from the panel - its
+    // controls are disabled - and both are refused here so a programmatic caller cannot
+    // interleave two streams through the one turn path.
+    if (state.status === 'streaming' || state.opening) {
+      return { kind: 'refused', key: 'play.schedulerBusy' };
+    }
+
+    const chain = await getChain(session.id);
+    const schedule = planTurn(await schedulerInputOf(session, chain, characterId));
+    if (get().session?.id !== session.id) {
+      return { kind: 'refused', key: 'error.messageMissing' };
+    }
+    set({ schedule });
+
+    // A NAMED CHOICE IS VALIDATED, NOT TRUSTED, and a blocked one writes nothing: no turn was
+    // decided, so there is no plan to record and nothing to send. The reason travels back to
+    // the caller AND is already in `schedule.excluded` for the panel to render.
+    if (schedule.next.kind === 'refused') {
+      return {
+        kind: 'not-selectable',
+        characterId: schedule.next.characterId,
+        reason: schedule.next.reason,
+      };
+    }
+
+    // THE DECISION IS LOCAL, AND IT IS RECORDED BEFORE ANYTHING LEAVES THE DEVICE (M1-S5's
+    // "TurnPlan 落库", ADR-011). It is written for BOTH outcomes: a plan with no entries and an
+    // `excluded` list is the recorded finding for a round nobody could speak in, which is the
+    // alternative to a silent stall. The session's own `schedulerMode` is what the row says,
+    // because that is the mode the session is being played in.
+    let plan: TurnPlanRow;
+    try {
+      plan = await writeTurnPlan(planDraftOf(session.id, session.schedulerMode, schedule));
+    } catch (cause) {
+      set({ error: localFailure(cause, 'unknown turn plan write failure') });
+      return { kind: 'refused', key: 'error.unknown' };
+    }
+
+    if (schedule.next.kind === 'none') return { kind: 'nobody', reason: schedule.next.reason };
+    const speaker = schedule.next.speaker;
+
+    // The director's note names the character the plan chose. It goes through the SAME gate
+    // every other turn does, so a missing endpoint or a locked key is reported by the banner
+    // instead of being discovered as a failed request.
+    const instruction = translate('play.schedulerInstruction', {
+      name: speakerNameOf(speaker.name),
+    });
+    const gate = turnGate(set, instruction);
+    if (gate !== undefined) return { kind: 'refused', key: gate };
+
+    controller = new AbortController();
+    set({ status: 'streaming', error: undefined, draft: { ...IDLE_DRAFT }, regenerating: null });
+    await runTurn(set, {
+      sessionId: session.id,
+      // NOTHING IS WRITTEN BEFORE THE REQUEST, for the reason `generateOpening` records: the
+      // instruction is a director's note, not the player's words, so it must not become a user
+      // message the transcript shows and the next turn quotes back. The assistant row the model
+      // answers with hangs off the current tip and carries the speaker and the plan.
+      append: { mode: 'none' },
+      userText: instruction,
+      prompt: instruction,
+      speakerId: speaker.characterId,
+      turnPlanId: plan.id,
+    });
+    return { kind: 'started' };
+  },
+
   /**
    * Move the clock by `delta` minutes and persist the whole state (M1-T2).
    *
@@ -1028,6 +1223,69 @@ async function pinnedCalendar(session: Session): Promise<Calendar> {
 }
 
 /**
+ * The scheduler's input for the open session (M1-S5): the cast pins resolved to their voice
+ * profiles, the active chain as the lines already spoken, and the user's assignment when they
+ * named one.
+ *
+ * WHY THE CAST IS RE-READ FROM THE PINS RATHER THAN CACHED IN THE STORE
+ * `Session.refs.cast` is a list of `{id, version}` pins (ADR-010), and the payload each one
+ * names is IMMUTABLE - so one read per proposal is the whole story, and a cached copy would
+ * be a second roster that could disagree with the pins the session actually holds.
+ *
+ * `assignedOrder` is a one-element list on purpose: M1-S5's manual act is "hand THIS turn to
+ * this character", and the core's sorted list is already the general form M2-S2's reordering
+ * needs. Passing `[characterId]` here is what makes the two the same rule rather than two.
+ */
+async function schedulerInputOf(
+  session: Session,
+  chain: readonly Message[],
+  choice: Id | undefined,
+): Promise<SchedulerInput> {
+  const cast: CastMember[] = [];
+  for (const pin of session.refs.cast) {
+    cast.push(await castMemberOf(pin));
+  }
+  return {
+    cast,
+    history: chain.map(spokenLineOf),
+    ...(choice === undefined ? {} : { assignedOrder: [choice] }),
+  };
+}
+
+/**
+ * One cast pin, resolved to what the scheduler needs.
+ *
+ * TWO WAYS A CARD CAN BE UNREADABLE, ONE ANSWER: `getCharacterVersion` returns `undefined`
+ * when no row carries that `{characterId, version}` (the card was deleted, or the version was
+ * never imported) and it THROWS when a row is there but cannot be parsed. Both mean "this
+ * character's speaking profile cannot be read", which the pure rule already has a name for
+ * (`card-missing`) - so the member is passed with `voice: undefined` and stays in the
+ * `excluded` list, visible, instead of being dropped from the round without a word. Inventing
+ * a default desire or ability here would be a silent guess about a card nobody can read.
+ */
+async function castMemberOf(pin: EntityPin): Promise<CastMember> {
+  try {
+    const version = await getCharacterVersion(pin.id, pin.version);
+    if (version === undefined) return { id: pin.id, name: undefined, voice: undefined };
+    return { id: pin.id, name: version.data.name, voice: version.data.voice };
+  } catch {
+    return { id: pin.id, name: undefined, voice: undefined };
+  }
+}
+
+/**
+ * The name to put in the instruction a scheduled turn sends.
+ *
+ * The fallback exists for one case the panel already labels: a speaker whose card could not be
+ * read has no name to use, and the sentence must still be a sentence rather than `undefined`
+ * interpolated into a prompt. It is the same catalog sentence the panel shows beside that
+ * character, so the model and the user are told the same thing.
+ */
+function speakerNameOf(name: string | undefined): string {
+  return name ?? translate('play.schedulerUnknownCard');
+}
+
+/**
  * Refuse a turn when the app cannot send one, and report which fact is missing.
  *
  * Returns the CATALOG KEY of the refusal (so `regenerate` and `continueWriting` can hand
@@ -1094,6 +1352,14 @@ interface TurnParams {
   readonly userText: string;
   /** The prompt the composer is asked about; `''` continues from the history. */
   readonly prompt: string;
+  /**
+   * The card a LOCAL schedule said should speak (M1-S5), when this turn came from one. It
+   * travels through to `chat/send-turn.ts`, which writes it onto the assistant row - the
+   * column the next round's caps are counted from.
+   */
+  readonly speakerId?: Id;
+  /** The stored plan this turn came from (M1-S5), recorded on the assistant row's `meta`. */
+  readonly turnPlanId?: Id;
 }
 
 async function runTurn(
@@ -1134,6 +1400,10 @@ async function runTurn(
         text: params.prompt,
         signal,
         ...(params.append === undefined ? {} : { append: params.append }),
+        // The local schedule's answer, when this turn came from one (M1-S5): which card spoke
+        // and which plan decided it. Absent for every gesture a person typed.
+        ...(params.speakerId === undefined ? {} : { speakerId: params.speakerId }),
+        ...(params.turnPlanId === undefined ? {} : { turnPlanId: params.turnPlanId }),
       },
     );
     // See the header: the composer may have written variables, and this store's copy of
@@ -1244,6 +1514,7 @@ export function resetChat(): void {
     session: undefined,
     messageChain: [],
     checkpoints: [],
+    schedule: undefined,
     calendar: BUILTIN_CALENDAR,
     draft: { ...IDLE_DRAFT },
     regenerating: null,

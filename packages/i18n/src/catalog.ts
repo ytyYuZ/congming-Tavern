@@ -753,6 +753,59 @@ export const zhCN = {
   'play.variableAdded': '已添加变量',
   /** Text the chosen kind cannot hold (a non-number for 数值, or a blank name). */
   'play.variableInvalid': '请输入该类型的一个有效值',
+  /*
+   * THE TURN SCHEDULER (M1-S5, docs/02 §5.6, docs/01 §F4-6) — who speaks next, and why.
+   *
+   * WHY THE PANEL SAYS THE CAPS OUT LOUD: 上限被硬性强制执行 is the milestone's own acceptance
+   * sentence, and a limit a user cannot see is indistinguishable from a bug the day a
+   * character stays silent. `{speakers}` is the per-round speaker cap; the line cap and the
+   * cooldown come from each card, so the hint points at the card instead of inventing a
+   * number the scheduler does not own.
+   *
+   * WHY THE REASONS ARE SEPARATE SENTENCES AND NOT ONE TEMPLATE: a reason is a FACT the
+   * engine produced (`session/scheduler-text.ts` maps each one exhaustively), and the two
+   * locales order the clause differently — the same argument `play.clock` records. The
+   * reason is then nested into the selection sentence, so a screen reader hears one
+   * sentence rather than a name followed by a fragment.
+   */
+  'play.schedulerTitle': '发言调度',
+  'play.schedulerHint':
+    '本地调度器按发言欲望与能力给出顺序，并强制执行硬上限：每轮最多 {speakers} 人发言，单人条数与冷却轮数由角色卡决定，模型无法突破。',
+  /** `{reason}` is one of the `play.schedulerReason*` sentences, already translated. */
+  'play.schedulerNext': '下一位发言：{name}（{reason}）',
+  'play.schedulerNobody': '本轮没有人可以发言。',
+  'play.schedulerEmptyCast': '这个会话还没有卡司角色，目前只有玩家角色。',
+  /** The refusal of a manual assignment the limits block; `{reason}` as above. */
+  'play.schedulerRefused': '{name} 现在不能发言（{reason}）',
+  'play.schedulerSpeak': '让 TA 发言',
+  'play.schedulerCastTitle': '卡司',
+  'play.schedulerSelectable': '可以发言',
+  /** The visible label of a row's assign control; the accessible name carries the card. */
+  'play.schedulerAssign': '指派',
+  'play.schedulerAssignLabel': '指派 {name} 发言',
+  /** A cast pin whose card version cannot be read: the panel still lists the character. */
+  'play.schedulerUnknownCard': '角色卡已不在库中',
+  /**
+   * A second turn cannot start while one is streaming or an opening is being written. The
+   * panel's controls are disabled in that state, so this sentence is for a programmatic
+   * caller - and it exists rather than a bare `false`, because "why did nothing happen" is
+   * the question an unstated refusal leaves behind.
+   */
+  'play.schedulerBusy': '上一条回复还在生成中，请先停止或等待它写完',
+  'play.schedulerReasonManual': '你手动指派了顺序，TA 排在第 {position} 位',
+  'play.schedulerReasonScore': '发言欲望 {desire} / 发言能力 {ability}，在可选角色里最高',
+  'play.schedulerExcludedCapped': '单轮条数已达上限（{lines}/{limit}）',
+  'play.schedulerExcludedCooling': '冷却中：还要等 {remaining} 轮（冷却 {cooldown} 轮）',
+  'play.schedulerExcludedSpeakerCap': '本轮发言人数已达上限（{limit} 人）',
+  'play.schedulerExcludedCardMissing': '绑定的角色卡版本已不在库中，读不到发言档案',
+  'play.schedulerExcludedNotInCast': 'TA 不在本次会话的卡司里',
+  /**
+   * The instruction a scheduled turn sends: the plan decided WHO, this says it to the model.
+   * It is the same kind of text as `play.openingInstruction` — a director's note that goes
+   * on the wire and is deliberately NOT written into the transcript as a message.
+   */
+  'play.schedulerInstruction':
+    '现在请以「{name}」的身份发言：接着当前的场景写下去，只写这个角色会说的话与做的事，不要替其他角色或玩家发言。',
 
   /*
    * THE MESSAGE-STREAM CONTROLS (M1-S2) — one label per act on a message.
@@ -1348,6 +1401,30 @@ export const en: Messages = {
   'play.variableSaved': 'Variable saved',
   'play.variableAdded': 'Variable added',
   'play.variableInvalid': 'Enter a valid value for that type',
+  'play.schedulerTitle': 'Turn scheduling',
+  'play.schedulerHint':
+    'The local scheduler orders the cast by desire and ability and enforces the hard caps: at most {speakers} speakers per round, while lines per round and cooldown come from each card. The model cannot override them.',
+  'play.schedulerNext': 'Next to speak: {name} ({reason})',
+  'play.schedulerNobody': 'Nobody can take a turn in this round.',
+  'play.schedulerEmptyCast': 'This session has no cast yet, only the player character.',
+  'play.schedulerRefused': '{name} cannot speak right now ({reason})',
+  'play.schedulerSpeak': 'Give them the turn',
+  'play.schedulerCastTitle': 'Cast',
+  'play.schedulerSelectable': 'Can speak',
+  'play.schedulerAssign': 'Assign',
+  'play.schedulerAssignLabel': 'Assign the turn to {name}',
+  'play.schedulerUnknownCard': 'card no longer in the library',
+  'play.schedulerBusy': 'The previous reply is still being written. Stop it or wait for it.',
+  'play.schedulerReasonManual': 'you placed them at position {position} in your order',
+  'play.schedulerReasonScore': 'desire {desire} / ability {ability}, the highest of the candidates',
+  'play.schedulerExcludedCapped': 'line limit reached this round ({lines}/{limit})',
+  'play.schedulerExcludedCooling': 'cooling down: {remaining} more round(s) at cooldown {cooldown}',
+  'play.schedulerExcludedSpeakerCap': 'this round already has its maximum of {limit} speakers',
+  'play.schedulerExcludedCardMissing':
+    'the pinned card version is no longer in the library, so its voice profile cannot be read',
+  'play.schedulerExcludedNotInCast': 'they are not in the cast of this session',
+  'play.schedulerInstruction':
+    'Now speak as {name}: continue the current scene and write only what this character says and does. Do not speak for any other character or for the player.',
   'play.siblingCounter': 'Answer {position} of {total}',
   'play.siblingPrevious': 'Previous',
   'play.siblingNext': 'Next',

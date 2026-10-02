@@ -76,6 +76,8 @@ import {
   SessionSchema,
   type SessionState,
   SessionStateSchema,
+  type TurnPlan,
+  TurnPlanSchema,
   type VersionNumber,
   type World,
   type WorldData,
@@ -106,6 +108,7 @@ import {
   encryptedSecretToJson,
   isEncryptedSecret,
 } from '../secrets/secret-crypto';
+import type { TurnPlanDraft } from '../session/scheduler';
 import { readTable, write } from './database';
 
 /* ─────────────────────────────── identifiers ─────────────────────────────── */
@@ -1087,6 +1090,71 @@ export async function restoreCheckpoint(
     });
   });
   return { sessionId: checkpoint.sessionId, headMessageId };
+}
+
+/* ──────────────────────────────── turn plans ─────────────────────────────── */
+
+/**
+ * One stored turn plan (M1-S5; docs/02 §7's `turnPlans`, ADR-011).
+ *
+ * WHY THE PLAN IS STORED AT ALL, AND WHY IT IS ONE `put`
+ * The milestone's acceptance says the TurnPlan 落库, and the schema already says what the row
+ * is FOR: `MessageMeta.turnPlanId` ("the local plan that decided who spoke"), plus the
+ * `excluded` list that docs/06 §2.5's M1-S5 row and `packages/schema`'s `turn.ts` both call
+ * the explanation of a silence. It is ONE row in ONE transaction, like a save point: the
+ * entries and the exclusions are one decision, and a reader must never see half of it.
+ *
+ * WHY `TurnPlanDraft` COMES FROM `session/scheduler.ts`
+ * The id and the timestamp are minted HERE, exactly as `appendMessage` and `createCheckpoint`
+ * mint theirs, so there is one minter for this collection. Everything else is the rule's
+ * output, and `session/scheduler.ts` owns it (`planDraftOf` is where the structured reasons
+ * become the row's locale-free fact strings) — this module only persists what it is handed.
+ */
+export type TurnPlanRow = TurnPlan & RowBase;
+
+function turnPlansOf(tx: Tx): Collection<TurnPlanRow> {
+  return tx.collection<TurnPlanRow>(COLLECTIONS.turnPlans);
+}
+
+/**
+ * Store one round's decision and hand back the row that was written.
+ *
+ * The row is parsed BEFORE the put, like every other writer here (ADR-016), so a draft the
+ * schema refuses is a thrown error at the write rather than a row no reader can parse. The
+ * entry and exclusion objects are copied first: the caller's schedule is a value the SCREEN
+ * is still rendering, and a stored row aliasing it would move under the user (`copyState`
+ * exists in this file for the same reason).
+ */
+export async function writeTurnPlan(draft: TurnPlanDraft): Promise<TurnPlanRow> {
+  const stored: TurnPlanRow = {
+    ...draft,
+    entries: draft.entries.map((entry) => ({ ...entry, reasons: [...entry.reasons] })),
+    excluded: draft.excluded.map((entry) => ({ ...entry })),
+    id: mintUuidV7(),
+    createdAt: Date.now(),
+  };
+  const parsed = TurnPlanSchema.parse(stored) as TurnPlanRow;
+  await write(async (tx) => {
+    await turnPlansOf(tx).put(parsed);
+  });
+  return parsed;
+}
+
+/**
+ * A session's plans for one round, oldest round first.
+ *
+ * The `(sessionId, round)` index is what docs/02 §7 gives this collection, so the query names
+ * both fields. Plans accumulate (one per decision), which is deliberate: the index is
+ * non-unique, and "what did the scheduler decide before the user stepped in" is a question
+ * that only an accumulating row can answer.
+ */
+export async function listTurnPlans(sessionId: Id): Promise<TurnPlanRow[]> {
+  return write(async (tx) =>
+    turnPlansOf(tx).list(
+      { where: { sessionId }, field: 'round', order: 'asc' },
+      'turnPlans_sessionId_round',
+    ),
+  );
 }
 
 /* ─────────────────────────────── live queries ────────────────────────────── */
