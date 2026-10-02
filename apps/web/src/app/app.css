@@ -670,3 +670,198 @@ body {
   font-size: 0.9rem;
   color: var(--muted);
 }
+
+/* --- the card libraries and editors (M1-W1 / M1-C1) ---------------------- */
+
+/*
+ * A library's create form: the name field grows and the button keeps its size, so a long name does
+ * not push the control off a narrow window (`flex-wrap` covers the width where it would).
+ */
+.card-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.6rem 0 1rem;
+}
+
+.card-create input {
+  font: inherit;
+  flex: 1;
+  min-width: 12rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/*
+ * The editor's status block. It holds the two sentences that make the draft/publish split legible
+ * (`common.unsavedDraft`, `common.draftBase`) plus the two acts, so the RULE and the BUTTON are one
+ * object — the failure mode this ordering prevents is a user who thinks the publish button is
+ * redundant because everything is "already saved".
+ */
+.card-status {
+  margin-bottom: 1rem;
+}
+
+.card-status p {
+  margin: 0.2rem 0;
+}
+
+/*
+ * One form group per section of docs/01 §5.2. A rule rather than a wrapper element separates the
+ * groups, the same shape the appearance section and the play-screen panels use, so a group can move
+ * to a screen of its own without a layout change.
+ */
+.field-group {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+/* The validation panel. Always rendered (「校验可用」), green when there is nothing to report. */
+.issues {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.issue-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+/*
+ * The schema's and the engine's own sentence is a DIAGNOSTIC, so it is set apart from the field's
+ * name rather than hidden: `common.issue` puts the label first because that is what the user acts
+ * on. `overflow-wrap` keeps a long engine message from widening the column.
+ */
+.issue {
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+/* The list editors: one card per row, so a list of twelve months stays readable. */
+.row-list {
+  margin-top: 0.9rem;
+}
+
+.row-list-title {
+  font-size: 0.95rem;
+  margin: 0 0 0.4rem;
+}
+
+.row-list-items {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.row-list-row {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+/* A row's own controls sit under its fields, right-aligned to the row's edge. */
+.row-list-row .btn-row {
+  margin-top: 0.4rem;
+}
+
+/* The custom-field rows reuse the variable list's shape: a name, a value and a remove button. */
+.custom-fields {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.custom-list {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.custom-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.custom-row .field {
+  flex: 1;
+  min-width: 8rem;
+  margin-bottom: 0;
+}
+
+.custom-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.custom-add input {
+  font: inherit;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* The editors' textareas: the house shape already, but a group needs its own width. */
+.field-group textarea,
+.row-list textarea,
+.custom-row input {
+  font: inherit;
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+
+/* A checkbox reads as a label and a box on one line, not as a stacked field. */
+.field-check label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+}
+
+.field-check input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+/* The editors' selects (seed policy, reasoning effort, a reference's role). */
+.field-group select {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+}

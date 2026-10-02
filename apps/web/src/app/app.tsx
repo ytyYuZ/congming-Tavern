@@ -49,9 +49,13 @@ import { useAppearanceEffect } from '../appearance/use-appearance-effect';
 import { useTranslation } from '../i18n/use-translation';
 import { useAppearanceStore } from '../state/appearance-store';
 import { useLocaleStore } from '../state/locale-store';
+import { CharacterRoute } from './routes/character';
+import { CharactersRoute } from './routes/characters';
 import { HomeRoute } from './routes/home';
 import { PlayRoute } from './routes/play';
 import { SetupRoute } from './routes/setup';
+import { WorldRoute } from './routes/world';
+import { WorldsRoute } from './routes/worlds';
 import './app.css';
 
 const rootRoute = createRootRoute();
@@ -72,6 +76,38 @@ const playRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/play/$sessionId',
   component: PlayPage,
+});
+
+/**
+ * The two card libraries and their editors (M1-W1 / M1-C1).
+ *
+ * WHY THEY ARE FOUR ROUTES AND NOT TWO: a library is a LIST and an editor is a DOCUMENT, and the
+ * editor's lifetime is tied to the id in the address — so a reload, a bookmark and the back button
+ * all land on the same card the same way the play screen's session does. A single route with a
+ * mode flag would have to invent that state, and it would lose the URL.
+ */
+const worldsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/worlds',
+  component: WorldsPage,
+});
+
+const worldRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/worlds/$worldId',
+  component: WorldPage,
+});
+
+const charactersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/characters',
+  component: CharactersPage,
+});
+
+const characterRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/characters/$characterId',
+  component: CharacterPage,
 });
 
 /**
@@ -101,6 +137,10 @@ function AppHeader() {
     <header className="app-header">
       <h1>{t('common.appName')}</h1>
       <nav className="app-nav">
+        {/* The two card libraries (M1-W1 / M1-C1) sit beside the setup link, because a library is
+            something a user goes TO rather than something a screen offers. */}
+        <Link to="/worlds">{t('nav.worlds')}</Link>
+        <Link to="/characters">{t('nav.characters')}</Link>
         <Link to="/setup">{t('nav.settings')}</Link>
         <select
           className="locale-picker"
@@ -153,7 +193,61 @@ function PlayPage() {
   );
 }
 
-export const routeTree = rootRoute.addChildren([homeRoute, setupRoute, playRoute]);
+function WorldsPage() {
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <WorldsRoute />
+      </main>
+    </>
+  );
+}
+
+function WorldPage() {
+  const { worldId } = worldRoute.useParams();
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <WorldRoute worldId={worldId} />
+      </main>
+    </>
+  );
+}
+
+function CharactersPage() {
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <CharactersRoute />
+      </main>
+    </>
+  );
+}
+
+function CharacterPage() {
+  const { characterId } = characterRoute.useParams();
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <CharacterRoute characterId={characterId} />
+      </main>
+    </>
+  );
+}
+
+export const routeTree = rootRoute.addChildren([
+  homeRoute,
+  setupRoute,
+  playRoute,
+  worldsRoute,
+  worldRoute,
+  charactersRoute,
+  characterRoute,
+]);
 
 /** A router over the tree, starting at `initialPath`. A factory so each test is fresh. */
 export function createAppRouter(initialPath = '/') {

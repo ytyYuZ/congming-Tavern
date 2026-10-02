@@ -63,6 +63,7 @@ export interface MountOptions {
 export { closeDatabase, resetDatabase, subscribe } from './db/database';
 export { resetAppearanceStore, useAppearanceStore } from './state/appearance-store';
 export { configureChat, resetChat, useChatStore } from './state/chat-store';
+export { resetContentStore, useContentStore } from './state/content-store';
 export { resetLocaleStore, useLocaleStore } from './state/locale-store';
 export { resetSettingsStore, useSettingsStore } from './state/settings-store';
 

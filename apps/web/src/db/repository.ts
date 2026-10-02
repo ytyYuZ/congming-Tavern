@@ -56,9 +56,16 @@
 import { COLLECTIONS, type Collection, type RowBase, type Tx } from '@smarttavern/core';
 import { isLocale, type Locale } from '@smarttavern/i18n';
 import {
+  type Character,
+  type CharacterData,
+  CharacterDataSchema,
+  CharacterSchema,
+  type CharacterVersion,
+  CharacterVersionSchema,
   type Checkpoint,
   CheckpointSchema,
   defaultSessionState,
+  type Extensions,
   type Id,
   type JsonValue,
   type Message,
@@ -68,6 +75,13 @@ import {
   SessionSchema,
   type SessionState,
   SessionStateSchema,
+  type VersionNumber,
+  type World,
+  type WorldData,
+  WorldDataSchema,
+  WorldSchema,
+  type WorldVersion,
+  WorldVersionSchema,
 } from '@smarttavern/schema';
 import {
   type FontScale,
@@ -77,6 +91,15 @@ import {
   parseTheme,
   type Theme,
 } from '../appearance/appearance';
+import {
+  type CharacterDraft,
+  characterDraftValue,
+  readCharacterDraft as readCharacterDraftValue,
+  readWorldDraft as readWorldDraftValue,
+  type WorldDraft,
+  worldDraftValue,
+} from '../cards/draft';
+import { planCharacterVersion, planWorldVersion, type VersionAnchor } from '../cards/versions';
 import {
   type EncryptedSecret,
   encryptedSecretToJson,
@@ -793,6 +816,26 @@ function checkpointsOf(tx: Tx): Collection<CheckpointRow> {
   return tx.collection<CheckpointRow>(COLLECTIONS.checkpoints);
 }
 
+/*
+ * The card libraries' collections (M1-W1 / M1-C1). Both kinds are a head row plus immutable
+ * version rows (`docs/02` §7), so these four helpers are the only places those names appear.
+ */
+function worldsOf(tx: Tx): Collection<World> {
+  return tx.collection<World>(COLLECTIONS.worlds);
+}
+
+function worldVersionsOf(tx: Tx): Collection<WorldVersion> {
+  return tx.collection<WorldVersion>(COLLECTIONS.worldVersions);
+}
+
+function charactersOf(tx: Tx): Collection<Character> {
+  return tx.collection<Character>(COLLECTIONS.characters);
+}
+
+function characterVersionsOf(tx: Tx): Collection<CharacterVersion> {
+  return tx.collection<CharacterVersion>(COLLECTIONS.characterVersions);
+}
+
 /**
  * A DEEP-ENOUGH COPY OF A SESSION STATE — the one place the snapshot's independence is
  * created.
@@ -1034,4 +1077,379 @@ export async function readChain(sessionId: Id): Promise<Message[]> {
 /** `liveQuery` payload for the home view: every session, newest first. */
 export async function readSessions(): Promise<Session[]> {
   return listSessions();
+}
+
+/* ──────────────── the card libraries: worlds and characters ─────────────── */
+
+/**
+ * Worlds and characters — the rows M1-W1 / M1-C1 edit, and the DRAFT rows their autosave writes.
+ *
+ * THE THREE READS AND THE THREE WRITES ARE NOT SYMMETRIC, AND THAT IS ADR-010
+ * - `list*` and `get*` read the HEAD rows, which are a mutable index: name, `headVersion`, tags.
+ * - `latest*Version` reads the newest IMMUTABLE payload, which is what an editor opens with.
+ * - `create*` writes a head AND version 1 in ONE transaction; `publish*` writes a new version and
+ *   moves the head, and does BOTH inside the transaction that read the head — so the version
+ *   number cannot be minted from a stale copy (two writers would collide on the `(worldId,
+ *   version)` unique index rather than quietly overwrite each other's history).
+ * - The DRAFT is not a version and is not in either of the two versioned collections: it is one
+ *   `settings` row per card (`cards/draft.ts` records why), and `publish*` deletes it in the same
+ *   transaction that writes the version — "the draft became a version" is one atomic fact.
+ *
+ * WHY THE HEAD IS RE-READ INSIDE THE TRANSACTION AND THE PAYLOAD IS NOT TRUSTED
+ * `planWorldVersion` is handed the head row as this transaction sees it, which is what makes the
+ * new version number monotonic over the PERSISTED value. The incoming payload is parsed with the
+ * entity schema first (`safeParse`, so a refusal is a return value rather than a thrown error
+ * inside a transaction) — the same "parse on the way in" rule every other writer here follows
+ * (ADR-016), applied as a gate because the editor has already shown the user what is wrong.
+ */
+
+/** One `worlds` row by id. */
+export async function getWorld(worldId: Id): Promise<World | undefined> {
+  const row = await readTable<Record<string, unknown>>(COLLECTIONS.worlds).get(worldId);
+  return row === undefined ? undefined : WorldSchema.parse(row);
+}
+
+/**
+ * Every world, by name.
+ *
+ * WHY THIS IS A `readTable` SCAN AND NOT A PORT QUERY: `worlds_name` indexes one field, but this
+ * is the library's whole list — there is nothing to narrow it by — and `listSessions` above reads
+ * the same way for the same reason. Ordering by the indexed field is what the index exists for,
+ * and it happens in the storage engine.
+ */
+export async function listWorlds(): Promise<World[]> {
+  const rows = await readTable<World>(COLLECTIONS.worlds).orderBy('name').toArray();
+  return rows.map((row) => WorldSchema.parse(row));
+}
+
+/** One immutable version of one world, or `undefined` when it was never written. */
+export async function getWorldVersion(
+  worldId: Id,
+  version: VersionNumber,
+): Promise<WorldVersion | undefined> {
+  return write(async (tx) => {
+    const rows = await worldVersionsOf(tx).list(
+      { where: { worldId, version } },
+      'worldVersions_worldId_version',
+    );
+    const row = rows[0];
+    return row === undefined ? undefined : WorldVersionSchema.parse(row);
+  });
+}
+
+/**
+ * The newest version of a world — what an editor opens with.
+ *
+ * WHY THE WHOLE TABLE IS SCANNED AND FILTERED IN MEMORY: the `(worldId, version)` index is
+ * COMPOUND, and this adapter only uses one when every field it covers is constrained
+ * (`packages/storage`'s adapter says so; `listChildren` above reaches the same conclusion). A
+ * query that named only `worldId` would fall back to a table scan anyway, so the scan is written
+ * where a reader can see it — and version rows are counted in tens, not millions.
+ */
+export async function latestWorldVersion(worldId: Id): Promise<WorldVersion | undefined> {
+  const rows = await readTable<WorldVersion>(COLLECTIONS.worldVersions).toArray();
+  const mine = rows
+    .filter((row) => row.worldId === worldId)
+    .map((row) => WorldVersionSchema.parse(row))
+    .sort((left, right) => right.version - left.version);
+  return mine[0];
+}
+
+/** The `settings` key a world's draft row lives under (see `cards/draft.ts`). */
+export function worldDraftId(worldId: Id): string {
+  return `draft.world.${worldId}`;
+}
+
+/**
+ * A world's stored draft, completed against the version the editor opened with.
+ *
+ * `undefined` means "there is no draft" — which is also what a row nobody can read degrades to,
+ * so the editor falls back to the published payload instead of failing (`readLocaleSetting` above
+ * applies the same rule to a corrupt locale).
+ */
+export async function readWorldDraft(
+  worldId: Id,
+  base: WorldVersion,
+): Promise<WorldDraft | undefined> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
+    worldDraftId(worldId),
+  );
+  return row === undefined ? undefined : readWorldDraftValue(row.value, base);
+}
+
+/** Store a world draft. One `settings` row, one transaction, written as given. */
+export async function writeWorldDraft(worldId: Id, draft: WorldDraft): Promise<void> {
+  await write(async (tx) => {
+    await settingsOf(tx).put({ id: worldDraftId(worldId), value: worldDraftValue(draft) });
+  });
+}
+
+/** Drop a world draft, so the next open shows the published version again. */
+export async function clearWorldDraft(worldId: Id): Promise<void> {
+  await write(async (tx) => {
+    await settingsOf(tx).remove(worldDraftId(worldId));
+  });
+}
+
+/**
+ * Create a world: a head row and version 1, in ONE transaction.
+ *
+ * The caller supplies the whole blank payload (`cards/world.ts`'s `blankWorldData`) rather than a
+ * name this module would have to turn into content: what a new world contains is the editor's
+ * decision, and a storage module that invented a calendar would be a second owner of that data
+ * (`createSession`'s title makes the same split for the same reason).
+ *
+ * A payload the schema refuses is a REFUSAL (`undefined`), not a thrown error: the caller is a
+ * click on 「新建」, and an exception inside a transaction is a rejection at the UI with nothing to
+ * show. The editor validates first; this is the backstop.
+ */
+export async function createWorld(input: {
+  name: string;
+  data: WorldData;
+  extensions?: Extensions;
+}): Promise<{ world: World; version: WorldVersion } | undefined> {
+  const parsed = WorldDataSchema.safeParse(input.data);
+  if (!parsed.success) return undefined;
+  return write(async (tx) => {
+    const at = Date.now();
+    // `headVersion: 0` is the "no version yet" head the planner turns into version 1 — the same
+    // code path an iteration takes, which is what keeps a first version from forgetting the head.
+    const head: World = {
+      id: mintUuidV7(),
+      name: input.name,
+      headVersion: 0,
+      tags: [...parsed.data.genre],
+      createdAt: at,
+      updatedAt: at,
+    };
+    const plan = planWorldVersion({
+      head,
+      base: undefined,
+      data: parsed.data,
+      extensions: input.extensions,
+      id: mintUuidV7(),
+      at,
+    });
+    const world = WorldSchema.parse(plan.world);
+    const version = WorldVersionSchema.parse(plan.version);
+    await worldsOf(tx).put(world);
+    await worldVersionsOf(tx).put(version);
+    return { world, version };
+  });
+}
+
+/**
+ * Publish a draft as a new world version.
+ *
+ * THE TRANSACTION IS THE RULE: the head is read HERE, so `version` is `head.headVersion + 1` as
+ * the database has it, and the anchor the draft names is resolved HERE too — a version row cannot
+ * disappear (versions are immutable and never deleted), so the lineage is exact even when another
+ * tab published while this editor was open.
+ *
+ * WHAT IT WRITES: the new version row, the head row that points at it, and the removal of the
+ * draft. All three in one transaction, so there is no instant in which a version exists whose
+ * draft also does or a head points at a row that is not there.
+ *
+ * WHAT IT DOES NOT DO: it never touches an existing version row, and it never deletes one. The
+ * `(worldId, version)` unique index is the last guard against a duplicated version number.
+ */
+export async function publishWorld(input: {
+  worldId: Id;
+  data: WorldData;
+  extensions?: Extensions;
+  /** The version the draft was edited from (`cards/draft.ts`'s `baseVersion`). */
+  baseVersion: VersionNumber;
+  /** The lineage sentence, in the language active at the save. */
+  reason: string;
+}): Promise<{ world: World; version: WorldVersion } | undefined> {
+  const parsed = WorldDataSchema.safeParse(input.data);
+  if (!parsed.success) return undefined;
+  return write(async (tx) => {
+    const row = await worldsOf(tx).get(input.worldId);
+    if (row === undefined) return undefined;
+    const head = WorldSchema.parse(row);
+    const anchor = await findWorldVersion(tx, input.worldId, input.baseVersion);
+    const plan = planWorldVersion({
+      head,
+      base: anchor === undefined ? undefined : { anchor, reason: input.reason },
+      data: parsed.data,
+      extensions: input.extensions,
+      id: mintUuidV7(),
+      at: Date.now(),
+    });
+    const world = WorldSchema.parse(plan.world);
+    const version = WorldVersionSchema.parse(plan.version);
+    await worldVersionsOf(tx).put(version);
+    await worldsOf(tx).put(world);
+    await settingsOf(tx).remove(worldDraftId(input.worldId));
+    return { world, version };
+  });
+}
+
+/** One `characterVersions` row by number: the lineage anchor, resolved inside a transaction. */
+async function findWorldVersion(
+  tx: Tx,
+  worldId: Id,
+  version: VersionNumber,
+): Promise<VersionAnchor | undefined> {
+  const rows = await worldVersionsOf(tx).list(
+    { where: { worldId, version } },
+    'worldVersions_worldId_version',
+  );
+  const row = rows[0];
+  return row === undefined ? undefined : { id: row.id, version: row.version };
+}
+
+/* ──────────────────────────────── characters ─────────────────────────────── */
+
+/** One `characters` row by id. */
+export async function getCharacter(characterId: Id): Promise<Character | undefined> {
+  const row = await readTable<Record<string, unknown>>(COLLECTIONS.characters).get(characterId);
+  return row === undefined ? undefined : CharacterSchema.parse(row);
+}
+
+/** Every character card, by name (see `listWorlds` for why this is a table read). */
+export async function listCharacters(): Promise<Character[]> {
+  const rows = await readTable<Character>(COLLECTIONS.characters).orderBy('name').toArray();
+  return rows.map((row) => CharacterSchema.parse(row));
+}
+
+/** One immutable version of one card. */
+export async function getCharacterVersion(
+  characterId: Id,
+  version: VersionNumber,
+): Promise<CharacterVersion | undefined> {
+  return write(async (tx) => {
+    const rows = await characterVersionsOf(tx).list(
+      { where: { characterId, version } },
+      'characterVersions_characterId_version',
+    );
+    const row = rows[0];
+    return row === undefined ? undefined : CharacterVersionSchema.parse(row);
+  });
+}
+
+/** The newest version of a card — what the editor opens with. See `latestWorldVersion`. */
+export async function latestCharacterVersion(
+  characterId: Id,
+): Promise<CharacterVersion | undefined> {
+  const rows = await readTable<CharacterVersion>(COLLECTIONS.characterVersions).toArray();
+  const mine = rows
+    .filter((row) => row.characterId === characterId)
+    .map((row) => CharacterVersionSchema.parse(row))
+    .sort((left, right) => right.version - left.version);
+  return mine[0];
+}
+
+/** The `settings` key a card's draft row lives under. */
+export function characterDraftId(characterId: Id): string {
+  return `draft.character.${characterId}`;
+}
+
+/** A card's stored draft, completed against the opened version (`readWorldDraft`). */
+export async function readCharacterDraft(
+  characterId: Id,
+  base: CharacterVersion,
+): Promise<CharacterDraft | undefined> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
+    characterDraftId(characterId),
+  );
+  return row === undefined ? undefined : readCharacterDraftValue(row.value, base);
+}
+
+/** Store a card draft. */
+export async function writeCharacterDraft(characterId: Id, draft: CharacterDraft): Promise<void> {
+  await write(async (tx) => {
+    await settingsOf(tx).put({
+      id: characterDraftId(characterId),
+      value: characterDraftValue(draft),
+    });
+  });
+}
+
+/** Drop a card draft. */
+export async function clearCharacterDraft(characterId: Id): Promise<void> {
+  await write(async (tx) => {
+    await settingsOf(tx).remove(characterDraftId(characterId));
+  });
+}
+
+/** Create a character card: a head row and version 1, in one transaction (`createWorld`). */
+export async function createCharacter(input: {
+  name: string;
+  data: CharacterData;
+  extensions?: Extensions;
+}): Promise<{ character: Character; version: CharacterVersion } | undefined> {
+  const parsed = CharacterDataSchema.safeParse(input.data);
+  if (!parsed.success) return undefined;
+  return write(async (tx) => {
+    const at = Date.now();
+    const head: Character = {
+      id: mintUuidV7(),
+      name: input.name,
+      headVersion: 0,
+      tags: [...parsed.data.tags],
+      createdAt: at,
+      updatedAt: at,
+    };
+    const plan = planCharacterVersion({
+      head,
+      base: undefined,
+      data: parsed.data,
+      extensions: input.extensions,
+      id: mintUuidV7(),
+      at,
+    });
+    const character = CharacterSchema.parse(plan.character);
+    const version = CharacterVersionSchema.parse(plan.version);
+    await charactersOf(tx).put(character);
+    await characterVersionsOf(tx).put(version);
+    return { character, version };
+  });
+}
+
+/** Publish a card draft as a new version (`publishWorld`, including the same transaction rules). */
+export async function publishCharacter(input: {
+  characterId: Id;
+  data: CharacterData;
+  extensions?: Extensions;
+  baseVersion: VersionNumber;
+  reason: string;
+}): Promise<{ character: Character; version: CharacterVersion } | undefined> {
+  const parsed = CharacterDataSchema.safeParse(input.data);
+  if (!parsed.success) return undefined;
+  return write(async (tx) => {
+    const row = await charactersOf(tx).get(input.characterId);
+    if (row === undefined) return undefined;
+    const head = CharacterSchema.parse(row);
+    const anchor = await findCharacterVersion(tx, input.characterId, input.baseVersion);
+    const plan = planCharacterVersion({
+      head,
+      base: anchor === undefined ? undefined : { anchor, reason: input.reason },
+      data: parsed.data,
+      extensions: input.extensions,
+      id: mintUuidV7(),
+      at: Date.now(),
+    });
+    const character = CharacterSchema.parse(plan.character);
+    const version = CharacterVersionSchema.parse(plan.version);
+    await characterVersionsOf(tx).put(version);
+    await charactersOf(tx).put(character);
+    await settingsOf(tx).remove(characterDraftId(input.characterId));
+    return { character, version };
+  });
+}
+
+/** One `characterVersions` row's anchor, resolved inside the publishing transaction. */
+async function findCharacterVersion(
+  tx: Tx,
+  characterId: Id,
+  version: VersionNumber,
+): Promise<VersionAnchor | undefined> {
+  const rows = await characterVersionsOf(tx).list(
+    { where: { characterId, version } },
+    'characterVersions_characterId_version',
+  );
+  const row = rows[0];
+  return row === undefined ? undefined : { id: row.id, version: row.version };
 }

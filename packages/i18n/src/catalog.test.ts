@@ -12,8 +12,13 @@ import { describe, expect, it } from 'vitest';
 import { CATALOGS, en, zhCN } from './catalog';
 import { LOCALES } from './locale';
 
-/** The areas a key may start with, in the order the catalog declares them. */
-const AREAS = ['common', 'nav', 'setup', 'home', 'play', 'error'];
+/**
+ * The areas a key may start with, in the order the catalog declares them.
+ *
+ * `world` and `character` were added by the two card editors (M1-W1 / M1-C1), which is what this
+ * list is FOR: a new area is a deliberate edit here rather than a prefix nobody reviewed.
+ */
+const AREAS = ['common', 'nav', 'setup', 'home', 'world', 'character', 'play', 'error'];
 
 describe('message catalogs', () => {
   it('is not empty', () => {

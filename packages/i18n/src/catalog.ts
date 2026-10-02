@@ -49,6 +49,68 @@ export const zhCN = {
   /** The error banner's re-send button; also what a retryable failure needs. */
   'common.retry': '重试',
   'common.close': '关闭',
+  /*
+   * THE CARD EDITORS' SHARED CHROME (M1-W1 / M1-C1).
+   *
+   * WHY THESE ARE `common.` AND NOT `world.` / `character.`: both editors are one design — a
+   * grouped form, a list control per collection, an autosaved draft and an explicit publish —
+   * so their chrome is the same sentences twice otherwise. The AREA still means what it always
+   * meant ("copy that recurs across screens"); what recurs here is one feature's vocabulary
+   * across the two screens that implement it. The FIELD labels stay in `world.` / `character.`,
+   * because those really are two different sets.
+   */
+  'common.loading': '正在读取…',
+  'common.addItem': '添加',
+  'common.removeItem': '删除',
+  'common.moveUp': '上移',
+  'common.moveDown': '下移',
+  /** The line-oriented list controls: one item per line in a single textarea. */
+  'common.onePerLine': '每行一项',
+  'common.emptyList': '暂无条目',
+  'common.updatedAt': '更新于 {date}',
+  'common.versionLabel': 'v{version}',
+  /*
+   * THE DRAFT RULE, SAID OUT LOUD (ADR-010).
+   *
+   * A published version is immutable, so autosave cannot be a version write: the editor edits a
+   * DRAFT, autosave persists that draft, and a new version is created by the explicit 「发布新版本」
+   * act (`state/content-store.ts`). The user has to know that, or the button looks redundant
+   * ("it already saved") — which is exactly the bug the split exists to prevent.
+   */
+  'common.unsavedDraft': '编辑的是草稿：自动保存只写草稿，点「发布新版本」才会生成新的版本。',
+  'common.draftBase': '草稿基于 v{base}；发布后成为 v{next}。',
+  'common.draftFailed': '草稿保存失败（{name}）',
+  'common.publish': '发布新版本',
+  'common.discardDraft': '放弃草稿',
+  'common.published': '已发布 v{version}',
+  'common.discarded': '已放弃草稿，恢复为已发布的版本',
+  'common.publishRefused': '存在校验问题，未发布新版本',
+  'common.publishFailed': '发布失败，未写入新版本',
+  /*
+   * VALIDATION IS SCHEMA-FIRST. `{field}` is the label of the field the problem belongs to (the
+   * dotted path when the form has no label for it) and `{detail}` is the schema's or the time
+   * engine's own sentence, kept verbatim: "toHour must be a whole hour index in 0..24" says
+   * something a paraphrase would lose (ADR-019's split — the fact is the field, the prose is the
+   * detail).
+   */
+  'common.issuesTitle': '校验',
+  'common.issuesNone': '没有校验问题，可以发布。',
+  'common.issue': '{field}：{detail}',
+  /*
+   * 自定义字段 (docs/01 §F2-1 「含自定义字段增删」) live in the version envelope's `extensions`,
+   * because `common.ts` rule 1 makes that the only sanctioned channel for data outside the
+   * domain fields. A user's label is not a legal extension key (`x-[a-z0-9-]` per segment), so
+   * the key is derived from it and the label itself is stored beside the value
+   * (`cards/extensions.ts` records the whole design).
+   */
+  'common.customFieldsTitle': '自定义字段',
+  'common.customFieldsHint':
+    '自定义字段保存在版本信封的 extensions（x-custom.*）里：键由字段名推导，字段名本身存在值里，所以改名等于删除后重新添加。',
+  'common.customFieldNameLabel': '字段名',
+  'common.customFieldValueLabel': '字段值',
+  'common.customFieldAdd': '添加字段',
+  'common.customFieldEmpty': '还没有自定义字段。',
+  'common.customFieldRefused': '字段名需要至少一个字母或数字，且不能与已有字段重名',
 
   /* ── nav: the shell's navigation ─────────────────────────────────────────── */
   /**
@@ -59,6 +121,9 @@ export const zhCN = {
    */
   'nav.language': '语言',
   'nav.settings': '设置',
+  /** The two card libraries (M1-W1 / M1-C1), reachable from every screen. */
+  'nav.worlds': '世界',
+  'nav.characters': '角色',
 
   /* ── setup: the BYO-Key screen, then the appearance section (M1-G2) ──────── */
   'setup.loading': '正在读取设置…',
@@ -170,6 +235,180 @@ export const zhCN = {
    * follow a later language switch; M1's title editor / auto-naming replaces it.
    */
   'home.defaultSessionTitle': '新会话',
+
+  /* ── world: the world-card library and editor (M1-W1) ───────────────────── */
+  'world.libraryTitle': '世界卡库',
+  'world.libraryHint': '世界卡保存设定与历法；会话创建时选择一个具体版本。',
+  'world.empty': '还没有世界卡。',
+  'world.createLabel': '新世界的名称',
+  /** An EXAMPLE name, not copy. */
+  'world.createPlaceholder': '例如：霜月群岛',
+  'world.create': '新建世界卡',
+  'world.backToLibrary': '← 返回世界卡库',
+  /** The persisted lineage sentence of a version published from this editor. */
+  'world.lineageReason': '由世界卡编辑器发布',
+  'world.sectionBasic': '基本',
+  'world.sectionRegions': '地区',
+  'world.sectionFactions': '势力',
+  'world.sectionRules': '规则',
+  'world.sectionNarrative': '叙事',
+  'world.sectionCalendar': '历法与时间',
+  'world.sectionRhythm': '时间节奏',
+  'world.sectionOpening': '开场',
+  'world.nameLabel': '名称',
+  'world.premiseLabel': '一句话设定',
+  'world.eraLabel': '时代背景',
+  'world.techOrMagicLabel': '科技或魔法水平',
+  'world.genreLabel': '题材标签',
+  'world.regionsLabel': '地区列表',
+  'world.regionIdLabel': '地区标识',
+  'world.regionNameLabel': '地区名称',
+  'world.regionDescriptionLabel': '地区描述',
+  'world.regionParentLabel': '上级地区标识',
+  'world.regionTagsLabel': '地区标签',
+  'world.factionsLabel': '势力列表',
+  'world.factionIdLabel': '势力标识',
+  'world.factionNameLabel': '势力名称',
+  'world.factionDescriptionLabel': '势力描述',
+  'world.factionStanceLabel': '立场',
+  'world.factionGoalsLabel': '目标',
+  'world.powerSourceLabel': '力量来源',
+  'world.limitsLabel': '限制与代价',
+  'world.taboosLabel': '禁忌',
+  'world.conflictLabel': '核心冲突',
+  'world.toneLabel': '情绪基调',
+  'world.themesLabel': '主题',
+  'world.styleLabel': '叙事风格',
+  'world.calendarIdLabel': '历法标识',
+  'world.calendarNameLabel': '历法名称',
+  'world.epochLabelLabel': '纪元前缀',
+  /*
+   * 历法与时间节奏 (docs/01 §F2-6, docs/02 §5.7). The hint is the one sentence of this block that
+   * must not be dropped: the numbers below are DATA the time engine divides by, and a fantasy
+   * calendar with a 26-hour day or a 100-minute hour is legal on purpose (ADR-012) — a user who
+   * assumed 24/60 would "fix" a valid world.
+   */
+  'world.calendarHint':
+    '历法是数据：一天的小时数与一小时的分钟数都可以不是 24/60。时段可以跨过午夜（结束小时小于起始小时是合法的）。',
+  'world.minutesPerHourLabel': '每小时分钟数',
+  'world.hoursPerDayLabel': '每天小时数',
+  'world.weekdaysLabel': '星期名',
+  'world.monthsLabel': '月份',
+  'world.monthNameLabel': '月名',
+  'world.monthDaysLabel': '天数',
+  'world.segmentsLabel': '时段',
+  'world.segmentIdLabel': '时段标识',
+  'world.segmentNameLabel': '时段名',
+  'world.segmentFromLabel': '起始小时',
+  'world.segmentToLabel': '结束小时',
+  'world.startMinuteLabel': '起始时刻（分钟）',
+  'world.startMinuteHint': '从历法纪元起的分钟数，可以是负数。',
+  'world.implicitAdvanceLabel': '每 N 轮自动推进时间',
+  'world.advanceEveryTurnsLabel': '轮数（N）',
+  'world.stepMinutesLabel': '每次推进（分钟）',
+  'world.rhythmHint': '隐式推进默认关闭：关闭时，时间只在手动推进或读档回滚时移动。',
+  'world.openingHooksLabel': '开场钩子',
+
+  /* ── character: the character-card library and editor (M1-C1) ────────────── */
+  'character.libraryTitle': '角色卡库',
+  'character.libraryHint': '角色卡兼容 SillyTavern V2/V3 字段，并保存发言档案与视觉档案。',
+  'character.empty': '还没有角色卡。',
+  'character.createLabel': '新角色的名称',
+  /** An EXAMPLE name, not copy. */
+  'character.createPlaceholder': '例如：银松镇的莉安',
+  'character.create': '新建角色卡',
+  'character.backToLibrary': '← 返回角色卡库',
+  'character.lineageReason': '由角色卡编辑器发布',
+  /*
+   * WHY THIS HINT EXISTS (ADR-010, docs/01 §7.6 (1)): the card deliberately has no player/cast
+   * field, and an ABSENT control is only legible if the screen says why. The same card plays the
+   * protagonist in one session and the antagonist in the next, so identity is chosen when the
+   * session is created — not here.
+   */
+  'character.identityHint':
+    '身份由会话决定：同一张卡可以在一个会话里当玩家角色、在另一个会话里当配角，所以卡片上不保存玩家/卡司标记。',
+  /** The C1/I1 boundary, stated where the ST field names are (docs/04 §10). */
+  'character.stHint':
+    '以下字段名与 SillyTavern V2/V3 保持一致；与真实 ST 卡片（PNG/JSON）的双向映射由 M1-I1 负责。',
+  'character.sectionSt': 'SillyTavern 字段',
+  'character.sectionVoice': '发言档案',
+  'character.sectionVisual': '视觉档案',
+  'character.sectionSampling': '默认采样参数',
+  'character.nameLabel': '名称',
+  'character.descriptionLabel': '描述',
+  'character.personalityLabel': '性格',
+  'character.scenarioLabel': '场景',
+  'character.firstMesLabel': '开场白（first_mes）',
+  'character.mesExampleLabel': '对话示例（mes_example）',
+  'character.creatorNotesLabel': '创作者注记（creator_notes）',
+  'character.systemPromptLabel': '系统提示（system_prompt）',
+  'character.postHistoryLabel': '历史后指令（post_history_instructions）',
+  'character.alternateGreetingsLabel': '备选开场白',
+  'character.tagsLabel': '标签',
+  'character.creatorLabel': '创作者',
+  'character.characterVersionLabel': '卡片版本',
+  'character.desireLabel': '发言欲望（0-100）',
+  'character.abilityLabel': '发言能力（0-100）',
+  'character.rolesLabel': '发言角色标签',
+  'character.maxLinesLabel': '单轮条数上限（1-5）',
+  'character.cooldownLabel': '冷却轮数（0-3）',
+  'character.hairLabel': '发色发型',
+  'character.eyesLabel': '瞳色',
+  'character.buildLabel': '体型',
+  'character.skinLabel': '肤色',
+  'character.marksLabel': '显著特征',
+  'character.outfitsLabel': '服装差分',
+  'character.outfitIdLabel': '服装标识',
+  'character.outfitNameLabel': '服装名称',
+  'character.outfitPromptLabel': '提示词',
+  'character.expressionsLabel': '表情差分',
+  'character.expressionIdLabel': '表情标识',
+  'character.expressionNameLabel': '表情名',
+  'character.expressionPromptLabel': '提示词',
+  'character.stylePresetLabel': '画风预设',
+  'character.stylePositiveLabel': '正向提示词',
+  'character.styleNegativeLabel': '负向提示词',
+  'character.styleAspectLabel': '画幅',
+  'character.paramsProviderLabel': '生图 Provider',
+  'character.paramsModelLabel': '模型',
+  'character.paramsSamplerLabel': '采样器',
+  'character.paramsStepsLabel': '步数',
+  'character.paramsCfgLabel': 'CFG',
+  'character.seedPolicyLabel': '种子策略',
+  'character.seedLabel': '种子',
+  'character.seedPolicyFixed': '固定',
+  'character.seedPolicyRandom': '随机',
+  'character.seedPolicyIncrement': '递增',
+  /*
+   * 参考图 (L2/L3). The hint states the missing dependency rather than hiding it: there is no
+   * asset pipeline in M0/M1 (docs/06 §10.5), so an `assetId` is stored and may dangle — the
+   * editor does not invent an upload path to make the field look complete.
+   */
+  'character.referencesLabel': '参考图',
+  'character.referenceAssetIdLabel': '资源 ID（assetId）',
+  'character.referenceRoleLabel': '用途',
+  'character.referenceRoleFace': '面部',
+  'character.referenceRoleOutfit': '服装',
+  'character.referenceRoleStyle': '画风',
+  'character.assetsHint': '资源管线尚未实现：参考图只保存 assetId，可能指向不存在的资源。',
+  'character.samplingHint': '留空表示不覆盖该参数；未设置的参数由会话配置决定。',
+  'character.samplingTemperatureLabel': '温度（temperature）',
+  'character.samplingTopPLabel': 'top_p',
+  'character.samplingTopKLabel': 'top_k',
+  'character.samplingMaxTokensLabel': 'max_tokens',
+  'character.samplingPresenceLabel': 'presence_penalty',
+  'character.samplingFrequencyLabel': 'frequency_penalty',
+  'character.samplingRepetitionLabel': 'repetition_penalty',
+  'character.samplingSeedLabel': '种子（seed）',
+  'character.samplingStopLabel': 'stop 序列',
+  'character.samplingReasoningLabel': '推理强度（reasoning_effort）',
+  /** The empty option of the reasoning select: no override, the session decides. */
+  'character.reasoningNone': '跟随会话',
+  /** The four levels keep their protocol spelling: they travel to the provider verbatim. */
+  'character.reasoningMinimal': 'minimal',
+  'character.reasoningLow': 'low',
+  'character.reasoningMedium': 'medium',
+  'character.reasoningHigh': 'high',
 
   /* ── play: the transcript screen ────────────────────────────────────────── */
   'play.backToList': '← 返回会话列表',
@@ -439,10 +678,43 @@ export const en: Messages = {
   'common.save': 'Save',
   'common.retry': 'Retry',
   'common.close': 'Close',
+  'common.loading': 'Loading…',
+  'common.addItem': 'Add',
+  'common.removeItem': 'Remove',
+  'common.moveUp': 'Move up',
+  'common.moveDown': 'Move down',
+  'common.onePerLine': 'One item per line',
+  'common.emptyList': 'No entries yet',
+  'common.updatedAt': 'Updated {date}',
+  'common.versionLabel': 'v{version}',
+  'common.unsavedDraft':
+    'You are editing a draft: autosave writes the draft only, and a new version is created by the publish button.',
+  'common.draftBase': 'Draft based on v{base}; publishing creates v{next}.',
+  'common.draftFailed': 'The draft was not saved ({name})',
+  'common.publish': 'Publish a new version',
+  'common.discardDraft': 'Discard the draft',
+  'common.published': 'Published v{version}',
+  'common.discarded': 'Draft discarded; the published version is back',
+  'common.publishRefused': 'There are validation problems, so nothing was published',
+  'common.publishFailed': 'The publish failed; no new version was written',
+  'common.issuesTitle': 'Validation',
+  'common.issuesNone': 'No validation problems — this card can be published.',
+  'common.issue': '{field}: {detail}',
+  'common.customFieldsTitle': 'Custom fields',
+  'common.customFieldsHint':
+    'Custom fields are stored in the version envelope’s extensions (x-custom.*): the key is derived from the field name and the name itself is stored in the value, so renaming means removing and adding again.',
+  'common.customFieldNameLabel': 'Field name',
+  'common.customFieldValueLabel': 'Field value',
+  'common.customFieldAdd': 'Add a field',
+  'common.customFieldEmpty': 'No custom fields yet.',
+  'common.customFieldRefused':
+    'A field name needs at least one letter or digit, and must not repeat an existing one',
 
   /* ── nav ────────────────────────────────────────────────────────────────── */
   'nav.language': 'Language',
   'nav.settings': 'Settings',
+  'nav.worlds': 'Worlds',
+  'nav.characters': 'Characters',
 
   /* ── setup ──────────────────────────────────────────────────────────────── */
   'setup.loading': 'Loading settings…',
@@ -518,6 +790,162 @@ export const en: Messages = {
   'home.noMessages': 'No messages',
   'home.hasMessages': 'Has messages',
   'home.defaultSessionTitle': 'New session',
+
+  /* ── the world-card library and editor (M1-W1) ──────────────────────────── */
+  'world.libraryTitle': 'World cards',
+  'world.libraryHint':
+    'A world card holds the setting and its calendar; a session pins one specific version.',
+  'world.empty': 'No world cards yet.',
+  'world.createLabel': 'Name of the new world',
+  'world.createPlaceholder': 'for example: the Frostmoon Isles',
+  'world.create': 'New world card',
+  'world.backToLibrary': '← Back to the world cards',
+  'world.lineageReason': 'Published from the world card editor',
+  'world.sectionBasic': 'Basics',
+  'world.sectionRegions': 'Regions',
+  'world.sectionFactions': 'Factions',
+  'world.sectionRules': 'Rules',
+  'world.sectionNarrative': 'Narrative',
+  'world.sectionCalendar': 'Calendar and time',
+  'world.sectionRhythm': 'Time rhythm',
+  'world.sectionOpening': 'Opening',
+  'world.nameLabel': 'Name',
+  'world.premiseLabel': 'One-line premise',
+  'world.eraLabel': 'Era',
+  'world.techOrMagicLabel': 'Technology or magic level',
+  'world.genreLabel': 'Genre tags',
+  'world.regionsLabel': 'Regions',
+  'world.regionIdLabel': 'Region id',
+  'world.regionNameLabel': 'Region name',
+  'world.regionDescriptionLabel': 'Region description',
+  'world.regionParentLabel': 'Parent region id',
+  'world.regionTagsLabel': 'Region tags',
+  'world.factionsLabel': 'Factions',
+  'world.factionIdLabel': 'Faction id',
+  'world.factionNameLabel': 'Faction name',
+  'world.factionDescriptionLabel': 'Faction description',
+  'world.factionStanceLabel': 'Stance',
+  'world.factionGoalsLabel': 'Goals',
+  'world.powerSourceLabel': 'Power source',
+  'world.limitsLabel': 'Limits and costs',
+  'world.taboosLabel': 'Taboos',
+  'world.conflictLabel': 'Core conflict',
+  'world.toneLabel': 'Tone',
+  'world.themesLabel': 'Themes',
+  'world.styleLabel': 'Narrative style',
+  'world.calendarIdLabel': 'Calendar id',
+  'world.calendarNameLabel': 'Calendar name',
+  'world.epochLabelLabel': 'Epoch label',
+  'world.calendarHint':
+    'The calendar is data: neither a day’s hours nor an hour’s minutes has to be 24/60, and a segment may wrap past midnight (a to-hour below the from-hour is legal).',
+  'world.minutesPerHourLabel': 'Minutes per hour',
+  'world.hoursPerDayLabel': 'Hours per day',
+  'world.weekdaysLabel': 'Weekday names',
+  'world.monthsLabel': 'Months',
+  'world.monthNameLabel': 'Month name',
+  'world.monthDaysLabel': 'Days',
+  'world.segmentsLabel': 'Day segments',
+  'world.segmentIdLabel': 'Segment id',
+  'world.segmentNameLabel': 'Segment name',
+  'world.segmentFromLabel': 'From hour',
+  'world.segmentToLabel': 'To hour',
+  'world.startMinuteLabel': 'Start minute (epoch minutes)',
+  'world.startMinuteHint': 'Minutes since the calendar’s epoch; a negative value is legal.',
+  'world.implicitAdvanceLabel': 'Advance time automatically every N turns',
+  'world.advanceEveryTurnsLabel': 'Turns (N)',
+  'world.stepMinutesLabel': 'Minutes per advance',
+  'world.rhythmHint':
+    'Implicit advance is off by default: while it is off, the clock only moves when you advance it or load a save point.',
+  'world.openingHooksLabel': 'Opening hooks',
+
+  /* ── the character-card library and editor (M1-C1) ──────────────────────── */
+  'character.libraryTitle': 'Character cards',
+  'character.libraryHint':
+    'A character card keeps the SillyTavern V2/V3 fields plus the speaking profile and the visual bible.',
+  'character.empty': 'No character cards yet.',
+  'character.createLabel': 'Name of the new character',
+  'character.createPlaceholder': 'for example: Lian of Silverpine',
+  'character.create': 'New character card',
+  'character.backToLibrary': '← Back to the character cards',
+  'character.lineageReason': 'Published from the character card editor',
+  'character.identityHint':
+    'Identity belongs to the session: one card can be the player character in one session and an NPC in the next, so the card itself stores no player/cast flag.',
+  'character.stHint':
+    'These field names match SillyTavern V2/V3 verbatim; mapping to and from a real ST card (PNG/JSON) is M1-I1’s job.',
+  'character.sectionSt': 'SillyTavern fields',
+  'character.sectionVoice': 'Speaking profile',
+  'character.sectionVisual': 'Visual bible',
+  'character.sectionSampling': 'Default sampling',
+  'character.nameLabel': 'Name',
+  'character.descriptionLabel': 'Description',
+  'character.personalityLabel': 'Personality',
+  'character.scenarioLabel': 'Scenario',
+  'character.firstMesLabel': 'First message (first_mes)',
+  'character.mesExampleLabel': 'Example dialogue (mes_example)',
+  'character.creatorNotesLabel': 'Creator notes (creator_notes)',
+  'character.systemPromptLabel': 'System prompt (system_prompt)',
+  'character.postHistoryLabel': 'Post-history instructions',
+  'character.alternateGreetingsLabel': 'Alternate greetings',
+  'character.tagsLabel': 'Tags',
+  'character.creatorLabel': 'Creator',
+  'character.characterVersionLabel': 'Card version',
+  'character.desireLabel': 'Desire to speak (0-100)',
+  'character.abilityLabel': 'Ability to contribute (0-100)',
+  'character.rolesLabel': 'Speaking-role tags',
+  'character.maxLinesLabel': 'Lines per round (1-5)',
+  'character.cooldownLabel': 'Cooldown rounds (0-3)',
+  'character.hairLabel': 'Hair',
+  'character.eyesLabel': 'Eyes',
+  'character.buildLabel': 'Build',
+  'character.skinLabel': 'Skin',
+  'character.marksLabel': 'Distinguishing marks',
+  'character.outfitsLabel': 'Outfits',
+  'character.outfitIdLabel': 'Outfit id',
+  'character.outfitNameLabel': 'Outfit name',
+  'character.outfitPromptLabel': 'Prompt',
+  'character.expressionsLabel': 'Expressions',
+  'character.expressionIdLabel': 'Expression id',
+  'character.expressionNameLabel': 'Expression label',
+  'character.expressionPromptLabel': 'Prompt',
+  'character.stylePresetLabel': 'Style preset',
+  'character.stylePositiveLabel': 'Positive prompt',
+  'character.styleNegativeLabel': 'Negative prompt',
+  'character.styleAspectLabel': 'Aspect',
+  'character.paramsProviderLabel': 'Image provider',
+  'character.paramsModelLabel': 'Model',
+  'character.paramsSamplerLabel': 'Sampler',
+  'character.paramsStepsLabel': 'Steps',
+  'character.paramsCfgLabel': 'CFG',
+  'character.seedPolicyLabel': 'Seed policy',
+  'character.seedLabel': 'Seed',
+  'character.seedPolicyFixed': 'Fixed',
+  'character.seedPolicyRandom': 'Random',
+  'character.seedPolicyIncrement': 'Increment',
+  'character.referencesLabel': 'Reference images',
+  'character.referenceAssetIdLabel': 'Asset id',
+  'character.referenceRoleLabel': 'Role',
+  'character.referenceRoleFace': 'Face',
+  'character.referenceRoleOutfit': 'Outfit',
+  'character.referenceRoleStyle': 'Style',
+  'character.assetsHint':
+    'There is no asset pipeline yet: a reference stores only an asset id, which may point at nothing.',
+  'character.samplingHint':
+    'Leave a field empty to not override it; an unset parameter is decided by the session’s configuration.',
+  'character.samplingTemperatureLabel': 'Temperature',
+  'character.samplingTopPLabel': 'top_p',
+  'character.samplingTopKLabel': 'top_k',
+  'character.samplingMaxTokensLabel': 'max_tokens',
+  'character.samplingPresenceLabel': 'presence_penalty',
+  'character.samplingFrequencyLabel': 'frequency_penalty',
+  'character.samplingRepetitionLabel': 'repetition_penalty',
+  'character.samplingSeedLabel': 'Seed',
+  'character.samplingStopLabel': 'Stop sequences',
+  'character.samplingReasoningLabel': 'Reasoning effort',
+  'character.reasoningNone': 'Follow the session',
+  'character.reasoningMinimal': 'minimal',
+  'character.reasoningLow': 'low',
+  'character.reasoningMedium': 'medium',
+  'character.reasoningHigh': 'high',
 
   /* ── play ───────────────────────────────────────────────────────────────── */
   'play.backToList': '← Back to sessions',
