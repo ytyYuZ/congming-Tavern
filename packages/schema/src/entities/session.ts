@@ -30,6 +30,27 @@
  * `defaultSessionState()`, which is what this file's helper is for: the missing
  * field can be DERIVED from `initialClock`, so no `migrations` row is needed.
  *
+ * WHERE THE LIVE CAST STATE LIVES (M1-S4, and why here rather than in a checkpoint)
+ * `state.cast` holds where each member of the roster stands RIGHT NOW: whether they
+ * are on stage (`present`) and whether they are deliberately silent (`muted`), both
+ * from `CastStateSchema` in `./checkpoint.ts` so the live value and the saver's
+ * snapshot cannot drift into two shapes. Two homes for one live fact is the bug
+ * ADR-032 exists to remove, so this is NOT a second copy of `Checkpoint.castState`:
+ * that field is a snapshot taken at a save point ("then"), and this one is what the
+ * scheduler and the screen read ("now"). It sits inside `state` because it is
+ * advanced, rolled back and snapshot with the clock and the variables — a silence the
+ * user set is part of the position an old save restores, and nothing else in the row
+ * could carry it (`SessionRefs.cast` is the PINNED roster, a different fact).
+ *
+ * WHY IT IS AN OPTIONAL FIELD COMPLETED AT THE READ BOUNDARY (and not a required one)
+ * This is the `innerClock` rule, applied to a field added later: the roster order and
+ * every member's standing are DERIVABLE (an absent entry means "present and not
+ * muted", which is what a session created before this field meant), so a row without
+ * `state.cast` is completed with `{}` on the way in rather than rejected, and no
+ * `migrations` row is needed. A row this app writes always carries the field
+ * (`defaultSessionState` supplies it), so a reader that has been through
+ * `apps/web/src/db/repository.ts` always sees one.
+ *
  * OPEN vs CLOSED
  * - `schedulerMode` and `Deadline.kind`/`status` are CLOSED: they are intrinsic
  *   protocol semantics the local scheduler and time engine switch on
@@ -115,15 +136,51 @@ export const InnerClockSchema = z.object({
 });
 export type InnerClock = z.infer<typeof InnerClockSchema>;
 
+/* ───────────────────────────── 卡司状态 ──────────────────────────────────── */
+
+/**
+ * Where one character stands — the M1-S4 intervention, as a VALUE.
+ *
+ * WHY IT IS DEFINED HERE AND NOT IN `./checkpoint.ts` (where it used to live)
+ * This is live session state (`Session.state.cast`), and `checkpoint.ts` imports
+ * `SessionStateSchema` — so a schema it composes out of must not import the
+ * checkpoint back. Declaring it here makes the module graph one-directional
+ * (`session` -> nothing) while `checkpoint` keeps needing both; leaving it there
+ * would have made the two files import each other, which evaluates one of them
+ * half-built and fails with a temporal-dead-zone error rather than a message about
+ * the cycle. The name and the shape are unchanged, and both are exported from the
+ * package barrel exactly as before.
+ *
+ * `present` is required — the presence question always has an answer — while the
+ * presentation details are optional because a card may not have a matching outfit
+ * or emotion diff. An id with NO entry at all means "present and not muted": that is
+ * what a session created before the field existed meant, so absence needs no entry to
+ * be spelled.
+ */
+export const CastStateSchema = z.object({
+  present: z.boolean(),
+  emotion: z.string().optional(),
+  /** Outfit diff id from the card's `visual.outfits`. */
+  outfit: z.string().optional(),
+  /** Stage-muted: still on stage, deliberately not prompted. */
+  muted: z.boolean().optional(),
+});
+export type CastState = z.infer<typeof CastStateSchema>;
+
 /**
  * The mutable state a checkpoint snapshots whole (docs/04 §6) AND the live state
  * every session row carries in `Session.state` (ADR-032). Everything the UI shows
  * mid-scene is here, so restoring a save never needs to replay messages: `scene`,
- * the clocks, free variables, rule-pack sheets and deadlines.
+ * the clocks, free variables, the cast, rule-pack sheets and deadlines.
  *
  * `vars` is primitives only (macros substitute into text), while `sheets` holds
  * whatever a rule pack needs per actor — `unknown` there on purpose, because the
  * rule pack owns its schema and core must not.
+ *
+ * `cast` is keyed by character id and mirrors `SessionRefs.cast` (the pinned roster)
+ * rather than restating it: an id that is not a key means "present, not muted", which
+ * is why an empty record is the honest value for a session whose cast has never been
+ * intervened in. See the header for why this is live state and not a snapshot.
  */
 export const SessionStateSchema = z.object({
   scene: z.object({
@@ -133,6 +190,13 @@ export const SessionStateSchema = z.object({
   }),
   clock: EpochMinuteSchema,
   innerClock: InnerClockSchema.optional(),
+  /**
+   * Where each cast member stands right now — M1-S4's intervention, and the value the
+   * scheduler reads (`apps/web/src/session/scheduler.ts`). OPTIONAL because a row
+   * written before this field existed is completed with `{}` at the read boundary; see
+   * the header.
+   */
+  cast: z.record(IdSchema, CastStateSchema).optional(),
   vars: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
   sheets: z.record(IdSchema, z.record(z.string(), z.unknown())),
   deadlines: z.array(DeadlineSchema),
@@ -157,11 +221,17 @@ export type SessionState = z.infer<typeof SessionStateSchema>;
  * value the session already knows. Copying the session title into the scene would
  * make "the scene was never named" indistinguishable from "the scene is named
  * after the save", and a location is not something that can be invented.
+ *
+ * `cast` is the empty record for the same reason: a brand-new session has had no
+ * intervention, and an absent entry already means "present and not muted", so `{}` is
+ * the honest value rather than one entry per pin (which would be a copy of the roster
+ * that has to be kept in step with it).
  */
 export function defaultSessionState(initialClock: number): SessionState {
   return {
     scene: { title: '', location: '', time: initialClock },
     clock: initialClock,
+    cast: {},
     vars: {},
     sheets: {},
     deadlines: [],

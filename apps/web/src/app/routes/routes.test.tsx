@@ -24,7 +24,7 @@
 import 'fake-indexeddb/auto';
 import { createTranslator, type MessageKey, type TranslateParams } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
-import type { Id, Message, SessionState, VoiceProfile } from '@smarttavern/schema';
+import type { CastState, Id, Message, SessionState, VoiceProfile } from '@smarttavern/schema';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2213,5 +2213,218 @@ describe('M1-S5: the turn scheduler', () => {
     expect(wire.calls()).toBe(0);
     // The screen still says why, which is what makes this a stated outcome rather than a stall.
     expect(host.textContent).toContain(t('play.schedulerNobody'));
+  });
+});
+
+/* ─────────────────── M1-S4: the cast intervention panel ───────────────────── */
+
+/**
+ * WHY THESE DRIVE THE REAL VIEW, THE REAL STORE AND THE REAL ROW
+ * The M1-S4 row's acts are 「禁言」 and 「把角色移出当前场景」, its acceptance is 「干预后调度器行为
+ * 符合预期」, and the task adds two properties a unit test cannot see: the scheduler's PROPOSAL on
+ * the screen must reflect the intervention, and a person must be able to undo it. So the cases
+ * below build real cards (`createCharacter`), mount the real play route, click the panel's own
+ * controls, and read the STORED row afterwards - the same shape the M1-S5 cases above use, and for
+ * the same reason: "the scheduler behaved as expected" is a fact about an end state, not about a
+ * function.
+ */
+describe('M1-S4: the cast intervention', () => {
+  /** The panel's copy, read from the zh-CN catalog directly (the M1-S3/M1-S5 argument, repeated). */
+  const zh = createTranslator('zh-CN');
+
+  /** A catalog sentence with its parameters filled, in the language this file pins. */
+  function t(key: MessageKey, params?: TranslateParams): string {
+    return zh.t(key, params);
+  }
+
+  /** One reason, rendered exactly the way the panel renders it. */
+  function reasonSentence(text: ReasonText): string {
+    return t(text.key, text.params);
+  }
+
+  /** One cast card with a voice profile, published as version 1. */
+  async function castCard(
+    name: string,
+    overrides: Partial<VoiceProfile>,
+  ): Promise<{ id: Id; version: number; name: string }> {
+    const blank = blankCharacterData(name);
+    const created = await createCharacter({
+      name,
+      data: { ...blank, voice: { ...blank.voice, ...overrides } },
+    });
+    if (created === undefined) throw new Error(`the card ${name} was not written`);
+    return { id: created.character.id, version: created.version.version, name };
+  }
+
+  /** A session whose cast is exactly these cards, in this order (the pins M1-S1 writes). */
+  function castSession(cards: readonly { id: Id; version: number }[]) {
+    return createSessionRow({
+      title: 'intervention',
+      refs: {
+        world: { id: 'test-world', version: 1 },
+        playerCharacter: { id: 'test-player', version: 1 },
+        cast: cards.map((card) => ({ id: card.id, version: card.version })),
+        promptPreset: { id: 'builtin-default', version: 1 },
+      },
+      initialClock: 0,
+    });
+  }
+
+  /** Click the button in ONE intervention row whose accessible name is `label`. */
+  async function clickInCastRow(host: HTMLElement, characterId: Id, label: string): Promise<void> {
+    const row = host.querySelector(`[data-cast-intervention="${characterId}"]`);
+    if (row === null) throw new Error(`no intervention row for ${characterId}`);
+    const button = Array.from(row.querySelectorAll('button')).find(
+      (candidate) => candidate.getAttribute('aria-label') === label,
+    );
+    if (!(button instanceof HTMLButtonElement)) throw new Error(`no control named ${label}`);
+    await act(async () => {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+
+  /** The live cast record the store (and therefore the panel) is rendering. */
+  function liveCast(): Record<Id, CastState> | undefined {
+    return useChatStore.getState().session?.state.cast;
+  }
+
+  it('excludes a muted member from the proposal, then restores the cast with one undo', async () => {
+    // Two cards the rule can tell apart: 莉安 is the stronger speaker, so the proposal has to be
+    // hers - which is what makes the intervention's effect observable at all.
+    const lian = await castCard('莉安', {
+      desire: 90,
+      ability: 80,
+      maxLinesPerRound: 2,
+      cooldown: 0,
+    });
+    const milla = await castCard('米拉', {
+      desire: 10,
+      ability: 10,
+      maxLinesPerRound: 2,
+      cooldown: 0,
+    });
+    const session = await castSession([milla, lian]);
+    // Nothing is sent in this case: every assertion is about the proposal and the row.
+    configureChat({
+      transport: () => Promise.reject(new Error('this case must not send a turn')),
+    });
+
+    const host = await mountAt(`/play/${session.id}`, t('play.castInterventionTitle'));
+
+    // THE CONTROL: before anything is clicked, the proposal is the strong speaker and she is
+    // offered as selectable in the intervention panel.
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '莉安',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 90, ability: 80 }),
+        ),
+      }),
+    );
+    const lianRow = host.querySelector(`[data-cast-intervention="${lian.id}"]`);
+    expect(lianRow?.textContent ?? '').toContain(t('play.castStateNone'));
+
+    // THE INTERVENTION, THROUGH THE PANEL'S OWN TWO-STEP CONTROL: arm, then confirm.
+    await clickInCastRow(host, lian.id, t('play.castMuteLabel', { name: '莉安' }));
+    await waitForText(host, t('play.castMuteConfirm'));
+    await clickInCastRow(host, lian.id, t('play.castMuteLabel', { name: '莉安' }));
+
+    // 1) THE ROW SAYS WHAT HAPPENED, before anything else is read.
+    await waitForText(host, t('play.castIntervened', { name: '莉安' }));
+    expect(
+      host.querySelector(`[data-cast-intervention="${lian.id}"]`)?.textContent ?? '',
+    ).toContain(t('play.castStateMuted'));
+
+    // 2) THE PROPOSAL REFLECTS IT: the next speaker is the OTHER card, and the muted one is
+    // listed as excluded with a sentence that NAMES the intervention - not a cap, and not a
+    // generic "not eligible".
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '米拉',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 10, ability: 10 }),
+        ),
+      }),
+    );
+    await waitForText(host, reasonSentence(exclusionReasonText({ kind: 'muted' })));
+    // The scheduler's own answer agrees with the screen (the store carries the same value the
+    // panel renders), and the intervention is not reported as a limit.
+    expect(useChatStore.getState().schedule?.excluded).toEqual([
+      { characterId: lian.id, name: '莉安', reason: { kind: 'muted' } },
+    ]);
+    // ...and NAMING her into the turn is refused with the same reason, so the panel's assign
+    // control cannot hand the turn to somebody the user just silenced.
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await useChatStore.getState().speakNextTurn(lian.id);
+    });
+    expect(outcome).toEqual({
+      kind: 'not-selectable',
+      characterId: lian.id,
+      reason: { kind: 'muted' },
+    });
+
+    // 3) THE LIVE STATE IS ON THE ROW, which is what makes it survive a reload and travel with a
+    // save point: the intervention is an edit of `Session.state.cast`, not a screen flag.
+    expect((await getSession(session.id))?.state.cast).toEqual({
+      [lian.id]: { present: true, muted: true },
+    });
+
+    // 4) THE UNDO: one click puts the cast back, and the proposal is hers again - the control the
+    // milestone asks for beside the exclusion.
+    await clickButton(host, t('play.castRestore'));
+    await waitForText(host, t('play.castRestored'));
+    expect(liveCast()).toEqual({});
+    expect((await getSession(session.id))?.state.cast).toEqual({});
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '莉安',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 90, ability: 80 }),
+        ),
+      }),
+    );
+  });
+
+  it('takes a member off stage, names that reason, and brings them back', async () => {
+    const lian = await castCard('莉安', { desire: 90, ability: 80, maxLinesPerRound: 2 });
+    const milla = await castCard('米拉', { desire: 10, ability: 10, maxLinesPerRound: 2 });
+    const session = await castSession([milla, lian]);
+    configureChat({
+      transport: () => Promise.reject(new Error('this case must not send a turn')),
+    });
+
+    const host = await mountAt(`/play/${session.id}`, t('play.castInterventionTitle'));
+    await waitForText(host, '莉安');
+
+    // 移出当前场景 is the OTHER act of the row, and it is not a mute: the reason must say which
+    // one the user chose, because that is what they will look for when they undo it.
+    await clickInCastRow(host, lian.id, t('play.castAbsentLabel', { name: '莉安' }));
+    await waitForText(host, t('play.castAbsentConfirm'));
+    await clickInCastRow(host, lian.id, t('play.castAbsentLabel', { name: '莉安' }));
+    await waitForText(host, reasonSentence(exclusionReasonText({ kind: 'absent' })));
+    expect(useChatStore.getState().schedule?.excluded).toEqual([
+      { characterId: lian.id, name: '莉安', reason: { kind: 'absent' } },
+    ]);
+    expect((await getSession(session.id))?.state.cast).toEqual({
+      [lian.id]: { present: false, muted: false },
+    });
+
+    // 恢复出场 puts her back - the inverse control, one click, because it restores a value the
+    // user just had rather than changing who the model may speak for.
+    await clickInCastRow(host, lian.id, t('play.castPresentLabel', { name: '莉安' }));
+    await waitForText(
+      host,
+      t('play.schedulerNext', {
+        name: '莉安',
+        reason: reasonSentence(
+          speakerReasonText({ kind: 'desire-ability', desire: 90, ability: 80 }),
+        ),
+      }),
+    );
   });
 });

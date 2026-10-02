@@ -25,15 +25,18 @@ import 'fake-indexeddb/auto';
 import type { FetchLike } from '@smarttavern/providers';
 import type { Calendar } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { blankCharacterData } from '../cards/character';
 import { blankWorldData } from '../cards/world';
 import { BUILTIN_CALENDAR } from '../chat/builtin-content';
 import { closeDatabase, resetDatabase } from '../db/database';
 import { deleteDatabase, openRaw, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
 import {
+  createCharacter,
   createSession,
   createWorld,
   getChain,
   getSession,
+  listCheckpoints,
   writeProviderSettings,
 } from '../db/repository';
 import { TEST_SESSION_PINS } from '../db/session.test-helpers';
@@ -283,5 +286,114 @@ describe("the open session's calendar (M1-T1 follow-up)", () => {
     const state = useChatStore.getState();
     expect(state.session?.id).toBe(session.id);
     expect(state.calendar).toBe(BUILTIN_CALENDAR);
+  });
+});
+
+/* ───────────────────── M1-S4: the cast intervention ──────────────────────── */
+
+/**
+ * WHAT THIS SUITE PROVES, AND WHY IT IS AT THE STORE LEVEL RATHER THAN IN THE DOM
+ * The intervention's two UNDO SIZES are the point: the panel's one step (the value
+ * `interveneCast` replaced), and the durable one (`saveCheckpoint` / `restoreCheckpoint`, which
+ * move the whole `SessionState` — the cast included, because it is a field of it). The DOM test
+ * in `app/routes/routes.test.tsx` covers the controls and the proposal; here the subject is the
+ * stored row, asserted on its BYTES, which is what makes "the cast went back to what it was" a
+ * fact about storage rather than about a re-derived value.
+ */
+describe('the cast intervention (M1-S4)', () => {
+  /** One published cast card, with the voice profile the scheduler reads. */
+  async function castCard(name: string) {
+    const blank = blankCharacterData(name);
+    const created = await createCharacter({
+      name,
+      data: { ...blank, voice: { ...blank.voice, desire: 90, ability: 80 } },
+    });
+    if (created === undefined) throw new Error(`the card ${name} was not written`);
+    return created.character.id;
+  }
+
+  /** The row's cast record as the DATABASE spells it, not through a reader. */
+  async function storedCastBytes(sessionId: string): Promise<string> {
+    return JSON.stringify((await getSession(sessionId))?.state.cast);
+  }
+
+  it("writes one member's standing, and the undo restores the bytes that were there", async () => {
+    const mira = await castCard('Mira');
+    const session = await createSession({
+      title: 'intervention',
+      refs: { ...TEST_SESSION_PINS, cast: [{ id: mira, version: 1 }] },
+      initialClock: 0,
+    });
+    await useChatStore.getState().open(session.id);
+    const before = await storedCastBytes(session.id);
+    expect(before).toBe('{}');
+
+    // MUTE: the pure transition runs in the store, and the row is the only copy that matters.
+    const previous = await useChatStore.getState().interveneCast(mira, {
+      present: true,
+      muted: true,
+    });
+    // Narrowed, not asserted away: the rest of the test is about the value the undo needs, and a
+    // `?.` on every use would turn a `undefined` (a refused write) into a passing comparison.
+    if (previous === undefined) throw new Error('the intervention was refused');
+    expect(previous).toEqual({ present: true, muted: false });
+    expect(await storedCastBytes(session.id)).toBe(
+      JSON.stringify({ [mira]: { present: true, muted: true } }),
+    );
+    // ...and the STORE, which is what the panel renders, carries the same value.
+    expect(useChatStore.getState().session?.state.cast).toEqual({
+      [mira]: { present: true, muted: true },
+    });
+
+    // A no-op is refused rather than written: the same mute again answers nothing, so the panel
+    // cannot offer an undo for a change that did not happen.
+    expect(await useChatStore.getState().interveneCast(mira, { present: true, muted: true })).toBe(
+      undefined,
+    );
+
+    // UNDO: the value that call replaced, put back through the same transition. The stored bytes
+    // are the ones that were there before the intervention - which is the assertion the task asks
+    // for ("asserted on the stored row's bytes").
+    expect(await useChatStore.getState().restoreCast(mira, previous)).toBe(true);
+    expect(await storedCastBytes(session.id)).toBe(before);
+    expect(useChatStore.getState().session?.state.cast).toEqual({});
+    // An undo of the undo has nothing to restore, so it writes nothing and says so.
+    expect(await useChatStore.getState().restoreCast(mira, previous)).toBe(false);
+  });
+
+  it('travels with the save point, and rolls back with it (M1-M1 / M1-T4)', async () => {
+    const mira = await castCard('Mira');
+    const session = await createSession({
+      title: 'intervention-checkpoint',
+      refs: { ...TEST_SESSION_PINS, cast: [{ id: mira, version: 1 }] },
+      initialClock: 0,
+    });
+    await useChatStore.getState().open(session.id);
+
+    // A save point taken while the cast is untouched: its OWN `castState` snapshot is the live
+    // record, copied by the store (`session/cast.ts`'s `checkpointCastOf`).
+    const checkpoint = await useChatStore.getState().saveCheckpoint('before');
+    if (checkpoint === undefined) throw new Error('the save point was not written');
+    expect(checkpoint.castState).toEqual({});
+
+    // THE INTERVENTION, and the save point's own snapshot does NOT move with it: a checkpoint is
+    // "then", and the live record is "now" (ADR-032's distinction, asserted rather than assumed).
+    await useChatStore.getState().interveneCast(mira, { present: true, muted: true });
+    expect(await storedCastBytes(session.id)).toBe(
+      JSON.stringify({ [mira]: { present: true, muted: true } }),
+    );
+    const reloaded = (await listCheckpoints(session.id))[0];
+    expect(reloaded?.castState).toEqual({});
+
+    // A SECOND save point taken after the intervention carries it, which is what makes the pair
+    // of snapshots a record of what changed between them.
+    const after = await useChatStore.getState().saveCheckpoint('after');
+    expect(after?.castState).toEqual({ [mira]: { present: true, muted: true } });
+
+    // THE ROLLBACK moves the cast back with the clock, in one write: the field is part of the
+    // state the checkpoint holds, so nothing extra restores it and it cannot lag the rest.
+    expect(await useChatStore.getState().restoreCheckpoint(checkpoint.id)).toBe(true);
+    expect(await storedCastBytes(session.id)).toBe('{}');
+    expect(useChatStore.getState().session?.state.cast).toEqual({});
   });
 });

@@ -62,17 +62,33 @@
  * instead of a distribution.
  *
  * WHERE THE TWO LIMITS THAT ARE NOT HERE WENT (stated rather than silently dropped)
- * - `muted` and `present: false` (docs/02 section 5.6) are M1-S4's subject, and live cast
- *   state has no persistence slot yet: `Checkpoint.castState` is a SNAPSHOT taken at a save
- *   point, which `SessionRefs.cast` (the pinned roster) must not be mistaken for. When
- *   M1-S4 gives that state a home, this module takes it as one more `ExclusionReason`;
- *   inventing a parameter now would be an input with no writer.
  * - The weighted scoring, and the session-level configuration its weights need, are M2-S1's:
  *   `packages/schema`'s `Session` carries `schedulerMode` but no weights and no caps, which
  *   is why `maxSpeakersPerRound` is an argument with a documented default rather than a
  *   stored setting.
+ *
+ * WHAT M1-S4 ADDED: THE USER'S OWN INTERVENTION, AS TWO MORE REASONS
+ * docs/02 section 5.6's last two hard constraints - 「被 `muted` 的角色跳过；`present: false` 的
+ * 角色不参与」 - are the user's edit of the cast rather than a property of a card, so they arrive
+ * here as DATA (`SchedulerInput.cast`, the live `Session.state.cast` of ADR-032) rather than as
+ * a flag on `CastMember`. That is the distinction the module's first version recorded and left
+ * open: `Session.refs.cast` is the PINNED ROSTER (who is in the session) and `Checkpoint.castState`
+ * is a SNAPSHOT (who was on stage at a save point), while the value the scheduler must read is
+ * neither - it is "now", and it moves when the user mutes somebody.
+ *
+ * WHY THE INTERVENTION IS CHECKED BEFORE THE LIMITS, AND WHY IT HAS ITS OWN REASONS
+ * A muted or absent member is not competing for the round at all, while a capped or cooling one
+ * is a candidate the LIMITS refused; reporting "line limit reached" for somebody the user
+ * explicitly silenced would name a rule that had nothing to do with the decision, and the
+ * milestone's acceptance is that the scheduler's behaviour reflects the INTERVENTION. So the two
+ * facts are named (`muted`, `absent`), they come first in the exclusion order, the scheduler's
+ * own reason vocabulary is where they live, and `session/scheduler-text.ts` renders them in the
+ * catalog's terms like every other reason. `absent` wins over `muted` when both are true: being
+ * off stage is the more fundamental answer to "can they speak", and `present: false` is what
+ * docs/02 section 5.6 makes the stronger constraint (「不参与」 rather than 「跳过」).
  */
 import type {
+  CastState,
   Id,
   Message,
   SchedulerMode,
@@ -102,6 +118,11 @@ export const MAX_SPEAKERS_PER_ROUND = 3;
  * scheduler's failure to invent a profile for - a default desire or ability would be a
  * silent guess about a card nobody can read - so such a member is passed with both fields
  * `undefined` and comes back in `excluded` as `card-missing`.
+ *
+ * WHY THE USER'S INTERVENTION IS NOT A THIRD FIELD HERE: mute and presence are live state
+ * that moves while the session is played (M1-S4), not a property of a member of the roster,
+ * so they travel in `SchedulerInput.castState` beside the cast rather than being copied onto
+ * each member by every caller - one value, read once, the way `Session.state.cast` stores it.
  */
 export interface CastMember {
   readonly id: Id;
@@ -126,6 +147,13 @@ export interface SchedulerInput {
   /** The ACTIVE chain, oldest first (`db/repository.ts`'s `getChain`). */
   readonly history: readonly SpokenLine[];
   /**
+   * The LIVE cast state (M1-S4, ADR-032): `Session.state.cast`, keyed by character id. A
+   * member with no entry is present and not muted, which is what an empty record and a
+   * session created before the field existed both mean - so an absent field is not a
+   * missing answer.
+   */
+  readonly castState?: Readonly<Record<Id, CastState>>;
+  /**
    * The user's manual assignment for this round, most preferred first. An id that is not in
    * the cast is refused (`RefusalReason` `not-in-cast`) rather than ignored, so a stale
    * screen cannot hand the turn to somebody the session does not contain.
@@ -146,9 +174,19 @@ export type SpeakerReason =
   | { readonly kind: 'manual'; readonly position: number }
   | { readonly kind: 'desire-ability'; readonly desire: number; readonly ability: number };
 
-/** Why a cast member cannot take a turn in this round. */
+/**
+ * Why a cast member cannot take a turn in this round.
+ *
+ * `muted` and `absent` are the user's OWN intervention (M1-S4) and come first in the order
+ * `admit` reports them in: they are facts about who is in the scene at all, while `capped`,
+ * `cooling` and `speaker-cap` are facts about the round's limits. `absent` is checked before
+ * `muted` because being off stage (docs/02 section 5.6: 「不参与」) is the more fundamental
+ * reason of the two.
+ */
 export type ExclusionReason =
   | { readonly kind: 'card-missing' }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'muted' }
   | { readonly kind: 'capped'; readonly limit: number; readonly linesTaken: number }
   | { readonly kind: 'cooling'; readonly cooldown: number; readonly roundsSince: number }
   | { readonly kind: 'speaker-cap'; readonly limit: number };
@@ -358,6 +396,26 @@ function rank(cast: readonly CastMember[], assignedOrder: readonly Id[]): Ranked
 }
 
 /**
+ * Why the USER's own intervention keeps this member out of the round, or `undefined` when it
+ * does not (M1-S4).
+ *
+ * WHY `absent` IS ASKED FIRST: an off-stage character is not in the scene, so muting is not the
+ * reason they cannot speak - reporting "muted" for somebody who was also taken off stage would
+ * describe half the decision, and the reason is what the user reads in the panel to remember
+ * what they did. An entry that is missing entirely is the DEFAULT (`present: true`,
+ * `muted: false`), which is what a session created before the field existed means.
+ */
+function blockedByIntervention(
+  castState: Readonly<Record<Id, CastState>> | undefined,
+  characterId: Id,
+): ExclusionReason | undefined {
+  const entry = castState?.[characterId];
+  if (entry === undefined) return undefined;
+  if (!entry.present) return { kind: 'absent' };
+  return entry.muted === true ? { kind: 'muted' } : undefined;
+}
+
+/**
  * Walk the ranking once and split it into the round's order and the silences.
  *
  * The speaker cap is counted AS THE RANKING IS WALKED: a member who already spoke this round
@@ -365,16 +423,27 @@ function rank(cast: readonly CastMember[], assignedOrder: readonly Id[]): Ranked
  * admitted while `spoken + admittedNew` is under the cap. Members skipped for that reason
  * are excluded with `speaker-cap`, so the panel can say who was left out and why instead of
  * leaving a silent gap in the cast list.
+ *
+ * THE INTERVENTION IS CHECKED FIRST, BEFORE THE CARD AND BEFORE THE LIMITS (M1-S4): a muted or
+ * absent member is not a candidate at all, so they must not consume a speaker slot, must not be
+ * reported as capped, and must not be admitted even when the user NAMED them - which is what
+ * makes `nextOf` answer `refused` with the intervention's own reason.
  */
 function admit(
   ranked: readonly RankedMember[],
   state: RoundState,
   maxSpeakersPerRound: number,
+  castState: Readonly<Record<Id, CastState>> | undefined,
 ): { entries: PlannedSpeaker[]; excluded: CastExclusion[] } {
   const entries: PlannedSpeaker[] = [];
   const excluded: CastExclusion[] = [];
   let newSpeakers = 0;
   for (const { member, assignedPosition } of ranked) {
+    const intervention = blockedByIntervention(castState, member.id);
+    if (intervention !== undefined) {
+      excluded.push({ characterId: member.id, name: member.name, reason: intervention });
+      continue;
+    }
     const voice = member.voice;
     if (voice === undefined) {
       excluded.push({
@@ -479,11 +548,16 @@ export function planTurn(input: SchedulerInput): TurnSchedule {
   const state = roundStateOf(input);
   const assignedOrder = input.assignedOrder ?? [];
 
-  const chosen = admit(rank(input.cast, assignedOrder), state, maxSpeakersPerRound);
+  const chosen = admit(
+    rank(input.cast, assignedOrder),
+    state,
+    maxSpeakersPerRound,
+    input.castState,
+  );
   // The same walk WITHOUT the assignment: the difference between the two orders is the only
   // honest answer to "did the user override the plan", and running it here keeps that
   // question out of the UI (which must not re-implement admission to answer it).
-  const byScore = admit(rank(input.cast, []), state, maxSpeakersPerRound);
+  const byScore = admit(rank(input.cast, []), state, maxSpeakersPerRound, input.castState);
 
   return {
     round: state.round,
@@ -535,6 +609,12 @@ export function exclusionReasonFact(reason: ExclusionReason): string {
   switch (reason.kind) {
     case 'card-missing':
       return 'card-missing';
+    // The intervention (M1-S4): the row says what the USER did, so re-reading a plan explains
+    // a silence the person caused rather than blaming a limit that never applied.
+    case 'absent':
+      return 'absent=present(false)';
+    case 'muted':
+      return 'muted=true';
     case 'capped':
       return `capped=maxLinesPerRound(${reason.limit}),lines=${reason.linesTaken}`;
     case 'cooling':

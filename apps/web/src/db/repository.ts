@@ -521,6 +521,16 @@ export async function createSession(options: {
  * which is why no migration row is needed; the next write persists the completed
  * value naturally (`writeSessionState`, `setHeadMessageId`).
  *
+ * WHAT M1-S4 ADDED, AND WHY IT COMPLETES A FIELD RATHER THAN A ROW
+ * `SessionState.cast` (the live mute / presence state) is a field that arrived later
+ * than `state` itself, so a row can carry a valid state WITHOUT it — and the same
+ * argument applies one level down: an absent entry already means "present and not
+ * muted" (`packages/schema/src/entities/session.ts`), so an absent RECORD means the
+ * same for every member and is completed with `{}` here. Replacing such a state with
+ * a fresh default would be the bug this function exists to prevent, one field over:
+ * it would discard the clock, the variables and the scene of a session that was
+ * perfectly readable. That is also why this completion is a merge and not a repair.
+ *
  * WHY THIS TAKES A LOOSE SHAPE AND NOT A `Session`
  * The whole point is that the incoming row is NOT a trustworthy `Session` — that is
  * what "written before the field existed" means — so declaring the parameter as one
@@ -530,7 +540,13 @@ export async function createSession(options: {
  */
 function completeState(row: { state?: unknown; initialClock?: unknown }): SessionState {
   const parsed = SessionStateSchema.safeParse(row.state);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) {
+    // An absent `cast` is completed rather than replaced: see the block above for why
+    // discarding the rest of a readable state would be the wrong repair. A spread is the
+    // spelling this module uses for "this value, with one field filled in"
+    // (`writeSessionState` and `setHeadMessageId` do the same one level up).
+    return { ...parsed.data, cast: parsed.data.cast ?? {} };
+  }
   // The clock is read defensively because this helper exists for rows nobody
   // validated: a row whose `initialClock` is itself broken gets the epoch rather
   // than a `NaN` that would silently poison every later comparison. A row that
@@ -874,22 +890,38 @@ function characterVersionsOf(tx: Tx): Collection<CharacterVersion> {
  * WHY NOT `structuredClone`: it exists in every browser this app targets, but it is a
  * global that `biome.json` bans for `packages/core` and that this workspace has not
  * adopted elsewhere; the state's shape is fixed by `SessionStateSchema` (a scene
- * object, five flat records, one array of flat objects), so an explicit copy is
- * shorter than the argument for the global and cannot throw on a value the schema
- * already forbids. A field-by-field copy also states, in code, exactly which parts are
- * shared by reference when they are not copied — `sheets`' values are `unknown` to
- * core, so they are the one place a nested mutation could still be observed; that is
- * called out at `copySheets` rather than hidden.
+ * object, the clock, the cast, four flat records, one array of flat objects), so an
+ * explicit copy is shorter than the argument for the global and cannot throw on a
+ * value the schema already forbids. A field-by-field copy also states, in code,
+ * exactly which parts are shared by reference when they are not copied — `sheets`'
+ * values are `unknown` to core, so they are the one place a nested mutation could
+ * still be observed; that is called out at `copySheets` rather than hidden.
+ *
+ * `cast` IS COPIED ENTRY BY ENTRY (M1-S4): a save point's `castState` is taken from the
+ * live record, and a copy that shared it would follow every later mute — the same
+ * "then must not move" rule the whole function exists for, applied to the field the
+ * user edits most often. The ENTRIES are copied one level deep: an entry's fields are
+ * all primitives by schema, so there is nothing below them to share.
  */
 function copyState(state: SessionState): SessionState {
   return {
     scene: { ...state.scene },
     clock: state.clock,
     ...(state.innerClock === undefined ? {} : { innerClock: { ...state.innerClock } }),
+    cast: copyCast(state.cast),
     vars: { ...state.vars },
     sheets: copySheets(state.sheets),
     deadlines: state.deadlines.map((deadline) => ({ ...deadline })),
   };
+}
+
+/** One new entry per cast member; see `copyState` for why this is a copy at all. */
+function copyCast(cast: SessionState['cast']): SessionState['cast'] {
+  const copy: NonNullable<SessionState['cast']> = {};
+  for (const [characterId, entry] of Object.entries(cast ?? {})) {
+    copy[characterId] = { ...entry };
+  }
+  return copy;
 }
 
 /**
@@ -940,12 +972,15 @@ function snapshotOf(
  * layer (ADR-030's addendum). `label` is required by `CheckpointSchema`, so the caller
  * supplies a real sentence.
  *
- * `castState` is an argument and NOT read from the session row, because the live cast
- * presentation (who is on stage, which emotion, which outfit) has no persistence slot
- * yet — `SessionRefs.cast` is the PINNED ROSTER, which is a different fact and must not
- * be copied in as if it were live state. The caller that owns that state passes it; the
- * default is the empty map, which is the honest "nothing recorded" value and what the
- * play screen passes today.
+ * `castState` is an argument rather than something this function derives, and since M1-S4
+ * the caller HAS a live value to pass: `Session.state.cast` is the live cast state
+ * (ADR-032), and `session/cast.ts`'s `checkpointCastOf` copies it for exactly this
+ * argument — so a save point records the intervention that was in force when it was
+ * taken. It stays an ARGUMENT rather than being read from the session here because the
+ * snapshot must be a COPY of the live record, and a repository that copied it while
+ * reading the row would be doing the app layer's job: the default is the empty map,
+ * which is the honest "nothing recorded" value for the callers that have no cast (a
+ * test, or a session whose roster is empty).
  *
  * `agendaStatus` and `summary` are the two fields docs/04 §6's payload lists that no
  * engine writes yet (the agenda state machine and rolling summaries are later
@@ -1042,11 +1077,21 @@ export async function deleteCheckpoint(checkpointId: Id): Promise<void> {
  *
  * WHAT A ROLLBACK IS: TWO WRITES IN ONE TRANSACTION.
  * 1. `Session.state` becomes the checkpoint's `state` — the clock, the scene, `vars`,
- *    the sheets and the deadlines all move back TOGETHER, which is the acceptance
- *    sentence for M1-T4 ("读档后时钟与状态一致回滚"). Doing it field by field was the
- *    bug ADR-032 makes inexpressible: a checkpoint holds ONE state value, so there is
- *    no way to restore "the clock from the save and the vars from now".
+ *    the cast, the sheets and the deadlines all move back TOGETHER, which is the
+ *    acceptance sentence for M1-T4 ("读档后时钟与状态一致回滚"). Doing it field by field
+ *    was the bug ADR-032 makes inexpressible: a checkpoint holds ONE state value, so
+ *    there is no way to restore "the clock from the save and the vars from now".
  * 2. `headMessageId` moves to the checkpoint's message position.
+ *
+ * THE CAST MOVES WITH IT (M1-S4), AND THAT IS WHY IT LIVES IN `state`
+ * `Session.state.cast` is a field of the value this function assigns, so a rollback
+ * restores the mutes and the presences that were in force at the save point. Nothing
+ * extra is written for it: the field travels because it is part of ONE state value.
+ * The checkpoint's OWN `castState` is not read here — it is the snapshot
+ * `createCheckpoint` took from that same live record (`session/cast.ts`'s
+ * `checkpointCastOf`), i.e. a self-contained copy for a reader of the ROW, while the
+ * value this function restores is the state the row also holds. Two moments of one
+ * fact, and the restore takes the LIVE one.
  *
  * MESSAGES ARE NEVER TOUCHED (ADR-010). A rollback is a POINTER MOVE, not a delete:
  * the rows after the save point stay exactly where they are, the branch that was live

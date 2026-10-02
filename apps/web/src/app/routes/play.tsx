@@ -80,6 +80,15 @@
  * switcher renders. The switch itself is one `setHeadMessageId`: the chain is the walk up
  * `parentId` from the head, so the other answer (and everything after it) appears without
  * a single message being copied or rewritten.
+ *
+ * THE CAST INTERVENTION PANEL (M1-S4)
+ * 禁言 and 移出当前场景 are the user's own edit of their session, so the controls sit beside the
+ * cast list they act on and each row says what the intervention did, before and after the click.
+ * This file decides nothing about what an intervention MEANS: the transition is
+ * `session/cast.ts` (pure), the write is `state/chat-store.ts`'s `interveneCast`, and the
+ * scheduler's answer to it is `session/scheduler.ts`'s `muted` / `absent` reasons — all of which
+ * this panel renders. The undo it offers is the value that call returned, so it restores exactly
+ * what the user replaced rather than a value this screen re-derived.
  */
 import type { MessageKey, Translator } from '@smarttavern/i18n';
 import type { Calendar, Checkpoint, Id, Message, Session } from '@smarttavern/schema';
@@ -97,10 +106,12 @@ import {
   variableText,
 } from '../../chat/vars';
 import { useTranslation } from '../../i18n/use-translation';
+import { type CastIntervention, interventionOf } from '../../session/cast';
 import { MAX_SPEAKERS_PER_ROUND, type TurnSchedule } from '../../session/scheduler';
 import {
   exclusionReasonText,
   type ReasonText,
+  refusalReasonText,
   speakerReasonText,
 } from '../../session/scheduler-text';
 import { errorSentence, useChatStore } from '../../state/chat-store';
@@ -172,6 +183,7 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
           <StatusBar sessionId={session.id} session={session} />
           <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />
           <SchedulerPanel />
+          <CastInterventionPanel sessionId={session.id} session={session} />
           {/* The opening choice is offered exactly while the session has not started (M1-S3);
               see `OpeningPanel` for why the head and the chain are both consulted, and why
               跳过 is the one choice that writes nothing. `skipped` is this screen's own
@@ -719,6 +731,275 @@ function nameOf(name: string | undefined, t: Translator['t']): string {
   return name ?? t('play.schedulerUnknownCard');
 }
 
+/* ──────────────────────── M1-S4: the cast intervention ────────────────────── */
+
+/**
+ * The cast intervention panel (M1-S4, docs/01 §5.4 用户对卡司的干预): ONE row per pinned cast
+ * member, with the two acts that keep a character out of the scheduler's round.
+ *
+ * WHY IT LISTS `Session.refs.cast` AND NOT THE SCHEDULE'S ENTRIES
+ * The roster is who is IN the session; the schedule is what the rule decided about them THIS
+ * round. Deriving the list from the schedule would make a character disappear from the panel the
+ * moment they were muted (they leave `entries`), which is exactly backwards: the control that
+ * muting is undone with would vanish with the mute. So the list is the roster, and the schedule
+ * is asked only for the NAME it resolved (`nameFor`), since a card that cannot be read has no
+ * name in the session row either.
+ *
+ * WHY THE ROW IS BUILT FROM THE LIVE STATE, THE PURE MODULE AND THE STORE - AND NOTHING OF ITS OWN
+ * `interventionOf` is the one place that decides what a missing entry means
+ * (`session/cast.ts`), `interveneCast` is the one writer, and the scheduler's own reason
+ * vocabulary (`scheduler.ts`'s `muted` / `absent`) is what the schedule panel renders. This
+ * component therefore renders a value and offers an edit; it never re-derives eligibility, which
+ * is what keeps its "can speak" label from disagreeing with the reason beside the next speaker.
+ *
+ * WHY ONE UNDO AND NOT A HISTORY
+ * `interveneCast` answers the record it replaced, and this panel holds that ONE value: a history
+ * would be a second place where the cast's past lives, and a save point already is the durable
+ * way back (the intervention is part of the state it snapshots). The undo is offered exactly
+ * while a value is held, so it cannot claim to undo something that was not done here.
+ */
+function CastInterventionPanel({ sessionId, session }: { sessionId: Id; session: Session }) {
+  const { t } = useTranslation();
+  const schedule = useChatStore((state) => state.schedule);
+  const interveneCast = useChatStore((state) => state.interveneCast);
+  const restoreCast = useChatStore((state) => state.restoreCast);
+  const [busy, setBusy] = useSessionDraft(sessionId, false);
+  const [status, setStatus] = useSessionDraft(sessionId, '');
+  /**
+   * The standing the last intervention replaced, plus WHICH member it was about, or `null` when
+   * there is nothing to undo.
+   *
+   * WHY THE ID TRAVELS WITH THE VALUE: the undo is the same transition as an intervention and it
+   * is addressed to one member, so restoring "the cast" needs both halves. The pair is what the
+   * store's `interveneCast` answered with, so the row it writes is derived from the value that
+   * was just replaced - which is also what the row-level test asserts byte for byte.
+   * `useSessionDraft` keys it to the session, so a switch cannot offer an undo for another
+   * session's cast.
+   */
+  const [previous, setPrevious] = useSessionDraft<{
+    characterId: Id;
+    standing: CastIntervention;
+  } | null>(sessionId, null);
+
+  const castState = session.state.cast;
+  const ids = session.refs.cast.map((pin) => pin.id);
+
+  /** Ask for one member's standing and remember what it replaced. */
+  const change = async (characterId: Id, next: CastIntervention): Promise<void> => {
+    const name = nameFor(schedule, characterId, t);
+    setBusy(true);
+    try {
+      const standing = await interveneCast(characterId, next);
+      if (standing === undefined) return;
+      setPrevious({ characterId, standing });
+      setStatus(t('play.castIntervened', { name }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="cast-intervention">
+      <h2 className="section-title">{t('play.castInterventionTitle')}</h2>
+      <p className="muted">{t('play.castInterventionHint')}</p>
+
+      {ids.length === 0 ? (
+        <p className="muted">{t('play.schedulerEmptyCast')}</p>
+      ) : (
+        <ul className="cast-rows">
+          {ids.map((characterId) => (
+            <CastInterventionRow
+              key={characterId}
+              characterId={characterId}
+              name={nameFor(schedule, characterId, t)}
+              standing={interventionOf(castState, characterId)}
+              // Nothing is written while a write is in flight, so a double click cannot race two
+              // interventions into one row (the store serialises them, but the second one would
+              // be landing on a value the user has not seen yet).
+              disabled={busy}
+              onChange={change}
+            />
+          ))}
+        </ul>
+      )}
+
+      {status === '' ? null : <p className="cast-status">{status}</p>}
+      {previous === null ? null : (
+        <button
+          className="btn"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            void (async () => {
+              setBusy(true);
+              try {
+                if (await restoreCast(previous.characterId, previous.standing)) {
+                  setStatus(t('play.castRestored'));
+                  setPrevious(null);
+                }
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+        >
+          {t('play.castRestore')}
+        </button>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One member's row: who they are, where they stand, and the two acts.
+ *
+ * WHY EACH CONTROL IS A TWO-STEP CONFIRM (the save-point panel's precedent)
+ * Muting or taking a character off stage changes who the model may speak for on the next turn,
+ * and the user is mid-scene - so the first click ARMS the act and the row says what it will do
+ * (`play.castMuteHint`), and the second one performs it. The confirmation is a different label
+ * on the same row rather than a modal, because the fact being confirmed is WHICH character, and
+ * the row is what names them. Restoring is one click: it puts back a value the user just had, so
+ * it is the one act in this panel that needs no confirmation to be safe.
+ *
+ * WHY THE STATE SENTENCE IS `play.castStateNone` AND NOT THE SCHEDULER'S "CAN SPEAK": this row
+ * reports the INTERVENTION, and a character with no intervention may still be blocked this round
+ * by a cap or a cooldown - the scheduler panel says that, in the scheduler's own terms. Claiming
+ * "can speak" here would be a second opinion about eligibility, which is the thing this panel is
+ * built not to have.
+ */
+function CastInterventionRow({
+  characterId,
+  name,
+  standing,
+  disabled,
+  onChange,
+}: {
+  characterId: Id;
+  name: string;
+  standing: CastIntervention;
+  disabled: boolean;
+  onChange: (characterId: Id, next: CastIntervention) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [armed, setArmed] = useSessionDraft<'none' | 'mute' | 'absent'>(characterId, 'none');
+
+  const standingText = !standing.present
+    ? t('play.castStateAbsent')
+    : standing.muted
+      ? t('play.castStateMuted')
+      : t('play.castStateNone');
+
+  return (
+    <li className="cast-row" data-cast-intervention={characterId}>
+      <span className="cast-name">{name}</span>
+      <span className="muted">{standingText}</span>
+
+      {standing.muted ? (
+        <button
+          className="btn btn-small"
+          type="button"
+          disabled={disabled}
+          aria-label={t('play.castUnmuteLabel', { name })}
+          onClick={() => {
+            void onChange(characterId, { present: true, muted: false });
+          }}
+        >
+          {t('play.castUnmute')}
+        </button>
+      ) : armed === 'mute' ? (
+        <button
+          className="btn btn-small btn-primary"
+          type="button"
+          disabled={disabled}
+          aria-label={t('play.castMuteLabel', { name })}
+          onClick={() => {
+            setArmed('none');
+            // The OTHER flag is carried across unchanged: muting somebody must not put them back
+            // on stage, and the transition preserves it even so - this is the value the user is
+            // asking for, spelled out rather than inferred.
+            void onChange(characterId, { present: standing.present, muted: true });
+          }}
+        >
+          {t('play.castMuteConfirm')}
+        </button>
+      ) : (
+        <button
+          className="btn btn-small"
+          type="button"
+          disabled={disabled}
+          title={t('play.castMuteHint')}
+          aria-label={t('play.castMuteLabel', { name })}
+          onClick={() => {
+            setArmed('mute');
+          }}
+        >
+          {t('play.castMute')}
+        </button>
+      )}
+
+      {standing.present ? (
+        armed === 'absent' ? (
+          <button
+            className="btn btn-small btn-primary"
+            type="button"
+            disabled={disabled}
+            aria-label={t('play.castAbsentLabel', { name })}
+            onClick={() => {
+              setArmed('none');
+              // Off stage, and NOT unmuted: the transition writes `present` and leaves `muted`
+              // as it was, so bringing the character back cannot silently undo a mute.
+              void onChange(characterId, { present: false, muted: standing.muted });
+            }}
+          >
+            {t('play.castAbsentConfirm')}
+          </button>
+        ) : (
+          <button
+            className="btn btn-small"
+            type="button"
+            disabled={disabled}
+            title={t('play.castAbsentHint')}
+            aria-label={t('play.castAbsentLabel', { name })}
+            onClick={() => {
+              setArmed('absent');
+            }}
+          >
+            {t('play.castAbsent')}
+          </button>
+        )
+      ) : (
+        <button
+          className="btn btn-small"
+          type="button"
+          disabled={disabled}
+          aria-label={t('play.castPresentLabel', { name })}
+          onClick={() => {
+            void onChange(characterId, { present: true, muted: standing.muted });
+          }}
+        >
+          {t('play.castPresent')}
+        </button>
+      )}
+    </li>
+  );
+}
+
+/**
+ * The name of one cast member, as the SCHEDULE resolved it, or the catalog's sentence for a card
+ * that cannot be read.
+ *
+ * WHY THE SCHEDULE IS ASKED AND NOT A SECOND READ: resolving a pin to a name is
+ * `state/chat-store.ts`'s job (it is the only layer that reaches the card rows, ADR-017), and the
+ * schedule the panel already renders is that resolution for every member - the ones in the round
+ * AND the ones it left out. A second lookup here would be a second place where a pin becomes a
+ * name, and it would go stale the moment the roster changed.
+ */
+function nameFor(schedule: TurnSchedule | undefined, characterId: Id, t: Translator['t']): string {
+  const named = schedule?.entries.find((entry) => entry.characterId === characterId);
+  const excluded = schedule?.excluded.find((entry) => entry.characterId === characterId);
+  return nameOf(named?.name ?? excluded?.name, t);
+}
+
 /** One reason, in the active language: the catalog owns the sentence, the core the facts. */
 function sentenceOf(t: Translator['t'], text: ReasonText): string {
   return t(text.key, text.params);
@@ -743,7 +1024,9 @@ function nextSentence(schedule: TurnSchedule, t: Translator['t']): string {
   if (next.kind === 'refused') {
     return t('play.schedulerRefused', {
       name: nameOf(next.name, t),
-      reason: sentenceOf(t, exclusionReasonText(next.reason)),
+      // The named-assignment refusal has one reason a cast LISTING cannot produce
+      // (`not-in-cast`), which is why the mapping is the refusal one and not the exclusion one.
+      reason: sentenceOf(t, refusalReasonText(next.reason)),
     });
   }
   return next.reason.kind === 'empty-cast'

@@ -800,6 +800,54 @@ export const zhCN = {
   'play.schedulerExcludedCardMissing': '绑定的角色卡版本已不在库中，读不到发言档案',
   'play.schedulerExcludedNotInCast': 'TA 不在本次会话的卡司里',
   /**
+   * THE USER'S OWN INTERVENTION (M1-S4) — the two reasons a silence can be the person's own
+   * doing, named as such rather than as a generic "not eligible".
+   *
+   * WHY THEY ARE SEPARATE SENTENCES FROM THE LIMITS: a muted or absent member was not refused by
+   * a cap, and saying so would describe a rule that never applied — the user would go looking for
+   * a cooldown instead of at the control they just used. The acceptance clause is 「干预后调度器
+   * 行为符合预期」, and the reason is how the user can see that the behaviour is theirs.
+   */
+  'play.schedulerExcludedAbsent': '你已把 TA 移出当前场景',
+  'play.schedulerExcludedMuted': '你已把 TA 禁言',
+  /**
+   * The intervention controls themselves (M1-S4), on each cast row. The two acts are 禁言 and
+   * 移出当前场景 (docs/01 §5.4 用户对卡司的干预), and each control is named by what pressing it
+   * DOES — 解除禁言 puts them back, 恢复出场 brings them back on stage — because a button
+   * labelled with the state rather than the act leaves the user guessing which one they are in.
+   */
+  'play.castMute': '禁言',
+  'play.castUnmute': '解除禁言',
+  'play.castAbsent': '移出场景',
+  'play.castPresent': '恢复出场',
+  /** The armed second step of each act: same row, and the label says the act is about to happen. */
+  'play.castMuteConfirm': '确认禁言',
+  'play.castAbsentConfirm': '确认移出场景',
+  'play.castInterventionTitle': '卡司干预',
+  'play.castMuteLabel': '禁言 {name}：TA 仍在场，但不会被调度发言',
+  'play.castUnmuteLabel': '解除 {name} 的禁言，让 TA 重新参与调度',
+  'play.castAbsentLabel': '把 {name} 移出当前场景，TA 将不参与本轮',
+  'play.castPresentLabel': '让 {name} 回到当前场景并重新参与调度',
+  /** The row's own state sentence, so the cast list says what an intervention did. */
+  'play.castStateMuted': '已禁言',
+  'play.castStateAbsent': '已移出场景',
+  /** The same sentence for the control that APPLIES the intervention, as a tooltip. */
+  'play.castMuteHint': '禁言后 TA 仍会在场，但调度器不会再选中 TA 发言。',
+  'play.castAbsentHint': '移出场景后 TA 不参与本轮，调度器不会再选中 TA。',
+  'play.castStateNone': '可发言',
+  'play.castIntervened': '已更新卡司状态：{name}',
+  /** The undo, named after the precedent in the save-point panel and the co-creation flow. */
+  'play.castRestore': '撤销这次干预',
+  'play.castRestored': '已恢复到干预之前的卡司状态',
+  'play.castRestoreNothing': '没有可撤销的干预',
+  /**
+   * The hint above the cast rows. It says WHICH half of the milestone the controls are: the
+   * silence is live state that a save point and a rollback carry, so the user knows an undo has
+   * two sizes — this panel's one step, and the save-point panel's rollback.
+   */
+  'play.castInterventionHint':
+    '禁言与移出场景只影响调度，不改角色卡：被禁言或移出场景的角色不会被选为下一位发言者。这是会话的实时状态，会随存档点一起回滚；改错了可以撤销。',
+  /**
    * The instruction a scheduled turn sends: the plan decided WHO, this says it to the model.
    * It is the same kind of text as `play.openingInstruction` — a director's note that goes
    * on the wire and is deliberately NOT written into the transcript as a message.
@@ -1423,6 +1471,30 @@ export const en: Messages = {
   'play.schedulerExcludedCardMissing':
     'the pinned card version is no longer in the library, so its voice profile cannot be read',
   'play.schedulerExcludedNotInCast': 'they are not in the cast of this session',
+  'play.schedulerExcludedAbsent': 'you took them off stage',
+  'play.schedulerExcludedMuted': 'you muted them',
+  'play.castMute': 'Mute',
+  'play.castUnmute': 'Unmute',
+  'play.castAbsent': 'Take off stage',
+  'play.castPresent': 'Bring back on stage',
+  'play.castMuteConfirm': 'Confirm mute',
+  'play.castAbsentConfirm': 'Confirm off stage',
+  'play.castInterventionTitle': 'Cast intervention',
+  'play.castMuteLabel': 'Mute {name}: they stay on stage but are never scheduled to speak',
+  'play.castUnmuteLabel': 'Unmute {name} so they take part in scheduling again',
+  'play.castAbsentLabel': 'Take {name} off stage so they take no part in this round',
+  'play.castPresentLabel': 'Bring {name} back on stage so they take part in scheduling again',
+  'play.castStateMuted': 'Muted',
+  'play.castStateAbsent': 'Off stage',
+  'play.castMuteHint': 'Muted characters stay on stage, but the scheduler never picks them.',
+  'play.castAbsentHint': 'A character off stage takes no part in the round and is never picked.',
+  'play.castStateNone': 'Can speak',
+  'play.castIntervened': 'Cast state updated: {name}',
+  'play.castRestore': 'Undo this intervention',
+  'play.castRestored': 'Restored the cast to the state before that intervention',
+  'play.castRestoreNothing': 'There is no intervention to undo',
+  'play.castInterventionHint':
+    'Muting and taking a character off stage affect scheduling only, never the card: a muted or off-stage character is not chosen as the next speaker. This is live session state, so a save point rolls it back too, and a mistake can be undone here.',
   'play.schedulerInstruction':
     'Now speak as {name}: continue the current scene and write only what this character says and does. Do not speak for any other character or for the player.',
   'play.siblingCounter': 'Answer {position} of {total}',

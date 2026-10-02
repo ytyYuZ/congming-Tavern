@@ -44,11 +44,16 @@ const fullDeadline = {
  * The live state a session row carries (ADR-032). Defined BEFORE `fullSession`
  * because the session fixture embeds it, and re-used by the `SessionState` cases
  * below so the two cannot describe different states.
+ *
+ * `cast` is present so the fixture exercises the M1-S4 intervention — an absent
+ * entry means "present and not muted", so a record that carries only the member who
+ * was actually intervened in is the shape the app writes.
  */
 const fullState = {
   scene: { title: '雪夜旅店', location: '银松镇·旅店', time: 1_000_120 },
   clock: 1_000_120,
   innerClock: { kind: 'round', current: 2, total: 10, secondsPerRound: 6, note: '酒馆混战' },
+  cast: { [NPC_ID]: { present: true, muted: true, emotion: 'wary' } },
   vars: { 天气: '暴雪', 威胁: 3, 已发现灯塔: true },
   sheets: { [NPC_ID]: { hp: 12, conditions: ['疲惫'] } },
   deadlines: [fullDeadline],
@@ -334,6 +339,43 @@ describe('session state (the save payload)', () => {
       SessionStateSchema.safeParse({ ...fullState, sheets: { [NPC_ID]: { any: [1, 'a', null] } } })
         .success,
     ).toBe(true);
+  });
+
+  it('carries the live cast state, and completes a state written before it (M1-S4)', () => {
+    // The intervention is a field of the LIVE state (ADR-032), so it is checked by the
+    // same parse the row goes through and it round-trips value for value.
+    const parsed = SessionStateSchema.parse(fullState);
+    expect(parsed.cast).toEqual({ [NPC_ID]: { present: true, muted: true, emotion: 'wary' } });
+    // The minimal value is an EMPTY record, not one entry per pin: an id with no entry
+    // already means "present and not muted" (`session.ts`), so absence needs no entry.
+    const minimal = {
+      scene: { title: '', location: '', time: 0 },
+      clock: 0,
+      cast: {},
+      vars: {},
+      sheets: {},
+      deadlines: [],
+    };
+    expect(SessionStateSchema.safeParse(minimal).success).toBe(true);
+    // A state written BEFORE the field existed still parses — that is what makes the
+    // read boundary's completion (`db/repository.ts`) a fallback rather than a rescue.
+    const { cast: _droppedCast, ...withoutCast } = fullState;
+    expect(SessionStateSchema.safeParse(withoutCast).success).toBe(true);
+    // A malformed entry is refused rather than half-read: `present` is required, so an
+    // intervention that forgot to say whether the character is on stage is not a value.
+    expect(SessionStateSchema.safeParse({ ...fullState, cast: { [NPC_ID]: {} } }).success).toBe(
+      false,
+    );
+    expect(
+      SessionStateSchema.safeParse({ ...fullState, cast: { [NPC_ID]: { present: 'yes' } } })
+        .success,
+    ).toBe(false);
+    // Unknown fields inside an entry are stripped like everywhere else (invariant 5).
+    const stripped = SessionStateSchema.parse({
+      ...fullState,
+      cast: { [NPC_ID]: { present: true, someFutureField: 1 } },
+    });
+    expect(stripped.cast?.[NPC_ID]).toEqual({ present: true });
   });
 
   it('strips unknown fields and is JSON round-trip stable', () => {

@@ -72,6 +72,27 @@
  * would be enforcing a second, staler version of the same rule - so the panel offers the
  * assignment and this action refuses it, with the reason the same pure rule produced.
  *
+ * WHAT M1-S4 ADDED: THE CAST INTERVENTION, AND WHERE ITS UNDO LIVES
+ * `interveneCast` writes ONE field of the live state - `Session.state.cast`, the mute and
+ * presence of one member (ADR-032) - through the same `writeSessionState` path the clock and the
+ * variables use, and `restoreCast` puts back the record that call replaced. Three consequences
+ * are deliberate rather than incidental:
+ * - THE INTERVENTION IS PART OF THE SAVE POINT, because it is a field of the state a checkpoint
+ *   snapshots whole: a rollback brings the silence back with the clock, in one `put`, and no
+ *   second restore path exists. That is what makes this a live fact rather than a setting.
+ * - THE PROPOSAL IS REFRESHED, because the scheduler reads the cast state it just changed (the
+ *   same reason the `liveQuery` subscription refreshes it on every transcript emit). The call is
+ *   awaited into the store BEFORE the write, so a failed write puts the old proposal back rather
+ *   than leaving the screen claiming a silence that is not in the row.
+ * - THE UNDO VALUE IS IN MEMORY, NOT IN THE DATABASE. "Put the cast back to what it was a moment
+ *   ago" is one gesture, and a second persisted copy of the cast would be the second home for a
+ *   live fact that ADR-032 exists to prevent. A save point is the durable way to go back, and it
+ *   works precisely because the intervention lives inside the state it snapshots.
+ * - THE EDITS THE ROW ITSELF ALREADY HAD are not rebuilt here: 编辑 AI 发言 and 代写并交还 are
+ *   `editMessage` (a new SIBLING carrying the same `speakerId`), and 强制下轮发言 is
+ *   `speakNextTurn(characterId)` (M1-S5's validated manual assignment). `session/cast.ts`'s
+ *   header records why each one stays where it is.
+ *
  * WHAT M1-S2 ADDED TO THIS STORE, AND WHAT IT DELIBERATELY DID NOT
  * The message tree's three mutating acts are here — `regenerate`, `editMessage` and
  * `deleteMessage` — plus `switchBranch`, which is the read-shaped one. Each is a POINTER
@@ -156,6 +177,12 @@ import {
 } from '../db/repository';
 import { KEY_LOCKED_CODE, messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
 import { translate } from '../i18n/translate';
+import {
+  type CastIntervention,
+  checkpointCastOf,
+  intervene,
+  restoreIntervention,
+} from '../session/cast';
 import { type SessionDraft, sessionPinsOf } from '../session/roster';
 import {
   type CastMember,
@@ -402,6 +429,29 @@ export interface ChatState {
    * is left in `schedule` for the panel to render - never a silent stall.
    */
   speakNextTurn: (characterId?: Id) => Promise<SpeakOutcome>;
+  /**
+   * Intervene in one cast member's standing (M1-S4): mute them, take them off stage, or undo
+   * either. An EDIT of the live state, not a toggle - see `session/cast.ts` for why the caller
+   * names the value it wants.
+   *
+   * Resolves to the standing this call REPLACED, so the caller can hold it and hand the cast
+   * back to `restoreCast`, or `undefined` when nothing was written (no open session, an edit
+   * that asked for the value already there, or a storage failure - which also lands in `error`).
+   */
+  interveneCast: (characterId: Id, next: CastIntervention) => Promise<CastIntervention | undefined>;
+  /**
+   * Put one cast member's standing back to the value this session held before an intervention
+   * (M1-S4) - the undo `interveneCast` answers with.
+   *
+   * It is the same transition as an intervention (an edit of the live state, written through the
+   * same path), which is why the argument is the standing and not a whole record: the caller has
+   * exactly that value, and asking it to rebuild a record would make the undo depend on how the
+   * panel happens to keep its copy.
+   *
+   * Resolves `true` only when the row was written, so the panel can say "restored" rather than
+   * claiming a revert that was already the state.
+   */
+  restoreCast: (characterId: Id, previous: CastIntervention) => Promise<boolean>;
   /**
    * Assign one free variable of the open session and persist it (M1-S6, ADR-031).
    * Resolves to `true` only when the row was written; a name no macro can address is
@@ -1041,6 +1091,67 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   /**
+   * Apply one cast intervention through the pure transition and persist it (M1-S4).
+   *
+   * WHY THE ROW IS WRITTEN BEFORE THE STATE MOVES (the same order `setVariable` uses)
+   * The scheduler's next proposal is computed from the ROW's state through the `liveQuery`
+   * subscription, and a checkpoint taken immediately after an intervention snapshots the ROW
+   * inside its own transaction (`createCheckpoint`). If the store claimed a silence the row did
+   * not hold yet, both would describe a cast the database never had. So the write comes first and
+   * the in-memory session is derived from the very value that was written.
+   *
+   * WHY `previous` IS RETURNED RATHER THAN KEPT HERE
+   * The undo belongs to the gesture that made the edit (the panel holds it for as long as it
+   * offers the button), and keeping a history in the store would be the second home for the cast
+   * that ADR-032 exists to prevent. The value comes from the TRANSITION, not from a second read
+   * of the row, so it is exactly what was replaced - a race with another tab would otherwise
+   * hand the user an "undo" that restores somebody else's cast.
+   *
+   * A NAMED MEMBER THE SESSION DOES NOT CONTAIN IS REFUSED: `Session.refs.cast` is the roster,
+   * and an intervention is an edit of IT - a stale screen (or a hand-made call) must not grow the
+   * record an id no reader can match to a card.
+   */
+  async interveneCast(
+    characterId: Id,
+    next: CastIntervention,
+  ): Promise<CastIntervention | undefined> {
+    const session = get().session;
+    if (session === undefined) return undefined;
+    if (!session.refs.cast.some((pin) => pin.id === characterId)) return undefined;
+    const change = intervene(session.state, characterId, next);
+    if (change === undefined) return undefined;
+    // The proposal moves FIRST, before the row write is awaited: it is the value the panel
+    // renders next to the cast list, and computing it after the write would leave the screen -
+    // and the reason beside the next speaker - describing the cast the user just changed away
+    // from. It is a read, so a storage failure below simply re-derives it from the row.
+    await get().proposeNextTurn();
+    if (!(await commitState(set, session, change.state, 'unknown cast write failure'))) {
+      await get().proposeNextTurn();
+      return undefined;
+    }
+    return change.previous;
+  },
+
+  /** See the interface's `restoreCast` for the rule this enforces. */
+  async restoreCast(characterId: Id, previous: CastIntervention): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    // The undo goes through the SAME transition as the act it undoes (`restoreIntervention` is a
+    // name for that intent, not a second rule), so there is one definition of what a standing
+    // means and of how an entry is spelled - an entry that carries only the defaults is removed,
+    // which is what makes the restore reproduce the bytes that were there. An `undefined` answer
+    // means the value is already the state's (an undo of an undo), and writes nothing.
+    const change = restoreIntervention(session.state, characterId, previous);
+    if (change === undefined) return false;
+    await get().proposeNextTurn();
+    if (!(await commitState(set, session, change, 'unknown cast write failure'))) {
+      await get().proposeNextTurn();
+      return false;
+    }
+    return true;
+  },
+
+  /**
    * Move the clock by `delta` minutes and persist the whole state (M1-T2).
    *
    * WHY THE STORE OWNS THE `await`, NOT THE VIEW: the view's button handler is
@@ -1138,11 +1249,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * The new row is put at the FRONT of `checkpoints`: the list is newest-first, the row
    * was just minted, and re-reading the whole list to learn that would be a round trip
    * for a fact this call already holds.
+   *
+   * WHY THE CAST SNAPSHOT IS PASSED HERE (M1-S4): the checkpoint's own `castState` is the
+   * "then" of `Session.state.cast`, and `createCheckpoint` reads the ROW's state for its
+   * `state` field but not for this one — the record is copied by the layer that knows the
+   * scheduler reads it (`session/cast.ts`'s `checkpointCastOf`), so a save point says which
+   * characters were silent when it was taken. It is a COPY one level deep, not the live
+   * record: a snapshot that aliased it would follow every later intervention.
    */
   async saveCheckpoint(label: string): Promise<Checkpoint | undefined> {
     const session = get().session;
     if (session === undefined) return undefined;
-    const stored = await createCheckpointRow({ sessionId: session.id, label });
+    const stored = await createCheckpointRow({
+      sessionId: session.id,
+      label,
+      castState: checkpointCastOf(session.state),
+    });
     if (stored === undefined) return undefined;
     set({ checkpoints: [stored, ...get().checkpoints] });
     return stored;
@@ -1248,6 +1370,13 @@ async function schedulerInputOf(
   return {
     cast,
     history: chain.map(spokenLineOf),
+    // THE USER'S INTERVENTION (M1-S4) travels as DATA, read from the live state beside the
+    // roster: `Session.refs.cast` says WHO is in the session and `Session.state.cast` says
+    // where each of them stands right now (ADR-032). The two are different facts about the
+    // same ids, which is why the rule takes one as the roster and the other as the record -
+    // and why `undefined` is passed on rather than `{}`: an absent record and an empty one
+    // mean the same thing to the scheduler (everybody present, nobody muted).
+    ...(session.state.cast === undefined ? {} : { castState: session.state.cast }),
     ...(choice === undefined ? {} : { assignedOrder: [choice] }),
   };
 }

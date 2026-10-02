@@ -22,17 +22,18 @@
  * combination visible as a missing row rather than as a missing test.
  */
 /** @vitest-environment node */
-import { type Id, TurnPlanSchema, type VoiceProfile } from '@smarttavern/schema';
+import { type CastState, type Id, TurnPlanSchema, type VoiceProfile } from '@smarttavern/schema';
 import { describe, expect, it } from 'vitest';
 import {
   type CastMember,
+  exclusionReasonFact,
   MAX_SPEAKERS_PER_ROUND,
   planDraftOf,
   planTurn,
   type SchedulerInput,
   type SpokenLine,
 } from './scheduler';
-import { exclusionReasonText, speakerReasonText } from './scheduler-text';
+import { exclusionReasonText, refusalReasonText, speakerReasonText } from './scheduler-text';
 
 /* ──────────────────────────────── fixtures ───────────────────────────────── */
 
@@ -78,6 +79,12 @@ interface StateRow {
   readonly name: string;
   readonly cast: readonly CastMember[];
   readonly history: readonly SpokenLine[];
+  /**
+   * The live cast state the row is played with (M1-S4). Absent means "nobody was intervened in",
+   * which is what an empty record means - so the rows that do not set it are also the control for
+   * the ones that do: the SAME cast and history, one row with an intervention and one without.
+   */
+  readonly castState?: Record<Id, CastState>;
   /** The round order, as ids. */
   readonly order: readonly Id[];
   /** Who was left out and the KIND of reason, in the order the rule reports them. */
@@ -211,12 +218,93 @@ const STATES: readonly StateRow[] = [
     excluded: [],
     next: undefined,
   },
+  /* ── M1-S4: the user's own intervention, as two more reasons ──────────────── */
+  {
+    name: 'a MUTED character is skipped, and the reason names the intervention',
+    cast: [member('a', { desire: 90, ability: 90 }), member('b', { desire: 10, ability: 10 })],
+    history: [],
+    // `a` would win on score alone; the mute is what takes the turn away from them.
+    castState: { a: { present: true, muted: true } },
+    order: ['b'],
+    excluded: [['a', 'muted']],
+    next: 'b',
+  },
+  {
+    name: 'a character taken OFF STAGE is skipped, and the reason names that too',
+    cast: [member('a', { desire: 90, ability: 90 }), member('b', { desire: 10, ability: 10 })],
+    history: [],
+    castState: { a: { present: false } },
+    order: ['b'],
+    excluded: [['a', 'absent']],
+    next: 'b',
+  },
+  {
+    name: 'the SAME cast without the intervention selects the member it silenced (the control)',
+    cast: [member('a', { desire: 90, ability: 90 }), member('b', { desire: 10, ability: 10 })],
+    history: [],
+    // No `castState`: this is the row above with the intervention undone, which is what makes
+    // "the intervention excludes them" a fact about the intervention rather than about `a`.
+    order: ['a', 'b'],
+    excluded: [],
+    next: 'a',
+  },
+  {
+    name: 'absent wins over muted when both are true (off stage is the stronger fact)',
+    cast: [member('a', { desire: 90 }), member('b', { desire: 10 })],
+    history: [],
+    castState: { a: { present: false, muted: true } },
+    order: ['b'],
+    excluded: [['a', 'absent']],
+    next: 'b',
+  },
+  {
+    name: 'an intervention consumes no speaker slot: the cap is filled by those who can speak',
+    cast: [
+      member('a', { desire: 90 }),
+      member('b', { desire: 80 }),
+      member('c', { desire: 70 }),
+      member('d', { desire: 60 }),
+    ],
+    history: [PLAYER],
+    castState: { a: { present: true, muted: true } },
+    // Three DISTINCT speakers are the cap; `a` is not one of them, so `b`, `c` and `d` all fit.
+    order: ['b', 'c', 'd'],
+    excluded: [['a', 'muted']],
+    next: 'b',
+  },
+  {
+    name: 'a mute is not a line budget, so it is not reported as a cap',
+    cast: [member('a', { maxLinesPerRound: 1 }), member('b', { desire: 10 })],
+    // `a` HAS spoken its single line this round, so both facts are true; the intervention is the
+    // one the user caused, and the reason the panel must read.
+    history: [PLAYER, line('a')],
+    castState: { a: { present: true, muted: true } },
+    order: ['b'],
+    excluded: [['a', 'muted']],
+    next: 'b',
+  },
+  {
+    name: 'every member intervened in is a named outcome, not an empty answer',
+    cast: [member('a', { desire: 90 }), member('b', { desire: 80 })],
+    history: [PLAYER],
+    castState: { a: { present: true, muted: true }, b: { present: false } },
+    order: [],
+    excluded: [
+      ['a', 'muted'],
+      ['b', 'absent'],
+    ],
+    next: undefined,
+  },
 ];
 
 describe('M1-S5: the round state table', () => {
   for (const row of STATES) {
     it(row.name, () => {
-      const schedule = planTurn({ cast: row.cast, history: row.history });
+      const schedule = planTurn({
+        cast: row.cast,
+        history: row.history,
+        ...(row.castState === undefined ? {} : { castState: row.castState }),
+      });
 
       expect(entryIds(schedule)).toEqual([...row.order]);
       expect(exclusions(schedule)).toEqual(row.excluded.map((entry) => [entry[0], entry[1]]));
@@ -477,6 +565,51 @@ describe('M1-S5: the reasons in the catalog terms', () => {
     });
   });
 
+  it('names the user intervention in the catalog terms and in the stored fact (M1-S4)', () => {
+    // WHY THE SENTENCES ARE THEIR OWN KEYS: a muted or absent member was not refused by a cap,
+    // so reusing the limit sentences would describe a rule that never applied. The two facts are
+    // distinct here for the same reason they are distinct in `ExclusionReason`.
+    expect(exclusionReasonText({ kind: 'muted' })).toEqual({
+      key: 'play.schedulerExcludedMuted',
+      params: {},
+    });
+    expect(exclusionReasonText({ kind: 'absent' })).toEqual({
+      key: 'play.schedulerExcludedAbsent',
+      params: {},
+    });
+    // ...and the PERSISTED trace names the intervention too, in an ASCII fact with no prose: a
+    // plan row re-read months later must still say the silence was the user's rather than a cap's.
+    expect(exclusionReasonFact({ kind: 'muted' })).toBe('muted=true');
+    expect(exclusionReasonFact({ kind: 'absent' })).toBe('absent=present(false)');
+  });
+
+  it('refuses a NAMED assignment of an intervened member with the intervention as the reason', () => {
+    // THE `user` MODE'S VALIDATION (docs/02 section 5.6): the caller names a character and the
+    // rule answers. A muted one is refused BY NAME, not silently swapped for somebody else.
+    const schedule = planTurn({
+      cast: [member('a', { desire: 90 }), member('b', { desire: 10 })],
+      history: [],
+      castState: { a: { present: true, muted: true } },
+      assignedOrder: ['a'],
+    });
+    expect(schedule.next).toEqual({
+      kind: 'refused',
+      characterId: 'a',
+      name: 'a',
+      reason: { kind: 'muted' },
+    });
+    // The same call with the mute lifted selects the character the user asked for: the
+    // intervention, and nothing else, is what the refusal is about.
+    const restored = planTurn({
+      cast: [member('a', { desire: 90 }), member('b', { desire: 10 })],
+      history: [],
+      castState: { a: { present: true, muted: false } },
+      assignedOrder: ['a'],
+    });
+    expect(restored.next.kind).toBe('speaker');
+    expect(restored.next.kind === 'speaker' ? restored.next.speaker.characterId : '').toBe('a');
+  });
+
   it('maps every exclusion reason, and counts the rounds a cooldown still has to wait', () => {
     expect(exclusionReasonText({ kind: 'capped', limit: 1, linesTaken: 1 })).toEqual({
       key: 'play.schedulerExcludedCapped',
@@ -490,10 +623,16 @@ describe('M1-S5: the reasons in the catalog terms', () => {
       key: 'play.schedulerExcludedCardMissing',
       params: {},
     });
-    expect(exclusionReasonText({ kind: 'not-in-cast' })).toEqual({
+    // THE NAMED-ASSIGNMENT REASON (M1-S4 split the two mappings): `not-in-cast` is the one a
+    // cast listing can never produce, so it lives on the refusal mapping - and the exclusions
+    // above still resolve through it unchanged, which is the point of the split.
+    expect(refusalReasonText({ kind: 'not-in-cast' })).toEqual({
       key: 'play.schedulerExcludedNotInCast',
       params: {},
     });
+    expect(refusalReasonText({ kind: 'capped', limit: 1, linesTaken: 1 })).toEqual(
+      exclusionReasonText({ kind: 'capped', limit: 1, linesTaken: 1 }),
+    );
     // THE TWO NUMBERS OF A COOLDOWN SENTENCE ARE DIFFERENT FACTS: how long the cooldown is,
     // and how much of it is left. A character with `cooldown: 2` whose last line was TWO round
     // boundaries ago is free after ONE more, so the sentence must say 1 - and an

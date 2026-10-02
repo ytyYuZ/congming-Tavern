@@ -16,7 +16,7 @@
  * order these clauses differently, which is the same argument `play.clock` records.
  */
 import type { MessageKey, TranslateParams } from '@smarttavern/i18n';
-import type { RefusalReason, SpeakerReason } from './scheduler';
+import type { ExclusionReason, RefusalReason, SpeakerReason } from './scheduler';
 
 /** One catalog sentence plus the values its placeholders take. */
 export interface ReasonText {
@@ -38,21 +38,33 @@ export function speakerReasonText(reason: SpeakerReason): ReasonText {
 }
 
 /**
- * Why this character cannot speak: the same sentences for a cast member the scheduler left
- * out (`CastExclusion`) and for one the USER named and the limits refused (`RefusalReason`),
- * because they are the same fact about the same character. `not-in-cast` is the one a
- * cast-listing never needs and a named assignment can produce.
+ * Why a cast member cannot take a turn. The vocabulary covers BOTH a member the scheduler left
+ * out (`CastExclusion`) and one the USER named and the rule refused, because those are the same
+ * fact about the same character; `not-in-cast` is the single reason only a named assignment can
+ * produce, and it is mapped in `refusalReasonText` below.
  *
- * `{remaining}` is computed here rather than stored, because it is a property of the
- * sentence: a cooling character whose last line was `roundsSince` rounds ago is free again
- * once `roundsSince` exceeds `cooldown`, so the rounds left to wait are
- * `cooldown - roundsSince + 1`. Deriving it in the core would put UI arithmetic into the
- * rule; deriving it in the catalog is impossible, because a catalog value is data.
+ * WHY THE TWO MAPPINGS ARE SPLIT (M1-S4): the scheduler gained reasons for the user's own
+ * intervention, and a caller that renders a cast LISTING has only an `ExclusionReason` - it can
+ * never hold `not-in-cast`. Keeping the listing's mapping total over its own vocabulary is what
+ * lets that caller reach a sentence without inventing a `RefusalReason`, while both directions
+ * stay exhaustive: a reason the core gains is a `tsc` error here until somebody decides what it
+ * says.
+ *
+ * `{remaining}` is computed here rather than stored because it is a property of the SENTENCE (see
+ * the file header): a cooling character is free once `roundsSince` exceeds `cooldown`, so the
+ * rounds left to wait are `cooldown - roundsSince + 1` - arithmetic about a sentence, not about
+ * the rule.
  */
-export function exclusionReasonText(reason: RefusalReason): ReasonText {
+export function exclusionReasonText(reason: ExclusionReason): ReasonText {
   switch (reason.kind) {
     case 'card-missing':
       return { key: 'play.schedulerExcludedCardMissing', params: {} };
+    // The user's own intervention (M1-S4), whose sentence NAMES the fact rather than saying
+    // "not eligible": the reason is the whole point of the row being visible.
+    case 'absent':
+      return { key: 'play.schedulerExcludedAbsent', params: {} };
+    case 'muted':
+      return { key: 'play.schedulerExcludedMuted', params: {} };
     case 'capped':
       return {
         key: 'play.schedulerExcludedCapped',
@@ -68,7 +80,15 @@ export function exclusionReasonText(reason: RefusalReason): ReasonText {
       };
     case 'speaker-cap':
       return { key: 'play.schedulerExcludedSpeakerCap', params: { limit: reason.limit } };
-    case 'not-in-cast':
-      return { key: 'play.schedulerExcludedNotInCast', params: {} };
   }
+}
+
+/**
+ * Why a character the caller NAMED cannot take the turn: the exclusions above, or the one
+ * reason only a named assignment can produce.
+ */
+export function refusalReasonText(reason: RefusalReason): ReasonText {
+  return reason.kind === 'not-in-cast'
+    ? { key: 'play.schedulerExcludedNotInCast', params: {} }
+    : exclusionReasonText(reason);
 }

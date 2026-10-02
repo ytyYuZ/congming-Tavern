@@ -17,10 +17,15 @@
  *    default derived from `initialClock`. Case 5's first test writes that old row the
  *    way the old CODE wrote it — through the raw write path — because going through
  *    `createSession` would test nothing (it always writes a `state`).
+ * 6. The live CAST state (M1-S4, the same ADR-032 slot one field later): it round-trips,
+ *    a state written before the field existed is completed with `{}` WITHOUT losing its
+ *    clock or variables, and an intervention + undo is asserted on the stored BYTES —
+ *    with the scheduler asked in between, so "the scheduler behaves as expected after an
+ *    intervention" is a fact about the row and not only about the pure rule.
  */
 import 'fake-indexeddb/auto';
 import { COLLECTIONS } from '@smarttavern/core';
-import type { Message, Session, SessionState } from '@smarttavern/schema';
+import type { Message, Session, SessionState, VoiceProfile } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, readTable, resetDatabase, subscribe, write } from '../db/database';
 import {
@@ -48,6 +53,8 @@ import {
 // A session as a container, with the pins the create flow would have collected (M1-S1): this
 // file's subject is the repository's rows and queries, not which world a session pins.
 import { createTestSession as createSession } from '../db/session.test-helpers';
+import { intervene, interventionOf, restoreIntervention } from '../session/cast';
+import { type CastMember, planTurn } from '../session/scheduler';
 
 let databases = 0;
 let databaseName = '';
@@ -165,6 +172,7 @@ describe('db/repository', () => {
     expect(readBack?.state).toEqual({
       scene: { title: '', location: '', time: 4321 },
       clock: 4321,
+      cast: {},
       vars: {},
       sheets: {},
       deadlines: [],
@@ -176,6 +184,107 @@ describe('db/repository', () => {
     // (the `readLocaleSetting` idiom): a half-trusted state is the bug this prevents.
     await putRawSession({ ...withoutState, initialClock: 4321, state: { clock: 'not-a-number' } });
     expect((await getSession(session.id))?.state.clock).toBe(4321);
+  });
+
+  /* ─────────────── M1-S4: the live cast state (ADR-032) ─────────────── */
+
+  it('round-trips the live cast state, and completes a state written before it existed', async () => {
+    // (1) THE FIELD IS PART OF THE LIVE STATE, so it goes through `writeSessionState` and comes
+    // back on the next read - the same path the clock and the variables take, because it is a
+    // field of the same value rather than a table of its own.
+    const session = await createSession({ title: 'cast' });
+    const mutedCast: SessionState = {
+      ...session.state,
+      cast: { 'char-a': { present: true, muted: true }, 'char-b': { present: false } },
+    };
+    await writeSessionState(session.id, mutedCast);
+    expect((await getSession(session.id))?.state.cast).toEqual(mutedCast.cast);
+
+    // (2) A ROW WHOSE STATE PREDATES THE FIELD STILL OPENS. Written the way the old writer wrote
+    // it - a raw put with a valid state and no `cast` - because `defaultSessionState` always
+    // supplies one and going through a typed writer would test nothing. The read boundary
+    // COMPLETES the missing field instead of replacing the state, so the clock and the variables
+    // of a perfectly readable row survive: replacing them would be the "lost afternoon" bug this
+    // fallback exists to prevent, one field over.
+    const { cast: _droppedCast, ...stateWithoutCast } = session.state;
+    await putRawSession({ ...session, state: { ...stateWithoutCast, clock: 77 } });
+    const completed = await getSession(session.id);
+    expect(completed?.state.cast).toEqual({});
+    expect(completed?.state.clock).toBe(77);
+    expect(completed?.state.scene).toEqual(session.state.scene);
+    expect(completed?.state.vars).toEqual(session.state.vars);
+    // The completed value is a real one: it parses as a `SessionState` (what the schema calls an
+    // absent entry - present, not muted), so nothing downstream sees an absent field.
+    expect(interventionOf(completed?.state.cast, 'char-a')).toEqual({
+      present: true,
+      muted: false,
+    });
+  });
+
+  it('proves undo/restore on the stored bytes, and that the scheduler answers the intervention', async () => {
+    // THE MILESTONE'S LOOP, WITHOUT A DOM: an intervention the user makes is written to the row,
+    // the SCHEDULER's selection changes because of it, and putting the previous value back
+    // restores the row byte for byte. The transition is pure (`session/cast.ts`), so the two
+    // writes are the app's own `writeSessionState`, and the scheduler is the app's own rule.
+    const session = await createSession({ title: 'undo' });
+    const before = stateWithVars(session.state, { weather: 'snow' });
+    await writeSessionState(session.id, before);
+    const originalBytes = await storedStateBytes(session.id);
+
+    const members = [
+      { id: 'char-mira', name: 'Mira', voice: voiceProfile(90, 90) },
+      { id: 'char-leo', name: 'Leo', voice: voiceProfile(10, 10) },
+    ];
+    // BEFORE: the stronger speaker is the one the rule picks.
+    expect(nextSpeakerOf(members, before)).toBe('char-mira');
+
+    // THE INTERVENTION: mute her. It is written through the app's own path...
+    const muted = intervene(before, 'char-mira', { present: true, muted: true });
+    if (muted === undefined) throw new Error('the mute was refused');
+    await writeSessionState(session.id, muted.state);
+
+    // ...the row carries it...
+    const storedMuted = await getSession(session.id);
+    expect(storedMuted?.state.cast).toEqual({ 'char-mira': { present: true, muted: true } });
+    // ...the SCHEDULER now skips her, with the intervention as the REASON (not a cap), and
+    // proposes the other member...
+    const schedule = planTurn({
+      cast: members,
+      history: [],
+      ...(storedMuted?.state.cast === undefined ? {} : { castState: storedMuted.state.cast }),
+    });
+    expect(schedule.next.kind === 'speaker' ? schedule.next.speaker.characterId : '').toBe(
+      'char-leo',
+    );
+    expect(schedule.excluded).toEqual([
+      { characterId: 'char-mira', name: 'Mira', reason: { kind: 'muted' } },
+    ]);
+    // ...and the muted member cannot be NAMED into the turn either: the assignment is validated,
+    // so the user cannot hand the turn to somebody they just silenced.
+    const refused = planTurn({
+      cast: members,
+      history: [],
+      castState: storedMuted?.state.cast,
+      assignedOrder: ['char-mira'],
+    });
+    expect(refused.next).toEqual({
+      kind: 'refused',
+      characterId: 'char-mira',
+      name: 'Mira',
+      reason: { kind: 'muted' },
+    });
+
+    // THE UNDO: the value the intervention replaced goes back through the same transition, and
+    // the row is the BYTES it was before the mute - which is what makes "restore" a fact about
+    // storage rather than about a re-derived value.
+    const restored = restoreIntervention(muted.state, 'char-mira', muted.previous);
+    if (restored === undefined) throw new Error('the restore was refused');
+    await writeSessionState(session.id, restored);
+    expect(await storedStateBytes(session.id)).toBe(originalBytes);
+    // ...and she is selectable again, which is the control the milestone asks for beside the
+    // exclusion: the same cast, the same rule, the intervention removed.
+    const afterRestore = await getSession(session.id);
+    expect(nextSpeakerOf(members, afterRestore?.state)).toBe('char-mira');
   });
 
   it('round-trips the live state: a changed clock and vars survive a restart', async () => {
@@ -787,4 +896,42 @@ async function putRawSession(row: Record<string, unknown>): Promise<void> {
   await write(async (tx) => {
     await tx.collection<Session>(COLLECTIONS.sessions).put(row as unknown as Session);
   });
+}
+
+/* ──────────────── M1-S4: the live cast state, at the row ─────────────────── */
+
+/**
+ * The row's state, exactly as the stored bytes spell it (not through a reader).
+ *
+ * The row is read as a LOOSE `Partial<Session>` rather than as `Session` or as an open record:
+ * `Session` would claim a state the raw row may not have (which is what the completion test is
+ * about), while `Record<string, unknown>` would force the key through the parameterised spelling
+ * this workspace uses for index signatures. `Partial<Session>` is both honest and readable.
+ */
+async function storedStateBytes(sessionId: string): Promise<string> {
+  const row = await readTable<Partial<Session>>(COLLECTIONS.sessions).get(sessionId);
+  return JSON.stringify(row?.state);
+}
+
+/** A session state carrying exactly these variables, for the undo case's other data. */
+function stateWithVars(state: SessionState, vars: SessionState['vars']): SessionState {
+  return { ...state, vars };
+}
+
+/** One cast member with a readable voice profile, as `state/chat-store.ts` resolves one. */
+function voiceProfile(desire: number, ability: number): VoiceProfile {
+  return { desire, ability, roles: [], maxLinesPerRound: 2, cooldown: 0 };
+}
+
+/** Who the rule would ask next, for a cast and a session state. */
+function nextSpeakerOf(
+  cast: readonly CastMember[],
+  state: SessionState | undefined,
+): string | undefined {
+  const schedule = planTurn({
+    cast,
+    history: [],
+    ...(state?.cast === undefined ? {} : { castState: state.cast }),
+  });
+  return schedule.next.kind === 'speaker' ? schedule.next.speaker.characterId : undefined;
 }
