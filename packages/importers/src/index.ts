@@ -25,6 +25,8 @@
  *   ./import-package  `.stpack` bytes → rows + an `ImportReport`
  *   ./identity        the reuse / remap policy (items 9, 10, 12) and its reasons
  *   ./payload         the `data/` layout, canonical JSON and the row orderings
+ *   ./sillytavern     SillyTavern character cards (PNG/JSON) and world info ⇄ our
+ *                     entities, with the same "report, never throw" shape (M1-I1)
  *   ./testing/fixtures one complete library, for tests and for the CLI's demo
  *
  * The in-package test doubles live in `./testing/`. The storage double IS
@@ -36,6 +38,7 @@ export * from './export-package';
 export * from './identity';
 export * from './import-package';
 export * from './payload';
+export * from './sillytavern';
 export * from './testing/fixtures';
 /**
  * The in-memory `StorageAdapter` IS exported, deliberately: `tools/stpack-cli` has
