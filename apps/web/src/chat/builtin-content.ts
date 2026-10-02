@@ -14,9 +14,9 @@
  *   structured parts instead of a finished sentence — see `engine/time/clock.ts`.)
  * - docs/06 §8.5 决定 1 records why they are here at all: `PromptPreset` rows and
  *   the world editor are deferred, but `Session.refs.promptPreset` is a required pin
- *   on the frozen session schema. So until M1-W1 / M1-I2 provide real rows, the app
- *   assembles from built-ins, and the pin `{id: 'builtin-default', version: 1}`
- *   written by `db/repository.ts` names THIS preset.
+ *   on the frozen session schema. So until presets come from real rows, the app
+ *   assembles from built-ins, and the pin a new session records
+ *   (`session/roster.ts`'s `BUILTIN_PRESET_CHOICE`, M1-S1) names THIS preset.
  * - Consequence for the lint surface: `tools/scripts/check-i18n-literals.mjs` reports
  *   this file under its CJK rule and needs its second documented exemption (the
  *   first, `chat/prompt.ts`, is deleted by this change). That exemption is the
@@ -100,9 +100,10 @@ export const BUILTIN_CALENDAR: Calendar = {
 /* ─────────────────────────────── the default preset ───────────────────────── */
 
 /**
- * The id `db/repository.ts` writes as `Session.refs.promptPreset.id`
- * (`PLACEHOLDER_PIN`). Both are `IdSchema` strings and they must stay equal, or the
- * pin names a preset nobody can resolve.
+ * The id a new session's `Session.refs.promptPreset` pin records (M1-S1), and the id of
+ * `BUILTIN_PRESET` below. The two must stay equal, or the pin names a preset nobody can resolve:
+ * `session/roster.ts`'s `BUILTIN_PRESET_CHOICE` is the one place both are read, and it is what the
+ * create flow pins.
  */
 export const BUILTIN_PRESET_ID = 'builtin-default';
 

@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, resetDatabase } from '../db/database';
 import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
 import { getChain, writeProviderSettings } from '../db/repository';
+import type { SessionDraft } from '../session/roster';
 import { configureChat, errorSentence, resetChat, useChatStore } from './chat-store';
 import { useLocaleStore } from './locale-store';
 import { resetSettingsStore, useSettingsStore } from './settings-store';
@@ -29,6 +30,19 @@ const API_KEY = 'sk-locked-key-must-not-leak';
 const PASSPHRASE = 'a-good-passphrase';
 const BASE_URL = 'https://gateway.test/v1';
 const MODEL = 'test-model-1';
+
+/**
+ * The choices the create flow would have collected (M1-S1). This file's subject is the key's
+ * lifecycle, so the session only has to EXIST — but it is a real form value all the same, because
+ * `state/chat-store.ts`'s `create` derives the cast and the pins from it and refuses a draft the
+ * pure rule rejects.
+ */
+const TEST_DRAFT: SessionDraft = {
+  world: { id: 'test-world', version: 1 },
+  cards: [{ id: 'test-player', name: 'Player', version: 1 }],
+  playerId: 'test-player',
+  initialClock: 0,
+};
 
 let databases = 0;
 let databaseName = '';
@@ -93,7 +107,8 @@ describe('a turn against an encrypted key', () => {
     const wire = recordingWire();
     configureChat({ transport: wire.fetch });
 
-    const sessionId = await useChatStore.getState().create();
+    const sessionId = await useChatStore.getState().create(TEST_DRAFT);
+    if (sessionId === undefined) throw new Error('the session was not created');
     await useChatStore.getState().send('你好');
 
     const state = useChatStore.getState();
@@ -114,7 +129,8 @@ describe('a turn against an encrypted key', () => {
     const wire = recordingWire();
     configureChat({ transport: wire.fetch });
 
-    const sessionId = await useChatStore.getState().create();
+    const sessionId = await useChatStore.getState().create(TEST_DRAFT);
+    if (sessionId === undefined) throw new Error('the session was not created');
     await useChatStore.getState().send('你好');
 
     expect(wire.calls).toBe(1);

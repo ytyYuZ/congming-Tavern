@@ -22,7 +22,6 @@ import { closeDatabase, resetDatabase } from '../db/database';
 import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helpers';
 import {
   appendMessage,
-  createSession,
   getSession,
   listSessions,
   readChain,
@@ -31,6 +30,9 @@ import {
   writeProviderSettings,
   writeSessionState,
 } from '../db/repository';
+// A session as a container, with the pins the create flow would have collected (M1-S1): these
+// tests are about the turn, the prompt and the wire, not about session creation.
+import { createTestSession as createSession } from '../db/session.test-helpers';
 import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
 import { errorSentence } from '../state/chat-store';
 import { useLocaleStore } from '../state/locale-store';
@@ -296,7 +298,7 @@ describe('sendTurn', () => {
     );
     expect(messages.at(-1)?.role).toBe('user');
     expect(messages.at(-1)?.content).toBe('第一句');
-    expect(messages[0]?.content).toContain('世界：builtin-default');
+    expect(messages[0]?.content).toContain('世界：test-world');
     expect(wire.lastAuthorization()).toBe(`Bearer ${API_KEY}`);
     expect(JSON.stringify(wire.lastBody())).not.toContain(API_KEY);
   });
@@ -545,8 +547,9 @@ describe('the engines are wired in', () => {
    * `renderParts` is the engine's own data half, so on its own this would be circular
    * (it would only prove the app can call the engine twice). The literals beside it are
    * what make it a test: minute 0 of the built-in calendar is inside `晨` (0–6,
-   * `builtin-content.ts`), and the session's world pin is `builtin-default`. A reader
-   * can check both against the fixture.
+   * `builtin-content.ts`), and the session's world pin is `test-world`
+   * (`db/session.test-helpers.ts`, the pins a test session carries). A reader can check
+   * both against the fixture.
    */
   it('puts the world clock into the request the adapter sends (M1-T3)', async () => {
     const session = await createSession({ title: 'clock-session' });
@@ -563,7 +566,7 @@ describe('the engines are wired in', () => {
       .join('\n');
     expect(system).toContain(renderParts(clockOf(session)));
     expect(system).toContain('晨');
-    expect(system).toContain('builtin-default');
+    expect(system).toContain('test-world');
   });
 
   /**

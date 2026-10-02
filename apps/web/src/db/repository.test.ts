@@ -27,7 +27,6 @@ import {
   appendMessage,
   type CheckpointRow,
   createCheckpoint,
-  createSession,
   deleteCheckpoint,
   deleteLeafMessage,
   getChain,
@@ -46,6 +45,9 @@ import {
   writeProviderSettings,
   writeSessionState,
 } from '../db/repository';
+// A session as a container, with the pins the create flow would have collected (M1-S1): this
+// file's subject is the repository's rows and queries, not which world a session pins.
+import { createTestSession as createSession } from '../db/session.test-helpers';
 
 let databases = 0;
 let databaseName = '';

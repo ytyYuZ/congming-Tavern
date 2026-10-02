@@ -225,7 +225,6 @@ export const zhCN = {
 
   /* ── home: the session list ─────────────────────────────────────────────── */
   'home.newSession': '新建会话',
-  'home.creating': '创建中…',
   'home.empty': '还没有会话。先到「设置」填写 API 配置，然后新建一个会话。',
   'home.noMessages': '暂无消息',
   'home.hasMessages': '已有消息',
@@ -235,6 +234,50 @@ export const zhCN = {
    * follow a later language switch; M1's title editor / auto-naming replaces it.
    */
   'home.defaultSessionTitle': '新会话',
+
+  /* ── session: creating one (M1-S1, docs/01 §5.4 开局步骤 1–6) ─────────────── */
+  /*
+   * WHY THIS IS ITS OWN AREA AND NOT MORE `home.`: the list on `/` and the form on
+   * `/sessions/new` are two screens. The form's vocabulary — a version, a cast, an initial
+   * clock — is not the list's, and `home.creating` moved here with the button it labels:
+   * the list only links to the form, so the form is what can be in the middle of creating.
+   *
+   * WHY THE FIVE REFUSALS ARE WHOLE SENTENCES AND NOT `common.issue`'s `{field}：{detail}`:
+   * that shape is the card editors' schema-first report of a MALFORMED field, while these say
+   * which CHOICE is missing (a world, a card, a player) or that the chosen clock is not a
+   * minute. There is no schema path to name in either case.
+   */
+  'session.title': '新建会话',
+  'session.backToHome': '← 返回会话列表',
+  'session.hint':
+    '选择世界版本与参与的角色卡；指定其中一张为玩家角色，其余自动组成卡司。身份属于会话而不属于角色卡，所以同一张卡可以在不同会话里扮演不同身份。',
+  'session.worldLabel': '世界卡',
+  'session.worldPlaceholder': '请选择世界卡',
+  'session.worldEmpty': '还没有世界卡。先到「世界」新建一张，再回来创建会话。',
+  'session.worldVersionLabel': '世界版本',
+  'session.pinning': '本次会话固定 v{version}（该世界最新版本为 v{latest}）。',
+  'session.cardsLabel': '参与的角色卡',
+  'session.cardsEmpty': '还没有角色卡。先到「角色」新建一张，再回来创建会话。',
+  'session.playerLabel': '玩家角色',
+  'session.playerHint': '你操控的那一张。其余勾选的卡自动成为卡司，由 AI 扮演。',
+  /** The radio's accessible name: the visible label repeats on every row, so it names WHICH card. */
+  'session.playerOf': '将「{name}」指定为玩家角色',
+  'session.castLabel': '卡司（自动生成）',
+  'session.castEmpty': '卡司为空：本次只有你扮演的角色登场。',
+  'session.presetLabel': 'Prompt 预设',
+  'session.presetHint': '目前只有内置预设：还不能新建或导入预设，所以这里没有可选项。',
+  'session.rulePackLabel': '规则包',
+  'session.rulePackNone': '尚未提供规则包，本次会话不绑定规则包。',
+  'session.clockLabel': '初始时钟（自历法纪元起的分钟数）',
+  'session.clockHint': '默认取所选世界版本的起始时刻（{minute} 分钟）；留空即使用默认值。',
+  'session.create': '创建会话',
+  'session.creating': '创建中…',
+  'session.createFailed': '创建失败，没有写入会话',
+  'session.worldRequired': '请选择一个世界卡及其版本',
+  'session.cardsRequired': '请至少勾选一张角色卡',
+  'session.playerRequired': '请指定一张角色卡作为玩家角色',
+  'session.playerNotChosen': '指定的玩家角色不在已勾选的角色卡中',
+  'session.clockInvalid': '初始时钟必须是整数分钟',
 
   /* ── world: the world-card library and editor (M1-W1) ───────────────────── */
   'world.libraryTitle': '世界卡库',
@@ -783,12 +826,49 @@ export const en: Messages = {
 
   /* ── home ───────────────────────────────────────────────────────────────── */
   'home.newSession': 'New session',
-  'home.creating': 'Creating…',
   'home.empty':
     'No sessions yet. Fill in the API configuration under Settings, then create a session.',
   'home.noMessages': 'No messages',
   'home.hasMessages': 'Has messages',
   'home.defaultSessionTitle': 'New session',
+
+  /* ── creating a session (M1-S1) ─────────────────────────────────────────── */
+  'session.title': 'New session',
+  'session.backToHome': '← Back to sessions',
+  'session.hint':
+    'Pick a world version and the cards taking part; designate one as the player character and the rest become the cast automatically. Identity belongs to the session, not to the card, so one card can play different roles in different sessions.',
+  'session.worldLabel': 'World card',
+  'session.worldPlaceholder': 'Choose a world card',
+  'session.worldEmpty':
+    'No world cards yet. Create one under Worlds, then come back to start a session.',
+  'session.worldVersionLabel': 'World version',
+  'session.pinning':
+    'This session pins v{version} (the newest version of that world is v{latest}).',
+  'session.cardsLabel': 'Cards taking part',
+  'session.cardsEmpty':
+    'No character cards yet. Create one under Characters, then come back to start a session.',
+  'session.playerLabel': 'Player character',
+  'session.playerHint':
+    'The card you play. Every other ticked card becomes cast, played by the AI.',
+  'session.playerOf': 'Designate {name} as the player character',
+  'session.castLabel': 'Cast (generated)',
+  'session.castEmpty': 'The cast is empty: only the card you play is on stage.',
+  'session.presetLabel': 'Prompt preset',
+  'session.presetHint':
+    'Only the built-in preset exists so far: presets cannot be created or imported yet, so there is nothing to choose here.',
+  'session.rulePackLabel': 'Rule pack',
+  'session.rulePackNone': 'No rule pack is available yet, so this session binds none.',
+  'session.clockLabel': 'Initial clock (minutes since the calendar epoch)',
+  'session.clockHint':
+    "Defaults to the chosen world version's start minute ({minute}); leaving the field blank uses that default.",
+  'session.create': 'Create session',
+  'session.creating': 'Creating…',
+  'session.createFailed': 'The session was not created; nothing was written',
+  'session.worldRequired': 'Choose a world card and one of its versions',
+  'session.cardsRequired': 'Tick at least one character card',
+  'session.playerRequired': 'Designate one of the cards as the player character',
+  'session.playerNotChosen': 'The designated player character is not among the ticked cards',
+  'session.clockInvalid': 'The initial clock must be a whole number of minutes',
 
   /* ── the world-card library and editor (M1-W1) ──────────────────────────── */
   'world.libraryTitle': 'World cards',

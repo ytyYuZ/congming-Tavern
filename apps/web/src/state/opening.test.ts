@@ -29,7 +29,6 @@ import { deleteDatabase, snapshotAllRows } from '../db/raw-indexeddb.test-helper
 import {
   appendMessage,
   createCheckpoint,
-  createSession,
   getChain,
   getSession,
   listChildren,
@@ -37,6 +36,9 @@ import {
   setHeadMessageId,
   writeProviderSettings,
 } from '../db/repository';
+// A session as a container, with the pins the create flow would have collected (M1-S1): this
+// file's subject is the opening, not which world the session pins.
+import { createTestSession as createSession } from '../db/session.test-helpers';
 import { configureChat, resetChat, useChatStore } from './chat-store';
 import { useLocaleStore } from './locale-store';
 import { resetSettingsStore, useSettingsStore } from './settings-store';
@@ -335,7 +337,9 @@ describe('M1-S3 AI 生成: one request through the real turn path', () => {
       .map((message) => message.content)
       .join('\n');
     expect(system).toContain('你是一个交互式小说与 TRPG 的主持人（GM）。');
-    expect(system).toContain('builtin-default');
+    // The world pin the test fixture recorded (`db/session.test-helpers.ts`) is what the preset's
+    // `{worldId}` slot is filled with, so this proves the slot fill ran too.
+    expect(system).toContain('test-world');
 
     // NO USER ROW WAS WRITTEN, and the proof is the WHOLE database rather than the chain: the
     // instruction must not exist as a row anywhere — not as a message, not in a `meta` field.

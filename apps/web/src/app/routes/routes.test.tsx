@@ -35,7 +35,6 @@ import { snapshotAllRows } from '../../db/raw-indexeddb.test-helpers';
 import {
   appendMessage,
   createCheckpoint,
-  createSession,
   deleteLeafMessage,
   getChain,
   getMessage,
@@ -47,6 +46,9 @@ import {
   writeLocaleSetting,
   writeProviderSettings,
 } from '../../db/repository';
+// A session as a container, with the pins the create flow would have collected (M1-S1): this
+// file's subject is what the routes render, not which world a session pins.
+import { createTestSession as createSession } from '../../db/session.test-helpers';
 import { translate } from '../../i18n/translate';
 // The stores and the database accessors are taken from `mount`, NOT from `state/*` or
 // `db/*` directly: Vitest instantiates a module once per environment, and an instance

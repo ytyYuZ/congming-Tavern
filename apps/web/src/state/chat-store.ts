@@ -117,6 +117,7 @@ import {
 } from '../db/repository';
 import { KEY_LOCKED_CODE, messageKeyForCode, NOT_CONFIGURED_CODE } from '../i18n/error-keys';
 import { translate } from '../i18n/translate';
+import { type SessionDraft, sessionPinsOf } from '../session/roster';
 import { isProviderReady, useSettingsStore } from './settings-store';
 import { writeErrorName } from './write-error';
 
@@ -186,7 +187,19 @@ export interface ChatState {
   opening: boolean;
 
   load: () => Promise<void>;
-  create: () => Promise<Id>;
+  /**
+   * Create a session from the create flow's choices and open it (M1-S1).
+   *
+   * `draft` is `session/roster.ts`'s form value — the world version, the ticked cards, which
+   * card is the player's, and the initial clock. The CAST is derived from it by the pure rule,
+   * so no caller can hand this a second roster.
+   *
+   * Resolves the new session's id, or `undefined` when NOTHING was written: a draft the pure
+   * rule refuses, or a storage failure (which also lands in `error`). The refusal is silent
+   * because the screen has already rendered the sentence — `sessionIssues` is the same
+   * function (`app/routes/new-session.tsx`), so the user is never left guessing.
+   */
+  create: (draft: SessionDraft) => Promise<Id | undefined>;
   open: (sessionId: Id) => Promise<void>;
   close: () => void;
   send: (text: string) => Promise<void>;
@@ -359,14 +372,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ sessions: await readSessions() });
   },
 
-  async create(): Promise<Id> {
-    // The default title is PERSISTED DATA written in the ACTIVE language: `createSession`
-    // deliberately does not know about locales (`db/repository.ts` records why), so the
-    // sentence is chosen here, where the locale store is reachable.
-    const session = await createSession({ title: translate('home.defaultSessionTitle') });
-    await get().load();
-    await get().open(session.id);
-    return session.id;
+  async create(draft: SessionDraft): Promise<Id | undefined> {
+    // THE GATE IS THE PURE RULE, and it runs BEFORE anything is written: `sessionPinsOf`
+    // answers `undefined` for exactly the drafts `sessionIssues` refuses, so a half-made choice
+    // cannot reach the database and this action has no second opinion to offer.
+    const refs = sessionPinsOf(draft);
+    if (refs === undefined) return undefined;
+    try {
+      // The default title is PERSISTED DATA written in the ACTIVE language: `createSession`
+      // deliberately does not know about locales (`db/repository.ts` records why), so the
+      // sentence is chosen here, where the locale store is reachable.
+      const session = await createSession({
+        title: translate('home.defaultSessionTitle'),
+        refs,
+        initialClock: draft.initialClock,
+      });
+      // The ROW is written first and the in-memory state adopts what it returned: the next
+      // gesture (the play screen the caller navigates to) re-reads the row, so a list refreshed
+      // from anything but the row would be a second source of truth (`state/content-store.ts`'s
+      // publish follows the same order).
+      await get().load();
+      await get().open(session.id);
+      return session.id;
+    } catch (cause) {
+      // The failure's NAME, not a provider sentence (`write-error.ts`'s rule), carried in the
+      // shape the banner already renders — the same one `open`'s live-query failure uses.
+      set({
+        error: {
+          code: 'unknown',
+          message: writeErrorName(cause, 'unknown session write failure'),
+          retryable: false,
+          turnText: '',
+        },
+      });
+      return undefined;
+    }
   },
 
   async open(sessionId: Id): Promise<void> {

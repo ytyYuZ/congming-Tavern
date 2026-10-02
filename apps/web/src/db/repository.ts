@@ -65,6 +65,7 @@ import {
   type Checkpoint,
   CheckpointSchema,
   defaultSessionState,
+  type EntityPin,
   type Extensions,
   type Id,
   type JsonValue,
@@ -399,23 +400,41 @@ function secretToJson(secret: Exclude<StoredProviderSecret, { kind: 'none' }>): 
 /* ──────────────────────────────── sessions ───────────────────────────────── */
 
 /**
- * The built-in placeholder pins (docs/06 §8.5 决定 1).
+ * The provider id recorded before the user has configured anything, and the sampling
+ * defaults that satisfy the frozen `SamplingParamsSchema`.
  *
- * `PromptPreset`, world content and character selection are all M1, but
- * `Session.refs.world` / `playerCharacter` / `promptPreset` are REQUIRED and are
- * `{id, version}` pins that are NOT foreign-key validated. So M0 writes a
- * well-formed placeholder pin and the default prompt assembly (`chat/prompt.ts`)
- * is what actually runs — exactly the consequence §8.5 decision 1 records.
- * Nothing migrates later: the refs are already the right shape and simply point at
- * content M1 will create.
+ * WHY THESE SURVIVE AS DEFAULTS WHILE THE WORLD/CHARACTER PINS DID NOT (M1-S1): a
+ * session created before BYO-Key is configured still has to be PLAYABLE — the first
+ * turn records the endpoint the transcript actually came from
+ * (`recordSessionModel`), and refusing to create a session until a key exists would
+ * make 「新建会话」 the thing that blocks the setup wizard. There is no such argument
+ * for a world, a card or a preset: those ARE the choice a session is, so they are
+ * arguments (`NewSessionRefs` below), not defaults this module may invent.
  */
-const PLACEHOLDER_PIN = { id: 'builtin-default', version: 1 } as const;
-
-/** The provider id recorded before the user has configured anything. */
 const PLACEHOLDER_PROVIDER = 'openai-compatible';
 
 /** Sampling defaults that satisfy the frozen `SamplingParamsSchema`. */
 const DEFAULT_SAMPLING = { temperature: 0.7, topP: 1 } as const;
+
+/**
+ * The pinned references a new session carries — `SessionRefs` without `modelConfig`.
+ *
+ * WHY `modelConfig` IS NOT A PARAMETER: see the provider default above. It is the one
+ * part of `refs` a session legitimately starts without knowing, and the one part the
+ * user configures on another screen entirely.
+ *
+ * WHY `cast` IS `readonly` AND COPIED: the caller's array is the form's selection; the
+ * stored row must not alias it, or a later edit of that list would rewrite a session
+ * that had already been created (the same aliasing rule `copyState` exists for).
+ */
+export interface NewSessionRefs {
+  readonly world: EntityPin;
+  readonly playerCharacter: EntityPin;
+  readonly cast: readonly EntityPin[];
+  readonly promptPreset: EntityPin;
+  /** Absent means "this session binds no rule pack", which is what the optional field means. */
+  readonly rulePack?: EntityPin;
+}
 
 /**
  * Create a session and persist it.
@@ -431,49 +450,58 @@ const DEFAULT_SAMPLING = { temperature: 0.7, topP: 1 } as const;
  * chat store, which may import the i18n layer) passes the sentence it wants stored, and
  * this module stays a database module.
  *
- * The clock, the scheduler mode and the model config are all required by the
- * frozen `SessionSchema`, so a session created before BYO-Key is configured still
- * has to carry values. They are placeholders in the literal sense — the first turn
- * overwrites `refs.modelConfig` with what the user actually configured
- * (`recordSessionModel`) — and the alternative (refusing to create a session until
- * a key exists) would make 「新建会话」 the thing that blocks the wizard.
+ * WHY THE PINS AND THE CLOCK ARE ARGUMENTS (M1-S1)
+ * A session IS a choice of what to play: `world` / `playerCharacter` / `cast` /
+ * `promptPreset` are VERSIONED pins (`EntityPinSchema`, ADR-010 — an unpinned world would
+ * make an old save re-render differently after an edit), and `initialClock` is the chosen
+ * world version's own `startMinute` (ADR-012), which the session copies so it owns its
+ * origin. This module can choose none of them: it knows no rows, no catalog and no form.
+ * The placeholder pin the M0 path wrote is therefore GONE — a session that named a world
+ * nobody created was a stand-in for the create flow, and that flow now exists
+ * (`session/roster.ts` + `app/routes/new-session.tsx`).
  *
- * THE LIVE STATE STARTS AS THE ORIGIN (ADR-032): `state` is required too, and a
- * brand-new session has nothing recorded, so it is `defaultSessionState(initialClock)`
- * — the scene unnamed, the clock at the world's start minute. That is a real value
- * from the first turn on, which is what lets a restart find the clock again.
+ * THE LIVE STATE STARTS AS THE ORIGIN (ADR-032): `state` is required, and a brand-new
+ * session has nothing recorded, so it is `defaultSessionState(initialClock)` — the scene
+ * unnamed, the clock at the world's start minute. That is a real value from the first turn
+ * on, which is what lets a restart find the clock again.
+ *
+ * The row is parsed before it is written, like `appendMessage`: the persisted shape is then
+ * the schema's shape (ADR-016) instead of "whatever the caller passed", which is what makes
+ * an unpinned or zero-versioned reference a loud failure rather than a row no reader can use.
  */
-export async function createSession(options: { title: string }): Promise<Session> {
+export async function createSession(options: {
+  title: string;
+  refs: NewSessionRefs;
+  initialClock: number;
+}): Promise<Session> {
   const timestamp = Date.now();
   const session: Session = {
     id: mintUuidV7(),
     title: options.title,
     refs: {
-      world: { ...PLACEHOLDER_PIN },
-      playerCharacter: { ...PLACEHOLDER_PIN },
-      cast: [],
-      promptPreset: { ...PLACEHOLDER_PIN },
+      world: { ...options.refs.world },
+      playerCharacter: { ...options.refs.playerCharacter },
+      cast: options.refs.cast.map((pin) => ({ ...pin })),
+      promptPreset: { ...options.refs.promptPreset },
+      ...(options.refs.rulePack === undefined ? {} : { rulePack: { ...options.refs.rulePack } }),
       modelConfig: {
         provider: PLACEHOLDER_PROVIDER,
         model: PLACEHOLDER_PROVIDER,
         params: { ...DEFAULT_SAMPLING },
       },
     },
-    // 0 is the calendar epoch, and a session created here starts at it: the LIVE
-    // clock is `session.state.clock` (ADR-032), which begins at this same minute and
-    // is what `clockOf` reads from now on. `initialClock` stays the origin the
-    // default state is derived from, so it is not deleted.
-    initialClock: 0,
-    state: defaultSessionState(0),
+    initialClock: options.initialClock,
+    state: defaultSessionState(options.initialClock),
     schedulerMode: 'user',
     headMessageId: null,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+  const parsed = SessionSchema.parse(session);
   await write(async (tx) => {
-    await sessionsOf(tx).put(session);
+    await sessionsOf(tx).put(parsed);
   });
-  return session;
+  return parsed;
 }
 
 /**
@@ -1145,14 +1173,29 @@ export async function getWorldVersion(
  * (`packages/storage`'s adapter says so; `listChildren` above reaches the same conclusion). A
  * query that named only `worldId` would fall back to a table scan anyway, so the scan is written
  * where a reader can see it — and version rows are counted in tens, not millions.
+ *
+ * It is `listWorldVersions`'s first answer rather than a second scan of its own, so the two
+ * reads cannot disagree about what "newest" means.
  */
 export async function latestWorldVersion(worldId: Id): Promise<WorldVersion | undefined> {
+  return (await listWorldVersions(worldId))[0];
+}
+
+/**
+ * Every version of a world, NEWEST FIRST — what the create-session flow chooses among (M1-S1).
+ *
+ * WHY A LIST AND NOT ONLY `latestWorldVersion`: docs/06 §2.5's first step is 「选世界版本」, and a
+ * flow that silently pinned the latest whatever the user picked would not be that step. The
+ * ordering is by `version` (the monotonic counter, `cards/versions.ts`), not by `createdAt`: two
+ * versions published in the same millisecond still have one order, and it is the one the
+ * `(worldId, version)` index is built on.
+ */
+export async function listWorldVersions(worldId: Id): Promise<WorldVersion[]> {
   const rows = await readTable<WorldVersion>(COLLECTIONS.worldVersions).toArray();
-  const mine = rows
+  return rows
     .filter((row) => row.worldId === worldId)
     .map((row) => WorldVersionSchema.parse(row))
     .sort((left, right) => right.version - left.version);
-  return mine[0];
 }
 
 /** The `settings` key a world's draft row lives under (see `cards/draft.ts`). */

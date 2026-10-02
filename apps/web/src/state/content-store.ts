@@ -33,6 +33,13 @@
  * This is the GATE the user sees: a payload with issues is refused before anything is written, and
  * the editor's panel already lists them. The repository parses again inside its transaction, so a
  * programmatic caller (a test, a future import path) cannot write a version the schema refuses.
+ *
+ * WHY THE CREATE-SESSION SCREEN READS ITS LIBRARIES HERE TOO (M1-S1)
+ * `app/routes/new-session.tsx` picks a world VERSION and a set of cards — i.e. it reads the same
+ * two libraries the editors do. A second store holding its own copies of `worlds` / `characters`
+ * would be a second answer to "which cards exist", so this store owns the third read that screen
+ * needs (`worldVersions`) as well, and the session's own state stays where it belongs
+ * (`state/chat-store.ts` owns the session row).
  */
 import type {
   Character,
@@ -64,6 +71,7 @@ import {
   latestWorldVersion,
   listCharacters,
   listWorlds,
+  listWorldVersions,
   publishCharacter as publishCharacterRow,
   publishWorld as publishWorldRow,
   readCharacterDraft,
@@ -77,11 +85,26 @@ import { writeErrorName } from './write-error';
 /** Which `open*` is current, so a read that resolves after its view is gone cannot install state. */
 let openToken = 0;
 
+/**
+ * Which `loadWorldVersions` is current. Its own token because it is not an `open*`: the
+ * create-session screen may switch worlds twice while the first read is in flight, and the
+ * versions of the world the user has already left must not be offered against the new one.
+ */
+let versionsToken = 0;
+
 export interface ContentState {
   /** Every world card, by name. The library screen's list. */
   worlds: World[];
   /** Every character card, by name. */
   characters: Character[];
+  /**
+   * Every version of the world the create-session screen has chosen, NEWEST FIRST (M1-S1).
+   *
+   * Distinct from `worldVersion` below on purpose: that one is the editor's BASE (the payload a
+   * draft is completed against), while this is the SET a new session may pin — a world with
+   * three versions has one base and three choices.
+   */
+  worldVersions: WorldVersion[];
 
   /** The open world's head row, or `undefined` while nothing is open (or still loading). */
   world: World | undefined;
@@ -102,6 +125,15 @@ export interface ContentState {
 
   loadWorlds: () => Promise<void>;
   loadCharacters: () => Promise<void>;
+  /**
+   * Read every version of one world, newest first — the versions a new session may pin (M1-S1).
+   *
+   * Resolves when the read settles, whether or not it installed anything: a read superseded by a
+   * later `loadWorldVersions` (the user switched worlds) is DROPPED rather than applied, which is
+   * what `versionsToken` is for. A failed read empties the list and records the error name, so
+   * the screen can say "no version is known" instead of offering a stale one.
+   */
+  loadWorldVersions: (worldId: Id) => Promise<void>;
   /** Create a world (head + version 1) and resolve its id, or `undefined` on a refusal. */
   createWorld: (name: string) => Promise<Id | undefined>;
   createCharacter: (name: string) => Promise<Id | undefined>;
@@ -139,6 +171,7 @@ function closedCard(): Pick<
   | 'characterVersion'
   | 'characterDraft'
   | 'characterDirty'
+  | 'worldVersions'
   | 'error'
 > {
   return {
@@ -150,6 +183,7 @@ function closedCard(): Pick<
     characterVersion: undefined,
     characterDraft: undefined,
     characterDirty: false,
+    worldVersions: [],
     error: undefined,
   };
 }
@@ -172,6 +206,21 @@ export const useContentStore = create<ContentState>((set, get) => ({
       set({ characters: await listCharacters() });
     } catch (cause) {
       set({ error: writeErrorName(cause, 'unknown card read failure') });
+    }
+  },
+
+  async loadWorldVersions(worldId: Id): Promise<void> {
+    versionsToken += 1;
+    const token = versionsToken;
+    try {
+      const versions = await listWorldVersions(worldId);
+      // The user may have switched worlds while this read was in flight: the answer for the world
+      // they left is dropped rather than installed (see `versionsToken`).
+      if (token !== versionsToken) return;
+      set({ worldVersions: versions, error: undefined });
+    } catch (cause) {
+      if (token !== versionsToken) return;
+      set({ worldVersions: [], error: writeErrorName(cause, 'unknown card read failure') });
     }
   },
 
@@ -268,6 +317,10 @@ export const useContentStore = create<ContentState>((set, get) => ({
   close(): void {
     // Bumping the token invalidates any in-flight `open*`, so it cannot install state afterwards.
     openToken += 1;
+    // ...and the version list goes with it: it belongs to a world the create-session screen had
+    // chosen, and a screen that has closed must not leave it for the next one to mistake for its
+    // own (`loadWorldVersions` explains the token).
+    versionsToken += 1;
     set({ ...closedCard() });
   },
 
@@ -420,5 +473,6 @@ export const useContentStore = create<ContentState>((set, get) => ({
  */
 export function resetContentStore(): void {
   openToken += 1;
+  versionsToken += 1;
   useContentStore.setState({ worlds: [], characters: [], ...closedCard() });
 }

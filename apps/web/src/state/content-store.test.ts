@@ -413,3 +413,33 @@ describe('the character editor’s storage round trip', () => {
     expect(await getCharacterVersion(characterId, 2)).toBeUndefined();
   });
 });
+
+/* ──────────────── the versions the create-session screen pins ───────────── */
+
+describe('the world versions a session may pin (M1-S1)', () => {
+  it('reads them newest first, for ONE world at a time', async () => {
+    const worldId = await store().createWorld('霜月群岛');
+    if (worldId === undefined) throw new Error('the world was not created');
+    // A second version, published exactly the way the editor publishes one.
+    await store().openWorld(worldId);
+    const draft = store().worldDraft;
+    if (draft === undefined) throw new Error('the world did not open');
+    await store().editWorld({ ...draft.data, startMinute: 120 }, {});
+    await expect(store().publishWorld()).resolves.toBe(true);
+
+    const other = await store().createWorld('银松群岛');
+    if (other === undefined) throw new Error('the second world was not created');
+
+    await store().loadWorldVersions(worldId);
+    // Newest first, which is what the screen preselects — and each row carries the payload whose
+    // `startMinute` becomes the initial clock, so the order and the clock cannot disagree.
+    expect(store().worldVersions.map((row) => row.version)).toEqual([2, 1]);
+    expect(store().worldVersions.map((row) => row.data.startMinute)).toEqual([120, 0]);
+
+    // Only the world that was asked for: the screen filters on `worldId`, and a list that kept the
+    // other world's rows would offer a version that does not belong to the chosen world.
+    await store().loadWorldVersions(other);
+    expect(store().worldVersions.map((row) => row.worldId)).toEqual([other]);
+    expect(store().worldVersions.map((row) => row.version)).toEqual([1]);
+  });
+});

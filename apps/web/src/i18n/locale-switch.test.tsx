@@ -35,7 +35,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { App, createAppRouter } from '../app/app';
-import { createSession, writeLocaleSetting } from '../db/repository';
+import { writeLocaleSetting } from '../db/repository';
+// A session as a container, with the pins the create flow would have collected (M1-S1): this
+// file's subject is the language switch, not which world a session pins.
+import { createTestSession as createSession } from '../db/session.test-helpers';
 // The stores and the database accessors are taken from `mount`, NOT from `state/*` or
 // `db/*` directly — see the file header.
 import {

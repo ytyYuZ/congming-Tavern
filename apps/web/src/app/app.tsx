@@ -52,6 +52,7 @@ import { useLocaleStore } from '../state/locale-store';
 import { CharacterRoute } from './routes/character';
 import { CharactersRoute } from './routes/characters';
 import { HomeRoute } from './routes/home';
+import { NewSessionRoute } from './routes/new-session';
 import { PlayRoute } from './routes/play';
 import { SetupRoute } from './routes/setup';
 import { WorldRoute } from './routes/world';
@@ -76,6 +77,21 @@ const playRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/play/$sessionId',
   component: PlayPage,
+});
+
+/**
+ * Creating a session (M1-S1).
+ *
+ * WHY THIS IS A ROUTE OF ITS OWN AND NOT A MODE OF `/`: the create flow is a form over the two
+ * card libraries — a world VERSION, a set of cards, a designation, a clock — so it has its own
+ * address, and a reload, a bookmark and the back button all behave (`worlds.tsx`'s two editors
+ * are split the same way). It also moves the WRITE out of the home view: 「新建会话」 there is a
+ * LINK, and the row is written only when this screen's form is submitted.
+ */
+const newSessionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/sessions/new',
+  component: NewSessionPage,
 });
 
 /**
@@ -193,6 +209,17 @@ function PlayPage() {
   );
 }
 
+function NewSessionPage() {
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <NewSessionRoute />
+      </main>
+    </>
+  );
+}
+
 function WorldsPage() {
   return (
     <>
@@ -242,6 +269,7 @@ function CharacterPage() {
 export const routeTree = rootRoute.addChildren([
   homeRoute,
   setupRoute,
+  newSessionRoute,
   playRoute,
   worldsRoute,
   worldRoute,
