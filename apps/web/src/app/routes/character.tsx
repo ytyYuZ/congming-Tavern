@@ -58,6 +58,15 @@ import { CoCreatePanel } from '../../co-create/panel';
 import { useTranslation } from '../../i18n/use-translation';
 import { useContentStore } from '../../state/content-store';
 import {
+  CollapsibleSection,
+  isSectionOpen,
+  jumpToSection,
+  type SectionDefinition,
+  SectionToc,
+  useSectionOpen,
+  withSectionToggled,
+} from '../collapsible-section';
+import {
   CustomFieldsPanel,
   LineListField,
   labelEntries,
@@ -66,6 +75,32 @@ import {
   RowList,
   TextFields,
 } from '../fields';
+
+/**
+ * The character form, in the order it renders (acceptance fix B1).
+ *
+ * The same list-not-markup arrangement as the world editor (`routes/world.tsx` records the rule): the
+ * table of contents renders this array and each section looks its own definition up by id, so the two
+ * can never disagree about which sections exist or what they are called. The order runs from what
+ * identifies the card, through how it speaks and what it looks like, to the sampling parameters that
+ * only matter once it is in a session.
+ *
+ * `openByDefault` is true exactly once — see `app/collapsible-section.tsx` for why the fold starts
+ * uniform and is not remembered.
+ */
+const CHARACTER_SECTIONS: readonly SectionDefinition[] = [
+  { id: 'st', title: 'character.sectionSt', openByDefault: true },
+  { id: 'voice', title: 'character.sectionVoice', openByDefault: false },
+  { id: 'visual', title: 'character.sectionVisual', openByDefault: false },
+  { id: 'sampling', title: 'character.sectionSampling', openByDefault: false },
+];
+
+/** One section's definition, by id — see `routes/world.tsx`'s twin for why a typo throws here. */
+function characterSection(id: string): SectionDefinition {
+  const section = CHARACTER_SECTIONS.find((candidate) => candidate.id === id);
+  if (section === undefined) throw new Error(`no character section named ${id}`);
+  return section;
+}
 
 /** The label of every field a validation issue can name (see `world.tsx` for the rule). */
 const CHARACTER_ISSUE_LABELS: ReadonlyMap<string, MessageKey> = new Map<string, MessageKey>([
@@ -113,6 +148,18 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
    * the panel is about (`kind="character"`) and resets on a CARD change, not on a toggle.
    */
   const [coCreateOpen, setCoCreateOpen] = useState(false);
+  /*
+   * Which sections are open (acceptance fix B1). The map is this screen's rather than the store's
+   * because it is a layout choice, and it is keyed on the card id so that opening another character
+   * starts from the uniform layout instead of inheriting this one's folds.
+   */
+  const [sectionsOpen, setSectionsOpen] = useSectionOpen(CHARACTER_SECTIONS, characterId);
+  const onToggleSection = (id: string): void => {
+    setSectionsOpen((current) => withSectionToggled(current, id));
+  };
+  const onJumpToSection = (id: string): void => {
+    jumpToSection(id, setSectionsOpen);
+  };
 
   useEffect(() => {
     void open(characterId);
@@ -212,8 +259,13 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
 
       <IssuePanel issues={issues} />
 
-      <section className="field-group">
-        <h3 className="section-title">{t('character.sectionSt')}</h3>
+      <SectionToc sections={CHARACTER_SECTIONS} onJump={onJumpToSection} />
+
+      <CollapsibleSection
+        section={characterSection('st')}
+        open={isSectionOpen(sectionsOpen, 'st')}
+        onToggle={onToggleSection}
+      >
         <p className="muted">{t('character.identityHint')}</p>
         <p className="muted">{t('character.stHint')}</p>
         <TextFields
@@ -234,10 +286,13 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
           value={data}
           onChange={write}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('character.sectionVoice')}</h3>
+      <CollapsibleSection
+        section={characterSection('voice')}
+        open={isSectionOpen(sectionsOpen, 'voice')}
+        onToggle={onToggleSection}
+      >
         <NumberFields
           scope="voice"
           fields={VOICE_NUMBER_FIELDS}
@@ -250,10 +305,13 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
           value={data.voice}
           onChange={(voice) => write({ ...data, voice })}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('character.sectionVisual')}</h3>
+      <CollapsibleSection
+        section={characterSection('visual')}
+        open={isSectionOpen(sectionsOpen, 'visual')}
+        onToggle={onToggleSection}
+      >
         <TextFields
           scope="appearance"
           fields={APPEARANCE_FIELDS}
@@ -383,10 +441,13 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
           )}
         />
         <p className="muted">{t('character.assetsHint')}</p>
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('character.sectionSampling')}</h3>
+      <CollapsibleSection
+        section={characterSection('sampling')}
+        open={isSectionOpen(sectionsOpen, 'sampling')}
+        onToggle={onToggleSection}
+      >
         <p className="muted">{t('character.samplingHint')}</p>
         <NumberFields
           scope="sampling"
@@ -429,7 +490,7 @@ export function CharacterRoute({ characterId }: { characterId: string }) {
             ))}
           </select>
         </div>
-      </section>
+      </CollapsibleSection>
 
       {/*
         AI 共创 (M1-C2) + 发言档案自动评估 (M1-C3). It sits at the END of the form rather than in a screen

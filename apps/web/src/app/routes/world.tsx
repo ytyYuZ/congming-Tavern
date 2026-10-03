@@ -59,6 +59,15 @@ import { CoCreatePanel } from '../../co-create/panel';
 import { useTranslation } from '../../i18n/use-translation';
 import { useContentStore } from '../../state/content-store';
 import {
+  CollapsibleSection,
+  isSectionOpen,
+  jumpToSection,
+  type SectionDefinition,
+  SectionToc,
+  useSectionOpen,
+  withSectionToggled,
+} from '../collapsible-section';
+import {
   BooleanFields,
   CustomFieldsPanel,
   LineListField,
@@ -67,6 +76,42 @@ import {
   RowList,
   TextFields,
 } from '../fields';
+
+/**
+ * The world form, in the order it renders (acceptance fix B1).
+ *
+ * WHY THE LIST IS DATA AND NOT EIGHT COPIES OF THE SAME MARKUP
+ * The table of contents and the sections have to agree about which sections exist, what they are
+ * called and in what order, and a second list would eventually disagree with the first. Here the
+ * TOC renders THIS array and each section looks its own definition up by id, so a section that is
+ * listed is by construction one that is rendered. The order is the form's own reading order: the
+ * card's identity first, then the things it contains, then how time moves in it, then how play
+ * begins.
+ *
+ * `openByDefault` is true exactly once — see `app/collapsible-section.tsx` for why the fold starts
+ * uniform and is not remembered.
+ */
+const WORLD_SECTIONS: readonly SectionDefinition[] = [
+  { id: 'basic', title: 'world.sectionBasic', openByDefault: true },
+  { id: 'regions', title: 'world.sectionRegions', openByDefault: false },
+  { id: 'factions', title: 'world.sectionFactions', openByDefault: false },
+  { id: 'rules', title: 'world.sectionRules', openByDefault: false },
+  { id: 'narrative', title: 'world.sectionNarrative', openByDefault: false },
+  { id: 'calendar', title: 'world.sectionCalendar', openByDefault: false },
+  { id: 'rhythm', title: 'world.sectionRhythm', openByDefault: false },
+  { id: 'opening', title: 'world.sectionOpening', openByDefault: false },
+];
+
+/**
+ * One section's definition, by id, from the single list above — so a section's place in the table of
+ * contents and its own body can never describe two different things. A typo throws here rather than
+ * rendering a section with no name.
+ */
+function worldSection(id: string): SectionDefinition {
+  const section = WORLD_SECTIONS.find((candidate) => candidate.id === id);
+  if (section === undefined) throw new Error(`no world section named ${id}`);
+  return section;
+}
 
 /**
  * The label of every field a validation issue can name, from the descriptor tables the form
@@ -121,6 +166,20 @@ export function WorldRoute({ worldId }: { worldId: string }) {
    * reopening the panel does not throw the discussion away.
    */
   const [coCreateOpen, setCoCreateOpen] = useState(false);
+  /*
+   * Which sections are open (acceptance fix B1). The map lives here rather than in the store because
+   * it is a layout choice about THIS screen, and it is keyed on the world id so that opening another
+   * card starts from the uniform layout instead of inheriting this one's folds.
+   */
+  const [sectionsOpen, setSectionsOpen] = useSectionOpen(WORLD_SECTIONS, worldId);
+  const onToggleSection = (id: string): void => {
+    // Through `withSectionToggled` rather than `!isSectionOpen(...)` spelled out again: the rule for
+    // "an unknown id is folded" belongs to the primitive, and a second copy of it here would drift.
+    setSectionsOpen((current) => withSectionToggled(current, id));
+  };
+  const onJumpToSection = (id: string): void => {
+    jumpToSection(id, setSectionsOpen);
+  };
 
   // The route owns the open card's lifetime: opening another world (or unmounting) must not leave
   // the previous one's draft on screen (`state/content-store.ts`'s token does the same job there).
@@ -223,14 +282,22 @@ export function WorldRoute({ worldId }: { worldId: string }) {
 
       <IssuePanel issues={issues} />
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionBasic')}</h3>
+      <SectionToc sections={WORLD_SECTIONS} onJump={onJumpToSection} />
+
+      <CollapsibleSection
+        section={worldSection('basic')}
+        open={isSectionOpen(sectionsOpen, 'basic')}
+        onToggle={onToggleSection}
+      >
         <TextFields scope="world" fields={WORLD_TEXT_FIELDS} value={data} onChange={write} />
         <LineListField scope="world" field={WORLD_GENRE_FIELD} value={data} onChange={write} />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionRegions')}</h3>
+      <CollapsibleSection
+        section={worldSection('regions')}
+        open={isSectionOpen(sectionsOpen, 'regions')}
+        onToggle={onToggleSection}
+      >
         <RowList
           scope="world-regions"
           label="world.regionsLabel"
@@ -254,10 +321,13 @@ export function WorldRoute({ worldId }: { worldId: string }) {
             </>
           )}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionFactions')}</h3>
+      <CollapsibleSection
+        section={worldSection('factions')}
+        open={isSectionOpen(sectionsOpen, 'factions')}
+        onToggle={onToggleSection}
+      >
         <RowList
           scope="world-factions"
           label="world.factionsLabel"
@@ -281,20 +351,26 @@ export function WorldRoute({ worldId }: { worldId: string }) {
             </>
           )}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionRules')}</h3>
+      <CollapsibleSection
+        section={worldSection('rules')}
+        open={isSectionOpen(sectionsOpen, 'rules')}
+        onToggle={onToggleSection}
+      >
         <TextFields
           scope="rules"
           fields={RULES_FIELDS}
           value={data.rulesOfNature}
           onChange={(rulesOfNature) => write({ ...data, rulesOfNature })}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionNarrative')}</h3>
+      <CollapsibleSection
+        section={worldSection('narrative')}
+        open={isSectionOpen(sectionsOpen, 'narrative')}
+        onToggle={onToggleSection}
+      >
         <TextFields
           scope="narrative"
           fields={NARRATIVE_TEXT_FIELDS}
@@ -307,10 +383,13 @@ export function WorldRoute({ worldId }: { worldId: string }) {
           value={data.narrative}
           onChange={(narrative) => write({ ...data, narrative })}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionCalendar')}</h3>
+      <CollapsibleSection
+        section={worldSection('calendar')}
+        open={isSectionOpen(sectionsOpen, 'calendar')}
+        onToggle={onToggleSection}
+      >
         <p className="muted">{t('world.calendarHint')}</p>
         <TextFields
           scope="calendar"
@@ -378,10 +457,13 @@ export function WorldRoute({ worldId }: { worldId: string }) {
         />
         <NumberFields scope="world" fields={[START_MINUTE_FIELD]} value={data} onChange={write} />
         <p className="muted">{t('world.startMinuteHint')}</p>
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionRhythm')}</h3>
+      <CollapsibleSection
+        section={worldSection('rhythm')}
+        open={isSectionOpen(sectionsOpen, 'rhythm')}
+        onToggle={onToggleSection}
+      >
         <p className="muted">{t('world.rhythmHint')}</p>
         <BooleanFields
           scope="rhythm"
@@ -395,17 +477,20 @@ export function WorldRoute({ worldId }: { worldId: string }) {
           value={data.timeRhythm}
           onChange={(timeRhythm) => write({ ...data, timeRhythm })}
         />
-      </section>
+      </CollapsibleSection>
 
-      <section className="field-group">
-        <h3 className="section-title">{t('world.sectionOpening')}</h3>
+      <CollapsibleSection
+        section={worldSection('opening')}
+        open={isSectionOpen(sectionsOpen, 'opening')}
+        onToggle={onToggleSection}
+      >
         <LineListField
           scope="world"
           field={WORLD_OPENING_HOOKS_FIELD}
           value={data}
           onChange={write}
         />
-      </section>
+      </CollapsibleSection>
 
       {/*
         AI 共创 (M1-W2). It sits at the END of the form rather than in a screen of its own because

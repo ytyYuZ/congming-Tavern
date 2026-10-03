@@ -124,6 +124,17 @@ export const zhCN = {
   'common.customFieldAdd': '添加字段',
   'common.customFieldEmpty': '还没有自定义字段。',
   'common.customFieldRefused': '字段名不能为空，且不能与已有字段重名',
+  /*
+   * THE SECTION CHROME (acceptance fix B1).
+   *
+   * Both card editors are grouped into sections that fold, with a table of contents above them, so
+   * the three sentences that chrome says are `common.` like the rest of it — one implementation
+   * (`app/collapsible-section.tsx`) serves both screens. The section TITLES are not here: they are
+   * `world.section*` / `character.section*`, because they name that card's own parts.
+   */
+  'common.sectionsTitle': '目录',
+  'common.sectionExpand': '展开「{name}」',
+  'common.sectionCollapse': '收起「{name}」',
 
   /* ── nav: the shell's navigation ─────────────────────────────────────────── */
   /**
@@ -1213,6 +1224,10 @@ export const en: Messages = {
   'common.customFieldAdd': 'Add a field',
   'common.customFieldEmpty': 'No custom fields yet.',
   'common.customFieldRefused': 'A field name cannot be blank, and must not repeat an existing one',
+  /* The section chrome (acceptance fix B1) — see the zh-CN block for why it is `common.`. */
+  'common.sectionsTitle': 'Sections',
+  'common.sectionExpand': 'Expand “{name}”',
+  'common.sectionCollapse': 'Collapse “{name}”',
 
   /* ── nav ────────────────────────────────────────────────────────────────── */
   'nav.language': 'Language',

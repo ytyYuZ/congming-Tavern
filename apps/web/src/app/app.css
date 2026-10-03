@@ -801,6 +801,71 @@ body {
   padding-top: 1rem;
 }
 
+/* --- the foldable card sections and their table of contents (fix B1) ------ */
+
+/*
+ * The table of contents above a card form. It WRAPS rather than scrolling sideways, which is the one
+ * difference from the `.co-create-json` rule below: a wrapped list of eight short words is still one
+ * glance, and a sideways scroll would put the section a user wants off screen — the exact problem
+ * the list exists to solve.
+ */
+.section-toc {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.section-toc-title {
+  font-size: 1rem;
+  margin: 0 0 0.4rem;
+}
+
+.section-toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* Smaller than `.btn`: the list is eight controls in one row, not the screen's primary acts. */
+.section-toc-button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.9rem;
+}
+
+/*
+ * The section heading is a BUTTON, and `.section-title`'s own type is inherited into it because
+ * `font: inherit` on `.btn` hands the button the heading's size rather than the other way round. So
+ * the title looks exactly as it did when it was a plain `<h3>`, and the whole title is now the
+ * target that opens the section — which is what makes a folded section cheap to open.
+ */
+.section-toggle {
+  font: inherit;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.section-toggle:hover {
+  color: var(--accent);
+}
+
+/* The chevron is decoration (`aria-expanded` is the accessible state) but it is fixed-width, so the
+   eight titles stay aligned whether a section is open or closed. */
+.section-toggle-mark {
+  color: var(--muted);
+  display: inline-block;
+  width: 0.75rem;
+}
+
 /* The validation panel. Always rendered (「校验可用」), green when there is nothing to report. */
 .issues {
   border-top: 1px solid var(--line);
