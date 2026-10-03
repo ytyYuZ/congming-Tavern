@@ -877,6 +877,42 @@ export async function writeSessionState(sessionId: Id, state: SessionState): Pro
 }
 
 /**
+ * Give a session a new title (M1-T1) — the write behind the play screen's rename form.
+ *
+ * WHY IT READS THE ROW FIRST: the same reason `writeSessionState` above does. A session row is
+ * written whole, so a rename must not lose `refs`, `state`, `headMessageId` or `createdAt` — none
+ * of which is this function's business. The row goes through `completeState` on the way in for the
+ * same reason as on the way out: a rename of a pre-ADR-032 row must not be the operation that
+ * makes it unreadable.
+ *
+ * WHY IT HANDS THE ROW BACK: the caller has to show the new name immediately, in the breadcrumb
+ * and in the list behind it (`state/chat-store.ts`'s `rename`), and an id alone would make that a
+ * second read or an echo of the input. Returning the row that was just written means the screen
+ * and the database cannot disagree, `createSession`'s shape.
+ *
+ * WHY THE TITLE ARRIVES ALREADY DECIDED: this module may not read the catalogs (ADR-030 — the
+ * import would close a cycle back into `i18n/translate.ts`), so whoever wants the default sentence
+ * picks it, exactly as `createSession`'s caller does. This function also does NOT trim or cap:
+ * `session/title.ts` is the one rule that says what a name is, and a second opinion here would be
+ * a second answer to a question the screen has already answered.
+ *
+ * Resolves `undefined` when no such row exists — nothing was written.
+ */
+export async function renameSession(sessionId: Id, title: string): Promise<Session | undefined> {
+  return write(async (tx) => {
+    const row = await sessionsOf(tx).get(sessionId);
+    if (row === undefined) return undefined;
+    const session = SessionSchema.parse({ ...row, state: completeState(row) });
+    // The FINAL row is parsed (not only the row that was read): the title has to pass
+    // `min(1).max(200)` here too, so a caller that skipped `session/title.ts` fails before the put
+    // rather than storing a row nobody can read back.
+    const renamed = SessionSchema.parse({ ...session, title, updatedAt: Date.now() });
+    await sessionsOf(tx).put(renamed);
+    return renamed;
+  });
+}
+
+/**
  * Record which provider/model this session is played with.
  *
  * WHY THIS IS NOT PART OF `createSession`: the user configures BYO-Key in a

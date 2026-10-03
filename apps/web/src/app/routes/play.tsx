@@ -117,6 +117,7 @@ import {
   refusalReasonText,
   speakerReasonText,
 } from '../../session/scheduler-text';
+import { renameIssueOf } from '../../session/title';
 import { errorSentence, useChatStore } from '../../state/chat-store';
 import { useSettingsStore } from '../../state/settings-store';
 export function PlayRoute({ sessionId }: { sessionId: string }) {
@@ -180,6 +181,7 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
 
       {session === undefined ? null : (
         <>
+          <SessionNameForm session={session} />
           <WorldClock session={session} calendar={calendar} />
           <TimeControls sessionId={session.id} session={session} calendar={calendar} />
           <StatusBar sessionId={session.id} session={session} />
@@ -273,6 +275,65 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
         </button>
       </form>
     </>
+  );
+}
+
+/**
+ * The one rename entry point (M1-T1): the session's own screen, above everything it names.
+ *
+ * WHY HERE AND NOWHERE ELSE: the name belongs to the session this screen is already showing, and
+ * the breadcrumb above the form is where it is read. A form on the home screen's rows would make
+ * two places decide the same title — and a second answer for what a failed rename leaves on
+ * screen.
+ *
+ * WHY A FORM AND NOT AN ALWAYS-EDITABLE FIELD: the name is persisted data, so saving it is an act
+ * the user performs, the same shape as `CheckpointPanel` below. The field starts from the row's
+ * title and is re-seeded whenever the open session changes (`useSessionDraft`), so half-typed text
+ * cannot leak into the next session.
+ *
+ * A BLANK NAME IS REFUSED IN THE CATALOG'S WORDS rather than silently trimmed away: `renameIssueOf`
+ * is the same rule the store re-checks before the write, so the sentence on screen is the one the
+ * refusal is about. The status line reports the OUTCOME of the write, not the intent — `rename`
+ * answers `false` when nothing was stored, and a success sentence over an unchanged row would be a
+ * lie about what the database holds.
+ */
+function SessionNameForm({ session }: { session: Session }) {
+  const { t } = useTranslation();
+  const rename = useChatStore((state) => state.rename);
+  const [name, setName] = useSessionDraft(session.id, session.title);
+  const [status, setStatus] = useState('');
+  const onSubmit = (event: FormEvent): void => {
+    event.preventDefault();
+    const issue = renameIssueOf(name);
+    if (issue !== undefined) {
+      setStatus(t(issue));
+      return;
+    }
+    void (async () => {
+      const saved = await rename(name);
+      setStatus(saved ? t('play.nameChanged', { name: name.trim() }) : t('play.nameFailed'));
+    })();
+  };
+  return (
+    <section className="session-rename">
+      <form className="session-rename" onSubmit={onSubmit}>
+        {/* Visually hidden for the same reason the clock's label is a hidden word: the submit
+            button already says what the action is, and a visible label would repeat it. */}
+        <label htmlFor="session-rename-name" className="sr-only">
+          {t('session.nameLabel')}
+        </label>
+        <input
+          id="session-rename-name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder={t('session.namePlaceholder')}
+        />
+        <button className="btn btn-primary" type="submit" data-field="session-rename">
+          {t('play.nameSubmit')}
+        </button>
+      </form>
+      {status === '' ? null : <p className="session-rename-status">{status}</p>}
+    </section>
   );
 }
 

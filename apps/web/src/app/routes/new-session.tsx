@@ -73,6 +73,10 @@ export function NewSessionRoute() {
   const [playerId, setPlayerId] = useState<Id | undefined>(undefined);
   const [clockText, setClockText] = useState('');
   const [clockSelection, setClockSelection] = useState('');
+  // The session's name, blank by default: naming it is optional, and a blank field is how the
+  // user asks for the default title (`session/title.ts` decides what a name is; the store picks
+  // the default sentence, because the repository may not read the catalogs).
+  const [name, setName] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -111,6 +115,9 @@ export function NewSessionRoute() {
     }));
   const cast = castOf(cards, playerId);
   const draft: SessionDraft = {
+    // What the user typed, blank included: "no name" is an answer here (the default title), so the
+    // field is passed through rather than pre-filled, and the store is what decides the fallback.
+    title: name,
     world: chosen === undefined ? undefined : { id: chosen.worldId, version: chosen.version },
     cards,
     playerId,
@@ -174,6 +181,22 @@ export function NewSessionRoute() {
       </p>
 
       <form className="session-create" onSubmit={onSubmit}>
+        {/* The name is asked FIRST because it is the one field that needs no choice: everything
+            below it is a decision the session cannot be built without. Blank means the default
+            title, which the hint names out loud, so leaving it empty is never a mistake. */}
+        <section className="field-group">
+          <label htmlFor="session-name">{t('session.nameLabel')}</label>
+          <input
+            id="session-name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={t('session.namePlaceholder')}
+          />
+          <p className="muted">
+            {t('session.nameHint', { default: t('home.defaultSessionTitle') })}
+          </p>
+        </section>
+
         <section className="field-group">
           <label htmlFor="session-world">{t('session.worldLabel')}</label>
           <select

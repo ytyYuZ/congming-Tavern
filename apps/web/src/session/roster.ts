@@ -46,6 +46,7 @@
 import type { MessageKey } from '@smarttavern/i18n';
 import type { EntityPin, Id, VersionNumber, WorldVersion } from '@smarttavern/schema';
 import { BUILTIN_PRESET, BUILTIN_PRESET_ID } from '../chat/builtin-content';
+import { titleIssueOf } from './title';
 
 /* ─────────────────────────────── the preset ──────────────────────────────── */
 
@@ -104,6 +105,15 @@ export interface SessionDraft {
   readonly playerId: Id | undefined;
   /** Minutes since the calendar epoch. `NaN` (an unparsable field) is refused below. */
   readonly initialClock: number;
+  /**
+   * The name the user typed for this session, if any (M1-T1).
+   *
+   * OPTIONAL ON PURPOSE: naming a session is optional, so a draft without it is still complete and
+   * the store writes the default title (`state/chat-store.ts`). That is what lets 示例开局
+   * (`packs/example-session.ts`) and every programmatic caller keep creating sessions unchanged —
+   * a required field here would be a second decision those callers would have to invent.
+   */
+  readonly title?: string;
 }
 
 /**
@@ -140,14 +150,21 @@ export function castOf(
 
 /**
  * Everything that stands between this draft and a session, as catalog keys the screen renders
- * as whole sentences — one per missing CHOICE, in the order the form asks for them.
+ * as whole sentences — one per missing CHOICE, in the order the form asks for them, plus the name
+ * when it is one the row could not store.
  *
  * WHY ONE ISSUE PER CAUSE AND NOT A LIST OF FIELD ERRORS: each of these is a decision the user
  * has not made yet (which world, which cards, which of them is theirs), so the sentence is the
- * question's other half rather than a diagnostic about malformed data.
+ * question's other half rather than a diagnostic about malformed data. The name limit joins the
+ * clock's refusal (`session.clockInvalid`) on the other side of that line: there is no such thing
+ * as a MISSING name — a blank field asks for the default title — but a name longer than
+ * `SessionSchema` accepts has to be said out loud before anything is written, rather than
+ * silently cut or thrown at the write boundary (`session/title.ts` holds that rule).
  */
 export function sessionIssues(draft: SessionDraft): readonly MessageKey[] {
   const issues: MessageKey[] = [];
+  const titleIssue = titleIssueOf(draft.title);
+  if (titleIssue !== undefined) issues.push(titleIssue);
   if (draft.world === undefined) issues.push('session.worldRequired');
   if (draft.cards.length === 0) issues.push('session.cardsRequired');
   else if (draft.playerId === undefined) issues.push('session.playerRequired');

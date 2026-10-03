@@ -171,6 +171,7 @@ import {
   listChildren,
   readChain,
   readSessions,
+  renameSession as renameSessionRow,
   restoreCheckpoint as restoreCheckpointRow,
   setHeadMessageId,
   type TurnPlanRow,
@@ -197,6 +198,7 @@ import {
   spokenLineOf,
   type TurnSchedule,
 } from '../session/scheduler';
+import { renameIssueOf, titleNameOf } from '../session/title';
 import { isProviderReady, useSettingsStore } from './settings-store';
 import { writeErrorName } from './write-error';
 
@@ -320,6 +322,22 @@ export interface ChatState {
    * function (`app/routes/new-session.tsx`), so the user is never left guessing.
    */
   create: (draft: SessionDraft) => Promise<Id | undefined>;
+  /**
+   * Give the OPEN session a new name and show it without a reload (M1-T1).
+   *
+   * WHY THE OPEN SESSION AND NOT AN ID: the one rename form is the play screen's, which is showing
+   * exactly one row, and a title is an identity fact about the row that screen is built on — the
+   * same shape `open`/`close` have, and the reason `writeSessionState` and `recordSessionModel`
+   * are not offered to a caller that merely holds an id.
+   *
+   * WHY THE REFUSAL IS SILENT: `session/title.ts` is the sentence's other half and the form
+   * renders it before calling this (`create`'s rule), so a blank or over-long name answers `false`
+   * and writes nothing.
+   *
+   * Resolves `true` only when the row was written. No open session, a row that is gone, or a
+   * storage failure answers `false` — the failure also lands in `error`.
+   */
+  rename: (title: string) => Promise<boolean>;
   open: (sessionId: Id) => Promise<void>;
   close: () => void;
   send: (text: string) => Promise<void>;
@@ -578,9 +596,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const providerId = useSettingsStore.getState().activeId;
       // The default title is PERSISTED DATA written in the ACTIVE language: `createSession`
       // deliberately does not know about locales (`db/repository.ts` records why), so the
-      // sentence is chosen here, where the locale store is reachable.
+      // sentence is chosen here, where the locale store is reachable. A name the user typed
+      // replaces it — trimmed, and refused above when it is longer than the row accepts
+      // (`session/title.ts`, whose rule `sessionPinsOf` has already applied).
       const session = await createSession({
-        title: translate('home.defaultSessionTitle'),
+        title: titleNameOf(draft.title) ?? translate('home.defaultSessionTitle'),
         refs: { ...refs, ...(providerId === undefined ? {} : { providerId }) },
         initialClock: draft.initialClock,
       });
@@ -603,6 +623,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
       });
       return undefined;
+    }
+  },
+
+  /** See the interface's `rename` for why this acts on the open session and refuses silently. */
+  async rename(title: string): Promise<boolean> {
+    const session = get().session;
+    if (session === undefined) return false;
+    // The pure rule the form rendered its sentence from, applied once more before the write: the
+    // row's `title` is `z.string().min(1).max(200)`, and this action is the last gate in front of
+    // it (`create` re-checks `sessionPinsOf` for the same reason).
+    if (renameIssueOf(title) !== undefined) return false;
+    const name = titleNameOf(title);
+    if (name === undefined) return false;
+    try {
+      const renamed = await renameSessionRow(session.id, name);
+      if (renamed === undefined) return false;
+      // The ROW is written first and the memory adopts what it returned (`create`'s order), in both
+      // places the name is read from: the open session behind the breadcrumb, and the list the home
+      // screen renders. Nothing else about either is touched, because nothing else changed.
+      set({
+        session: renamed,
+        sessions: get().sessions.map((row) => (row.id === renamed.id ? renamed : row)),
+      });
+      return true;
+    } catch (cause) {
+      set({ error: localFailure(cause, 'unknown session rename write failure') });
+      return false;
     }
   },
 

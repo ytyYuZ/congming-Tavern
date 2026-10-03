@@ -360,4 +360,89 @@ describe('the create-session screen', () => {
     expect(host.textContent).not.toContain('指定的玩家角色不在已勾选的角色卡中');
     expect(await listSessions()).toEqual([]);
   });
+
+  /**
+   * 「创建时可填会话名」, the half a screen can prove: the FIELD is wired to the row.
+   *
+   * The hint is asserted before the click because it is the promise the blank case below keeps —
+   * a hint that named a different default than the store writes would be worse than no hint.
+   */
+  it('stores the name the user typed, trimmed, as the stored title', async () => {
+    const worldId = await seedWorld('霜月群岛', 720);
+    const lianId = await seedCharacter('莉安');
+
+    const host = await mountAt('/sessions/new', '霜月群岛');
+    expect(host.textContent).toContain('留空则使用默认名「新会话」');
+
+    await typeInto(host, '#session-name', ' 霜月群岛的第一夜 ');
+    await selectOption(host, '#session-world', worldId);
+    await clickField(host, `[data-field="session-card-${lianId}"]`);
+    await clickField(host, `[data-field="session-player-${lianId}"]`);
+    await clickButton(host, '创建会话');
+
+    const sessions = await listSessions();
+    expect(sessions).toHaveLength(1);
+    // The edges are gone, the inner text is not: a padded name is a typo, not a different name.
+    expect(sessions[0]?.title).toBe('霜月群岛的第一夜');
+
+    // ...and the name the row holds is the name the play screen shows, in its breadcrumb.
+    await waitForText(host, '霜月群岛的第一夜');
+  });
+
+  /**
+   * The default, which must stay BYTE-FOR-BYTE today's behaviour: the untouched field, and a field
+   * holding only spaces, both store `home.defaultSessionTitle` (the first case of this file pins
+   * the same value through a form where the field was never touched).
+   *
+   * WHY SPACES GET THEIR OWN ASSERTION: `titleNameOf` trims, and the schema's `min(1)` would
+   * reject `'   '` — a form that passed the raw field through would write a row nothing can read.
+   */
+  it('leaves the default title when the name is blank or only spaces', async () => {
+    const worldId = await seedWorld('霜月群岛', 720);
+    const lianId = await seedCharacter('莉安');
+
+    const host = await mountAt('/sessions/new', '霜月群岛');
+    await selectOption(host, '#session-world', worldId);
+    await clickField(host, `[data-field="session-card-${lianId}"]`);
+    await clickField(host, `[data-field="session-player-${lianId}"]`);
+    await typeInto(host, '#session-name', '   ');
+    await clickButton(host, '创建会话');
+
+    const sessions = await listSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.title).toBe('新会话');
+  });
+
+  /**
+   * The ceiling, from the screen's side: an emoji name at the limit is ACCEPTED and the next code
+   * point is REFUSED with a sentence and no row.
+   *
+   * WHY 200 EMOJI AND NOT 200 LETTERS: zod measures the stored title in code points, so 200 emoji
+   * is 400 UTF-16 units — a form that counted units (or a `maxLength` attribute, which counts
+   * units) would refuse a name `SessionSchema` stores happily. The pair below is the boundary
+   * itself: one over is refused, exactly at it lands.
+   */
+  it('refuses a name past the limit the row accepts, and accepts one exactly at it', async () => {
+    const worldId = await seedWorld('霜月群岛', 720);
+    const lianId = await seedCharacter('莉安');
+
+    const host = await mountAt('/sessions/new', '霜月群岛');
+    await selectOption(host, '#session-world', worldId);
+    await clickField(host, `[data-field="session-card-${lianId}"]`);
+    await clickField(host, `[data-field="session-player-${lianId}"]`);
+
+    await typeInto(host, '#session-name', '😀'.repeat(201));
+    await clickButton(host, '创建会话');
+    await waitForText(host, '会话名最多 200 个字符');
+    // The refusal is the whole outcome: no row, and the flow did not move to the play screen.
+    expect(await listSessions()).toEqual([]);
+
+    await typeInto(host, '#session-name', '😀'.repeat(200));
+    await clickButton(host, '创建会话');
+
+    const sessions = await listSessions();
+    expect(sessions).toHaveLength(1);
+    expect([...(sessions[0]?.title ?? '')]).toHaveLength(200);
+    expect(sessions[0]?.title).toBe('😀'.repeat(200));
+  });
 });

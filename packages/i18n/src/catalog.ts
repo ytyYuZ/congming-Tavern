@@ -365,15 +365,26 @@ export const zhCN = {
    * clock — is not the list's, and `home.creating` moved here with the button it labels:
    * the list only links to the form, so the form is what can be in the middle of creating.
    *
-   * WHY THE FIVE REFUSALS ARE WHOLE SENTENCES AND NOT `common.issue`'s `{field}：{detail}`:
-   * that shape is the card editors' schema-first report of a MALFORMED field, while these say
-   * which CHOICE is missing (a world, a card, a player) or that the chosen clock is not a
-   * minute. There is no schema path to name in either case.
+   * WHY THE REFUSALS ARE WHOLE SENTENCES AND NOT `common.issue`'s `{field}：{detail}`: that shape
+   * is the card editors' schema-first report of a MALFORMED field, while these say which CHOICE is
+   * missing (a world, a card, a player) or that the value given is one the row cannot store (an
+   * initial clock that is not a whole minute, a name longer than the stored title accepts). There
+   * is no schema path to name in either case.
    */
   'session.title': '新建会话',
   'session.backToHome': '← 返回会话列表',
   'session.hint':
     '选择世界版本与参与的角色卡；指定其中一张为玩家角色，其余自动组成卡司。身份属于会话而不属于角色卡，所以同一张卡可以在不同会话里扮演不同身份。',
+  /**
+   * The name field, asked first: it is the only field with no choice in it, and BLANK IS AN
+   * ANSWER — the hint names the default title it will store, so an empty field is never a
+   * mistake. `{default}` lives in the HINT rather than the label because the rename form reuses
+   * `nameLabel` alone, where no default applies; the create screen passes
+   * `home.defaultSessionTitle` for the parameter.
+   */
+  'session.nameLabel': '会话名',
+  'session.namePlaceholder': '例如：雾港的第一夜',
+  'session.nameHint': '留空则使用默认名「{default}」；最多 200 个字符。',
   'session.worldLabel': '世界卡',
   'session.worldPlaceholder': '请选择世界卡',
   'session.worldEmpty': '还没有世界卡。先到「世界」新建一张，再回来创建会话。',
@@ -396,6 +407,9 @@ export const zhCN = {
   'session.create': '创建会话',
   'session.creating': '创建中…',
   'session.createFailed': '创建失败，没有写入会话',
+  'session.nameRequired': '会话名不能为空',
+  /** No `{limit}` interpolation on purpose: the form renders this key with no parameters. */
+  'session.nameTooLong': '会话名最多 200 个字符',
   'session.worldRequired': '请选择一个世界卡及其版本',
   'session.cardsRequired': '请至少勾选一张角色卡',
   'session.playerRequired': '请指定一张角色卡作为玩家角色',
@@ -755,6 +769,10 @@ export const zhCN = {
   'play.composerPlaceholder': '例如：我推开门，走进昏暗的酒馆。',
   'play.send': '发送',
   'play.stop': '停止',
+  /* The rename form: the button names the act, the status line reports whether the row changed. */
+  'play.nameSubmit': '保存名称',
+  'play.nameChanged': '已改名为「{name}」',
+  'play.nameFailed': '改名失败，没有写入会话',
   /*
    * THE OPENING PANEL (M1-S3) — the three ways a session can start.
    *
@@ -1362,6 +1380,10 @@ export const en: Messages = {
   'session.backToHome': '← Back to sessions',
   'session.hint':
     'Pick a world version and the cards taking part; designate one as the player character and the rest become the cast automatically. Identity belongs to the session, not to the card, so one card can play different roles in different sessions.',
+  'session.nameLabel': 'Session name',
+  'session.namePlaceholder': 'For example: the first night in Mistport',
+  'session.nameHint':
+    'Leaving this blank stores the default name “{default}”; at most 200 characters.',
   'session.worldLabel': 'World card',
   'session.worldPlaceholder': 'Choose a world card',
   'session.worldEmpty':
@@ -1389,6 +1411,8 @@ export const en: Messages = {
   'session.create': 'Create session',
   'session.creating': 'Creating…',
   'session.createFailed': 'The session was not created; nothing was written',
+  'session.nameRequired': 'A session name cannot be empty',
+  'session.nameTooLong': 'A session name has at most 200 characters',
   'session.worldRequired': 'Choose a world card and one of its versions',
   'session.cardsRequired': 'Tick at least one character card',
   'session.playerRequired': 'Designate one of the cards as the player character',
@@ -1666,6 +1690,9 @@ export const en: Messages = {
   'play.composerPlaceholder': 'For example: I push the door open and step into the dim tavern.',
   'play.send': 'Send',
   'play.stop': 'Stop',
+  'play.nameSubmit': 'Save name',
+  'play.nameChanged': 'Renamed to “{name}”',
+  'play.nameFailed': 'The session was not renamed; nothing was written',
   'play.openingTitle': 'Opening',
   'play.openingHint':
     'This session has no first message yet. Choose how it starts — once it is written, the opening cannot be chosen again.',
