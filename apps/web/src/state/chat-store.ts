@@ -536,9 +536,12 @@ export function errorLabel(code: string): string {
  * ONE function for the view and for `errorLabel`, because the banner and a log line
  * must not be able to disagree about what a code says. `detail` is passed as the
  * `{detail}` parameter, so a code whose sentence has no placeholder (`error.auth`)
- * simply ignores it — which is what keeps a provider failure's `message` out of the UI
- * (ADR-019). The parameter set is uniform while only `error.promptBudget` uses it:
- * `translate` leaves an unused parameter alone rather than erroring.
+ * simply ignores it. The parameter set is uniform across codes: `translate` leaves an
+ * unused parameter alone rather than erroring. Which codes USE it is the caller's
+ * choice, and the two callers differ on purpose — the play path fills no detail, so a
+ * provider's own `message` stays out of its banner (ADR-019), while the co-create path
+ * fills it for `error.invalidRequest` (A3), because there the HTTP status and the
+ * server's own words are the only thing that tells the author what to change.
  */
 export function errorSentence(error: { readonly code: string; readonly detail?: string }): string {
   return translate(messageKeyForCode(error.code), { detail: error.detail ?? '' });

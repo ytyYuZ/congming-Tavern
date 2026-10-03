@@ -110,6 +110,7 @@ export function CoCreatePanel({ kind, id, data }: CoCreatePanelProps) {
   const undoable = useCoCreateStore((state) => state.undoable);
   const busy = useCoCreateStore((state) => state.busy);
   const finding = useCoCreateStore((state) => state.finding);
+  const degraded = useCoCreateStore((state) => state.degraded);
   const generation = useCoCreateStore((state) => state.generation);
   const fieldOp = useCoCreateStore((state) => state.fieldOp);
   const voiceEvaluation = useCoCreateStore((state) => state.voiceEvaluation);
@@ -280,6 +281,20 @@ export function CoCreatePanel({ kind, id, data }: CoCreatePanelProps) {
               {t(finding.code, { detail: finding.detail ?? '' })}
             </p>
           )}
+
+          {/*
+            THE DEGRADED PATH, SAID OUT LOUD (A3, docs/02 §5.3). Deliberately NOT an error notice: a
+            retry without the response schema is the ladder working as designed, not a failure, and it
+            is rendered BESIDE the answer rather than replacing it — the author still needs to read what
+            the model said. It stays until the next turn starts, because what it describes is this
+            answer (`state/co-create-store.ts` clears the flag with the finding). A degraded turn that
+            then failed shows both notices, which is the whole truth of that turn.
+          */}
+          {degraded ? (
+            <p className="notice" data-status="co-create-degraded">
+              {t('co-create.degradedRequest')}
+            </p>
+          ) : null}
 
           {/*
             THE UNLOCK ACTION FOR A LOCKED KEY (Phase A2). `state/co-create-store.ts` refuses a turn

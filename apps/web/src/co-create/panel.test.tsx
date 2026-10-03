@@ -116,6 +116,20 @@ function answer(chunks: readonly string[]): Response {
   return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
+/**
+ * A refusal the way a real gateway sends one (A3): a non-2xx status and the vendor's own words.
+ *
+ * `co-create/ask.ts` reads a refusal through the adapter, which composes
+ * `HTTP {status}: {label} ({this message})` — so the wording here is what decides whether the
+ * degradation ladder recognises a refusal as being ABOUT the response schema.
+ */
+function refusal(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: { message } }), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 /** A world with a published version 1, created through the store the library screen uses. */
 async function seedWorld(): Promise<string> {
   const worldId = await useContentStore.getState().createWorld('霜月群岛');
@@ -336,6 +350,82 @@ describe('the co-creation panel', () => {
     expect(finding?.textContent).toContain('我觉得先聊聊题材比较好。');
     expect(host.querySelector('[data-action="co-create-accept"]')).toBeNull();
     expect(JSON.stringify(await storedValue(worldDraftId(worldId)))).toBe(before);
+  });
+
+  it('retries once without the response schema, then says the degraded path was used', async () => {
+    const worldId = await seedWorld();
+    // The draft row is seeded for the same reason as in the first test: a proposal that ARRIVES is
+    // only useful if it still applies, and the preview is asserted over the proposed value.
+    await useContentStore.getState().openWorld(worldId);
+    await useContentStore.getState().editWorld(await draftOf(worldId), {});
+    await useContentStore.getState().close();
+
+    // ATTEMPT 1 IS REFUSED BY NAME (docs/02 §5.3's level ②), attempt 2 is an ordinary SSE answer
+    // carrying a FENCED JSON object — i.e. exactly the prose shape level ③ produces. Reading it is
+    // `readProposal`'s job, the one reader this app has: the degraded path adds no second parser.
+    let attempts = 0;
+    configureCoCreate({
+      transport: (() => {
+        attempts += 1;
+        return Promise.resolve(
+          attempts === 1
+            ? refusal(400, "Invalid parameter: 'response_format' is not supported")
+            : answer([
+                '```json\n',
+                '{"message":"我把一句话设定补上。","ops":[{"op":"replace","path":"/premise","value":"群岛在霜月下沉"}]}\n',
+                '```',
+              ]),
+        );
+      }) as FetchLike,
+    });
+
+    const host = await mountAt(`/worlds/${worldId}`, '发布新版本');
+    await clickAction(host, 'co-create-toggle');
+    await typeInto(host, '[data-field="co-create-input"]', '帮我写一句话设定');
+    await clickButton(host, '发送');
+    await waitForText(host, '我把一句话设定补上。');
+
+    // EXACTLY two requests: one step down the ladder, taken once (§5.3 has no level ④).
+    expect(attempts).toBe(2);
+    // The author is told which level produced the answer — as a NOTICE, because nothing failed.
+    const degraded = host.querySelector('[data-status="co-create-degraded"]');
+    expect(degraded?.textContent).toContain('普通请求重试');
+    expect(degraded?.classList.contains('notice-error')).toBe(false);
+    expect(host.querySelector('[data-status="co-create-finding"]')).toBeNull();
+    expect(host.querySelector('[data-status="co-create-error"]')).toBeNull();
+    // The unconstrained answer still became a usable proposal…
+    expect(host.querySelector('[data-status="co-create-preview"]')?.textContent).toContain(
+      '群岛在霜月下沉',
+    );
+    expect(host.querySelector('[data-action="co-create-accept"]')).not.toBeNull();
+  });
+
+  it('reports a refusal that names nothing as it happened, and spends no second request', async () => {
+    const worldId = await seedWorld();
+    let attempts = 0;
+    configureCoCreate({
+      transport: (() => {
+        attempts += 1;
+        return Promise.resolve(refusal(400, 'model not found'));
+      }) as FetchLike,
+    });
+
+    const host = await mountAt(`/worlds/${worldId}`, '发布新版本');
+    await clickAction(host, 'co-create-toggle');
+    await typeInto(host, '[data-field="co-create-input"]', '开始');
+    await clickButton(host, '发送');
+    await waitForText(host, 'model not found');
+
+    // ONE request: nothing in this refusal names the schema, so there is no level to descend to.
+    expect(attempts).toBe(1);
+    const finding = host.querySelector('[data-status="co-create-finding"]');
+    // The honest sentence: the status and the server's own words…
+    expect(finding?.textContent).toContain('HTTP 400');
+    expect(finding?.textContent).toContain('model not found');
+    // …and NOT the guess that the model name is wrong, which is what the reported bug displayed.
+    expect(finding?.textContent).not.toContain('模型名');
+    // The ladder was never spent, so there is nothing to announce about it.
+    expect(host.querySelector('[data-status="co-create-degraded"]')).toBeNull();
   });
 
   it('refuses to start when no model service is configured, and says so', async () => {

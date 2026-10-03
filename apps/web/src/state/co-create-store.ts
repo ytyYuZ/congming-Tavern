@@ -253,6 +253,15 @@ export interface CoCreateState {
   readonly busy: boolean;
   /** The last local failure, as a finding the panel renders beside the transcript. */
   readonly finding: CoCreateFinding | undefined;
+  /**
+   * True when the last answer came from a request WITHOUT the response schema — level ③ of `docs/02`
+   * §5.3's 降级策略 ladder, spent by `co-create/ask.ts` when a provider refuses `response_format` (A3).
+   *
+   * WHY IT IS STATE AND NOT A FIELD ON ONE TURN: the panel's notice is about the answer in front of the
+   * author right now, exactly like `finding` above it, and it is cleared when the next turn starts — so
+   * a degraded retry from ten turns ago cannot be read as a statement about this one.
+   */
+  readonly degraded: boolean;
   /** The stepwise generation in flight, or `undefined` (M1-W3). */
   readonly generation: CoCreateGeneration | undefined;
   /**
@@ -399,6 +408,7 @@ function emptyState(): Pick<
   | 'undoable'
   | 'busy'
   | 'finding'
+  | 'degraded'
   | 'generation'
   | 'acceptedPaths'
   | 'fieldOp'
@@ -414,6 +424,7 @@ function emptyState(): Pick<
     undoable: undefined,
     busy: false,
     finding: undefined,
+    degraded: false,
     generation: undefined,
     acceptedPaths: [],
     fieldOp: undefined,
@@ -595,18 +606,18 @@ export const useCoCreateStore = create<CoCreateState>((set, get) => {
     // one such scope), which is exactly where a silent write into the wrong draft would be hardest to see.
     const open = openKind();
     if (open === undefined) {
-      set({ finding: { code: 'co-create.notConfigured' } });
+      set({ finding: { code: 'co-create.notConfigured' }, degraded: false });
       return;
     }
     if (scope.card !== open) {
-      set({ finding: { code: 'co-create.wrongCard' } });
+      set({ finding: { code: 'co-create.wrongCard' }, degraded: false });
       return;
     }
     const data = openDraft(scope.card);
     // No open card, or a turn already running: `send` is a form submit, and the panel has already
     // disabled the control — this is the store's own backstop, reported rather than thrown.
     if (!isOpen(scope.card) || data === undefined) {
-      set({ finding: { code: 'co-create.notConfigured' } });
+      set({ finding: { code: 'co-create.notConfigured' }, degraded: false });
       return;
     }
     if (get().busy) return;
@@ -614,7 +625,9 @@ export const useCoCreateStore = create<CoCreateState>((set, get) => {
     askToken += 1;
     const token = askToken;
     const asked = [...get().turns, { id: nextTurnId(), role: 'user' as const, text }];
-    set({ turns: asked, busy: true, finding: undefined, pendingId: undefined });
+    // `degraded` is cleared with the finding: both describe the turn that just ENDED, and this is the
+    // moment the next one starts (A3).
+    set({ turns: asked, busy: true, finding: undefined, pendingId: undefined, degraded: false });
 
     const settings = useSettingsStore.getState();
     const refusal =
@@ -658,6 +671,11 @@ export const useCoCreateStore = create<CoCreateState>((set, get) => {
     // The conversation this answer belongs to may be gone (a `reset`, or a newer question).
     if (token !== askToken) return;
     applyOutcome(set, get, judge(answer, asked, scope, data));
+    // …and then the one fact about the REQUEST that the outcome cannot carry: whether this turn spent
+    // level ③ of the ladder (`co-create/ask.ts`). It is set AFTER the outcome for the same reason
+    // `applyOutcome` writes the transcript in one place — this is the single spot that knows both the
+    // transcript and the request that produced it.
+    set({ degraded: answer.degraded });
   }
 
   /** The instruction for one turn: the scope's own words plus the draft it is scoped over. */
@@ -1042,13 +1060,16 @@ function judge(
   data: WorldData | CharacterData,
 ): AskOutcome {
   if (!answer.ok) {
-    // The provider's own sentence is deliberately NOT carried: it is written for a developer, and
-    // `detail` is a placeholder for local facts (a schema path), not a channel for vendor prose.
+    // The provider's own sentence IS carried since A3, and it is what makes the finding honest: the
+    // adapter composes `message` from the HTTP status and the server's own words, so `{detail}` reports
+    // what actually happened instead of a guess at the model name. The CODE still selects the sentence
+    // (ADR-019) — this only supplies the fact beside it. Where `{detail}` is a local fact elsewhere (a
+    // schema path), it stays local.
     return {
       kind: 'malformed',
       asked,
       text: '',
-      finding: { code: messageKeyForCode(answer.error.code) },
+      finding: { code: messageKeyForCode(answer.error.code), detail: answer.error.message },
     };
   }
   const read = readProposal(answer.text, nextTurnId());

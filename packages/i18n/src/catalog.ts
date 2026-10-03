@@ -516,6 +516,22 @@ export const zhCN = {
   'co-create.refusedOp': '这份提案里的「{op} {path}」无法应用，没有应用任何修改。',
   'co-create.notConfigured': '还没有配置模型服务，无法开始共创：请先在设置里填写服务地址与模型名。',
   /*
+   * THE DEGRADED PATH, SAID OUT LOUD (A3, docs/02 §5.3).
+   * The ladder is ① 原生 function calling → ② 结构化输出（JSON Schema 约束）→ ③ 文本协议. A
+   * co-create turn has no tool to call, so it starts at ②，and `co-create/ask.ts` spends ③ by
+   * retrying ONCE without `response_format` when the server's refusal names that field.
+   *
+   * WHY THIS IS A PLAIN NOTICE AND NOT A FINDING
+   * The retry is the ladder working as designed, and it usually still produces a proposal —
+   * `{detail}` carrying the model's own words is for the turns that FAILED. What the author has to
+   * know is the one thing they cannot see: the answer is no longer constrained by the server, so the
+   * instruction is now a request rather than a rule, and `readProposal`'s tolerance of a fenced or
+   * prefixed JSON object is the only thing making it a proposal. Silence here would leave a
+   * 测试连接-success-plus-co-create-failure, or a stray prose answer, unexplained.
+   */
+  'co-create.degradedRequest':
+    '服务端不接受响应格式约束，本次已改用普通请求重试：回答不再由服务端保证是提案格式。',
+  /*
    * THE MALFORMED-ANSWER FINDINGS (docs/06 §2.2 M1-W2: the answer must be machine-readable, and an
    * answer that is not has to be reported rather than crash).
    *
@@ -1069,7 +1085,20 @@ export const zhCN = {
   'error.rateLimit': '请求过于频繁，请稍后重试',
   'error.network': '无法连接到服务，请检查地址与网络',
   'error.contentFilter': '请求被内容审核拦截',
-  'error.invalidRequest': '请求被服务端拒绝，请检查模型名',
+  /*
+   * WHY THIS ONE CARRIES `{detail}` AND NO LONGER NAMES THE MODEL (A3)
+   * The sentence used to guess at the cause — 「请检查模型名」 — while the adapter
+   * already knew better: `failureEvent` composes `HTTP {status}: {label} ({the
+   * vendor's own words})` out of the response it actually received, and
+   * `invalid_request` is the class for EVERY 4xx that is not auth, rate limiting or
+   * moderation, so the guess was wrong as often as it was right (the reported bug:
+   * 测试连接 succeeded, co-create failed, and the message blamed the model name).
+   * `docs/02` §5.3 requires 提示用户并可重试, which needs the fact and not a guess, so
+   * the co-create path fills `{detail}` with that composed sentence while the CODE
+   * still selects this key (ADR-019). The play path passes no detail — ADR-019 keeps
+   * a provider's `message` out of its banner — so the sentence must also stand alone.
+   */
+  'error.invalidRequest': '服务端拒绝了这次请求。{detail}',
   'error.invalidResponse': '服务端返回了无法解析的内容',
   /** The catch-all: any code the UI does not know, including its own `'unknown'`. */
   'error.unknown': '发生未知错误',
@@ -1462,6 +1491,9 @@ export const en: Messages = {
     'The operation “{op} {path}” in this proposal cannot be applied; nothing was changed.',
   'co-create.notConfigured':
     'No model service is configured yet, so co-creation cannot start: fill in the base URL and model name under Settings first.',
+  /** Level ③ of docs/02 §5.3's ladder was spent on this turn (A3); the zh-CN side records why. */
+  'co-create.degradedRequest':
+    'The server refused the response-format constraint, so this turn was retried as an ordinary request and the answer is no longer guaranteed to be a proposal.',
   'co-create.malformedNoJson':
     'The AI’s answer held no JSON proposal that could be read. The draft is unchanged, so try again.\n\nThe AI answered:\n{detail}',
   'co-create.malformedNoOps':
@@ -1767,7 +1799,7 @@ export const en: Messages = {
   'error.rateLimit': 'Too many requests. Try again in a moment.',
   'error.network': 'Cannot reach the service. Check the address and the network.',
   'error.contentFilter': 'The request was blocked by content moderation.',
-  'error.invalidRequest': 'The server rejected the request. Check the model name.',
+  'error.invalidRequest': 'The server rejected this request. {detail}',
   'error.invalidResponse': 'The server returned a response we cannot read.',
   'error.unknown': 'An unknown error occurred.',
   'error.notInitialized': 'The app has not finished starting up.',

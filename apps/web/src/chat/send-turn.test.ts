@@ -54,6 +54,14 @@ import { type SendTurnResult, sendTurn } from './send-turn';
 interface WireRequest {
   model?: string;
   messages?: { role: string; content: string; speakerId?: string }[];
+  /**
+   * The structured-output constraint, declared so a test can assert its ABSENCE (A3).
+   *
+   * Only the co-creation path ever sends one (`co-create/ask.ts`), and the ladder there may
+   * drop it; a play turn must never grow one, which is a statement about a field that is not
+   * in the body — so it has to be readable to be asserted.
+   */
+  response_format?: unknown;
 }
 
 /** The `fetch` the adapter is given. Records the request so it can be asserted. */
@@ -301,6 +309,29 @@ describe('sendTurn', () => {
     expect(messages[0]?.content).toContain('世界：test-world');
     expect(wire.lastAuthorization()).toBe(`Bearer ${API_KEY}`);
     expect(JSON.stringify(wire.lastBody())).not.toContain(API_KEY);
+  });
+
+  it('sends no response-format constraint on an ordinary play turn (A3)', async () => {
+    const session = await createSession({ title: 'test-session' });
+    const wire = fakeWire(() => sseResponse(['你好']));
+
+    await sendTurn(
+      { config: CONFIG, transport: wire.fetch },
+      { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
+    );
+
+    // A PLAY turn is a conversation, not a structured answer, so it keeps sending exactly what
+    // it sent before the co-creation path learned to give the schema up: the key is ABSENT —
+    // not `null`, not `{type: 'text'}` — and one turn is one request (the ladder's retry
+    // belongs to `co-create/ask.ts` and must not be reachable from here).
+    expect(wire.calls()).toBe(1);
+    const body = wire.lastBody();
+    expect(body?.response_format).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('response_format');
+    // The rest of the body is A3's control case: same model, same assembled messages.
+    expect(body?.model).toBe(MODEL);
+    expect(body?.messages?.at(-1)?.role).toBe('user');
+    expect(body?.messages?.at(-1)?.content).toBe('第一句');
   });
 
   it('sends the active chain as prior turns on the second turn', async () => {
