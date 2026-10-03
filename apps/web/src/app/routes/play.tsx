@@ -93,7 +93,7 @@
 import type { MessageKey, Translator } from '@smarttavern/i18n';
 import type { Calendar, Checkpoint, Id, Message, Session } from '@smarttavern/schema';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
 import { clockOf, segmentStep, worldClockText } from '../../chat/clock';
 import type { SiblingView } from '../../chat/message-tree';
 import {
@@ -120,10 +120,64 @@ import {
 import { renameIssueOf } from '../../session/title';
 import { errorSentence, useChatStore } from '../../state/chat-store';
 import { useSettingsStore } from '../../state/settings-store';
+import {
+  CollapsibleSection,
+  isSectionOpen,
+  jumpToSection,
+  type SectionDefinition,
+  SectionToc,
+  useSectionOpen,
+  withSectionToggled,
+} from '../collapsible-section';
+
+/**
+ * The play screen's nine folds, in the order the screen presents them (B2).
+ *
+ * WHY THE SCREEN'S CONTROLS ARE FOLDED AT ALL
+ * The manual acceptance test's complaint was the same one the card editors got: the screen a user
+ * plays on opened with nine panels between the transcript and nothing, so the conversation — the
+ * thing the screen is FOR — was pushed below them. The layout is now: transcript, composer, error
+ * banner, and then these folds. 常驻 is therefore two things: the transcript (the messages, which
+ * `docs/06` §2.5's acceptance is about) and the composer (the only way to take a turn).
+ *
+ * WHY THE OPENING SECTION IS OPEN AND THE OTHER EIGHT ARE NOT
+ * A session that has not started offers three ways to start it and nothing else, so that choice is
+ * the screen's whole content while it exists — folding it would hide the only action available. The
+ * other eight are about a session already under way, and their headings plus the table of contents
+ * are enough to reach them (`openByDefault` is the layout, and `PlaySections` opens the opening one
+ * regardless of the user's own fold, because a session with no first message has no other move).
+ *
+ * `play.clockLabel` is deliberately NOT reused as a heading here: `play.clockTitle` names the fold,
+ * while `clockLabel` is the accessible name of the reading inside it.
+ */
+const PLAY_SECTIONS: readonly SectionDefinition[] = [
+  { id: 'session', title: 'play.sessionTitle', openByDefault: true },
+  { id: 'clock', title: 'play.clockTitle', openByDefault: false },
+  { id: 'advance', title: 'play.advanceTitle', openByDefault: false },
+  { id: 'status', title: 'play.variablesTitle', openByDefault: false },
+  { id: 'checkpoints', title: 'play.checkpointTitle', openByDefault: false },
+  { id: 'forks', title: 'play.forkTitle', openByDefault: false },
+  { id: 'scheduler', title: 'play.schedulerTitle', openByDefault: false },
+  { id: 'cast', title: 'play.castInterventionTitle', openByDefault: false },
+  { id: 'opening', title: 'play.openingTitle', openByDefault: false },
+];
+
+/**
+ * One section of `PLAY_SECTIONS` by id.
+ *
+ * The list is the screen's single source of order — the table of contents and the folds both read it
+ * — so the panels below look their section up by id rather than repeating it. A miss is a coding
+ * error, not a runtime position, so it throws instead of rendering a heading nobody named.
+ */
+function playSection(id: string): SectionDefinition {
+  const section = PLAY_SECTIONS.find((candidate) => candidate.id === id);
+  if (section === undefined) throw new Error(`no play section ${id}`);
+  return section;
+}
+
 export function PlayRoute({ sessionId }: { sessionId: string }) {
   const { t } = useTranslation();
   const session = useChatStore((state) => state.session);
-  const messageChain = useChatStore((state) => state.messageChain);
   const checkpoints = useChatStore((state) => state.checkpoints);
   const calendar = useChatStore((state) => state.calendar);
   const draft = useChatStore((state) => state.draft);
@@ -132,12 +186,20 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
   const error = useChatStore((state) => state.error);
   const open = useChatStore((state) => state.open);
   const close = useChatStore((state) => state.close);
+  /**
+   * The chain the transcript renders, oldest first — a READ of the persisted tree (`state/
+   * chat-store.ts`'s `liveQuery`), so a message on screen is a message in IndexedDB.
+   *
+   * It is read HERE for the TRANSCRIPT — the one panel that did not fold, so the conversation stays in
+   * the always-visible part of the screen. `PlaySections` reads the same field for a different
+   * question (whether the opening choice is still live); both are subscriptions the store dedupes.
+   */
+  const messageChain = useChatStore((state) => state.messageChain);
   const send = useChatStore((state) => state.send);
   const abort = useChatStore((state) => state.abort);
   const dismissError = useChatStore((state) => state.dismissError);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const loadSettings = useSettingsStore((state) => state.load);
-  const opening = useChatStore((state) => state.opening);
 
   const [text, setText] = useState('');
   const streaming = status === 'streaming';
@@ -179,64 +241,6 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
         {session === undefined ? '' : ` · ${session.title}`}
       </p>
 
-      {session === undefined ? null : (
-        <>
-          <SessionNameForm session={session} />
-          <WorldClock session={session} calendar={calendar} />
-          <TimeControls sessionId={session.id} session={session} calendar={calendar} />
-          <StatusBar sessionId={session.id} session={session} />
-          <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />
-          <ForkPanel sessionId={session.id} checkpoints={checkpoints} />
-          <SchedulerPanel />
-          <CastInterventionPanel sessionId={session.id} session={session} />
-          {/* The opening choice is offered exactly while the session has not started (M1-S3);
-              see `OpeningPanel` for why the head and the chain are both consulted, and why
-              跳过 is the one choice that writes nothing. `skipped` is this screen's own
-              answer, not store state, so a session switch resets it. */}
-          {skipped === session.id ? (
-            <p className="opening-status">{t('play.openingSkipped')}</p>
-          ) : openingChoosing(session, messageChain) ? (
-            <OpeningPanel
-              sessionId={session.id}
-              busy={opening || streaming}
-              onSkip={() => setSkipped(session.id)}
-            />
-          ) : null}
-        </>
-      )}
-
-      {error === undefined ? null : (
-        <div className="notice notice-error">
-          <div>{errorSentence(error)}</div>
-          <div className="btn-row">
-            {/*
-              THE ONE ACTION THE LOCK REFUSAL OFFERS (Phase A2). `key_locked` is not a provider
-              failure: the configuration is complete and this tab simply has not opened its key,
-              so the fix belongs on the screen that reported it rather than on `/setup`. Unlocking
-              re-reads the row (`state/settings-store.ts`), so this banner disappears without a
-              reload — `error` is cleared with it because a refusal that no longer applies must
-              not stay on screen.
-            */}
-            {error.code === KEY_LOCKED_CODE ? <UnlockAction onUnlocked={dismissError} /> : null}
-            {error.retryable && error.turnText !== '' ? (
-              <button
-                className="btn"
-                type="button"
-                onClick={() => {
-                  dismissError();
-                  void send(error.turnText);
-                }}
-              >
-                {t('common.retry')}
-              </button>
-            ) : null}
-            <button className="btn" type="button" onClick={dismissError}>
-              {t('common.close')}
-            </button>
-          </div>
-        </div>
-      )}
-
       <section className="transcript">
         {messageChain.map((message) => (
           <MessageBubble
@@ -274,6 +278,171 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
           {t('play.stop')}
         </button>
       </form>
+
+      {error === undefined ? null : (
+        <div className="notice notice-error">
+          <div>{errorSentence(error)}</div>
+          <div className="btn-row">
+            {/*
+              THE ONE ACTION THE LOCK REFUSAL OFFERS (Phase A2). `key_locked` is not a provider
+              failure: the configuration is complete and this tab simply has not opened its key,
+              so the fix belongs on the screen that reported it rather than on `/setup`. Unlocking
+              re-reads the row (`state/settings-store.ts`), so this banner disappears without a
+              reload — `error` is cleared with it because a refusal that no longer applies must
+              not stay on screen.
+            */}
+            {error.code === KEY_LOCKED_CODE ? <UnlockAction onUnlocked={dismissError} /> : null}
+            {error.retryable && error.turnText !== '' ? (
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  dismissError();
+                  void send(error.turnText);
+                }}
+              >
+                {t('common.retry')}
+              </button>
+            ) : null}
+            <button className="btn" type="button" onClick={dismissError}>
+              {t('common.close')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/*
+        THE FOLDS COME LAST (B2), after the conversation, the composer and the refusal banner. The
+        screen's first position is the exchange itself — read it, answer it — and everything that is
+        ABOUT the session rather than part of it (its name, the clock, the advance controls, the
+        variables, the checkpoints, the branches, the scheduler, the cast, and the opening choice)
+        follows underneath, where a user goes when they mean to look.
+
+        The banner stays unfolded and outside every section: a refusal is about the turn that just
+        failed, so it has to be readable, and its `UnlockAction` clickable, without opening anything.
+      */}
+      {session === undefined ? null : (
+        <PlaySections
+          session={session}
+          calendar={calendar}
+          checkpoints={checkpoints}
+          skipped={skipped === session.id}
+          onSkip={() => setSkipped(session.id)}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Everything the play screen shows BESIDE the conversation: nine folds plus the table of contents
+ * that reaches them (B2).
+ *
+ * WHY THIS IS ITS OWN COMPONENT AND NOT NINE ELEMENTS IN `PlayRoute`'s JSX
+ * `useSectionOpen` is a hook, and the fold state belongs to the SESSION this screen has open — but
+ * the panels must not render at all until `open(sessionId)` has produced a session (the panels read
+ * `session.state`). A component of its own is what keeps the hook unconditional (it is called on
+ * every render of THIS component, which only exists once the session does) while the ROUTE keeps its
+ * own early `session === undefined` branch. The open/closed map is reset by `sessionId`, the same
+ * key the other per-session drafts use, so opening another session produces the uniform layout
+ * instead of inheriting what the previous one had folded.
+ *
+ * WHY THE TABLE OF CONTENTS COMES FIRST
+ * It is the answer to "where is the panel I want": eight headings a user cannot see yet are not a
+ * directory. Each entry opens its section and scrolls to it (`jumpToSection`), which is why the list
+ * is the first thing in the folded part of the screen rather than a decoration at its end.
+ *
+ * WHY THE CLOCK'S SENTENCE IS A SECTION SUMMARY
+ * The clock has to stay readable while it is folded (「常驻」, docs/01 §F11-1), so the reading — the
+ * same `worldClockText` sentence the panel used to print, not a second date format — travels in the
+ * 时间 heading, where it is visible in both states. The panel's own reading is kept as well: a
+ * screen reader reads the labelled sentence inside the body, and a user who opens the section sees
+ * it where the clock has always been.
+ */
+function PlaySections({
+  session,
+  calendar,
+  checkpoints,
+  skipped,
+  onSkip,
+}: {
+  session: Session;
+  calendar: Calendar;
+  checkpoints: readonly Checkpoint[];
+  /** Whether THIS session's opening choice was declined (see `PlayRoute`'s `skipped`). */
+  skipped: boolean;
+  onSkip: () => void;
+}) {
+  const { t } = useTranslation();
+  const messageChain = useChatStore((state) => state.messageChain);
+  const streaming = useChatStore((state) => state.status) === 'streaming';
+  const opening = useChatStore((state) => state.opening);
+  const [folds, setFolds] = useSectionOpen(PLAY_SECTIONS, session.id);
+  const toggle = (id: string): void => {
+    setFolds((current) => withSectionToggled(current, id));
+  };
+  const openingOffered = !skipped && openingChoosing(session, messageChain);
+  const clockSummary = worldClockText(clockOf(calendar, session), t);
+
+  /**
+   * One fold per panel, in the order the screen and the table of contents present them.
+   *
+   * The clock's line is the only summary — see the component note — and the opening panel is
+   * deliberately NOT in this table: whether it exists and whether it is open are decided by the
+   * session's own start state, one block below.
+   */
+  const panels: readonly {
+    readonly id: string;
+    readonly summary?: string;
+    readonly body: ReactNode;
+  }[] = [
+    { id: 'session', body: <SessionNameForm session={session} /> },
+    {
+      id: 'clock',
+      body: <WorldClock session={session} calendar={calendar} />,
+      summary: clockSummary,
+    },
+    {
+      id: 'advance',
+      body: <TimeControls sessionId={session.id} session={session} calendar={calendar} />,
+    },
+    { id: 'status', body: <StatusBar sessionId={session.id} session={session} /> },
+    {
+      id: 'checkpoints',
+      body: <CheckpointPanel sessionId={session.id} checkpoints={checkpoints} />,
+    },
+    { id: 'forks', body: <ForkPanel sessionId={session.id} checkpoints={checkpoints} /> },
+    { id: 'scheduler', body: <SchedulerPanel /> },
+    { id: 'cast', body: <CastInterventionPanel sessionId={session.id} session={session} /> },
+  ];
+
+  return (
+    <>
+      <SectionToc sections={PLAY_SECTIONS} onJump={(id) => jumpToSection(id, setFolds)} />
+      {panels.map(({ id, summary, body }) => (
+        <CollapsibleSection
+          key={id}
+          section={playSection(id)}
+          open={isSectionOpen(folds, id)}
+          onToggle={toggle}
+          summary={summary}
+        >
+          {body}
+        </CollapsibleSection>
+      ))}
+      {/*
+        The opening panel exists only while the session has no first message, AND it is open
+        regardless of the user's own fold: a session that has not started has no other action, so
+        the one control that starts it must not be hidden behind a heading. Because the section
+        definition is a module constant, that "ignore the map" belongs here rather than in
+        `openByDefault` (see `PLAY_SECTIONS`).
+      */}
+      {openingOffered ? (
+        <CollapsibleSection section={playSection('opening')} open onToggle={toggle}>
+          <OpeningPanel sessionId={session.id} busy={opening || streaming} onSkip={onSkip} />
+        </CollapsibleSection>
+      ) : null}
+      {skipped ? <p className="opening-status">{t('play.openingSkipped')}</p> : null}
     </>
   );
 }
@@ -493,7 +662,7 @@ function TimeControls({
 
   return (
     <section className="time-controls">
-      <h2 className="section-title">{t('play.advanceTitle')}</h2>
+      {/* No heading of its own: the fold's heading names this panel (see `PlaySections`). */}
       <div className="btn-row">
         {advanceButtons(calendar).map((button) => (
           <button
@@ -598,7 +767,6 @@ function CheckpointPanel({
 
   return (
     <section className="checkpoints">
-      <h2 className="section-title">{t('play.checkpointTitle')}</h2>
       <p className="muted">{t('play.checkpointHint')}</p>
 
       <form className="checkpoint-save" onSubmit={onSave}>
@@ -743,7 +911,6 @@ function ForkPanel({
 
   return (
     <section className="forks">
-      <h2 className="section-title">{t('play.forkTitle')}</h2>
       <p className="muted">{t('play.forkHint')}</p>
 
       <div className="btn-row">
@@ -872,7 +1039,6 @@ function SchedulerPanel() {
 
   return (
     <section className="scheduler">
-      <h2 className="section-title">{t('play.schedulerTitle')}</h2>
       <p className="muted">
         {t('play.schedulerHint', {
           speakers: String(schedule?.maxSpeakersPerRound ?? MAX_SPEAKERS_PER_ROUND),
@@ -1032,7 +1198,6 @@ function CastInterventionPanel({ sessionId, session }: { sessionId: Id; session:
 
   return (
     <section className="cast-intervention">
-      <h2 className="section-title">{t('play.castInterventionTitle')}</h2>
       <p className="muted">{t('play.castInterventionHint')}</p>
 
       {ids.length === 0 ? (
@@ -1309,7 +1474,8 @@ function openingChoosing(session: Session, chain: readonly Message[]): boolean {
  * WHAT THIS COMPONENT DOES AND DOES NOT DECIDE
  * It decides where the controls are, which sentence each one reads, and that a blank opening
  * is refused before the store is called. The decision that the choice is still OPEN is the
- * route's (`openingChoosing`, because `skipped` and the panel are one render decision), and
+ * route's — `PlaySections` mounts this panel exactly when `openingChoosing` holds and the user has
+ * not skipped, because `skipped` and the panel are one render decision — and
  * the decision that an opening may be WRITTEN is the store's: `state/chat-store.ts`'s two
  * actions re-read the session row and refuse unless `headMessageId` is `null`, so a stale
  * render, a second tab or a programmatic caller cannot append one.
@@ -1352,7 +1518,6 @@ function OpeningPanel({
 
   return (
     <section className="opening">
-      <h2 className="section-title">{t('play.openingTitle')}</h2>
       <p className="muted">{t('play.openingHint')}</p>
 
       <form className="opening-write" onSubmit={onWrite}>
@@ -1456,7 +1621,6 @@ function StatusBar({ sessionId, session }: { sessionId: Id; session: Session }) 
 
   return (
     <section className="variables">
-      <h2 className="section-title">{t('play.variablesTitle')}</h2>
       <p className="muted">{t('play.variablesHint')}</p>
 
       <form className="variable-add" onSubmit={onAdd}>

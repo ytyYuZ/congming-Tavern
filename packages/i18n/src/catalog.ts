@@ -780,6 +780,13 @@ export const zhCN = {
   'play.composerPlaceholder': '例如：我推开门，走进昏暗的酒馆。',
   'play.send': '发送',
   'play.stop': '停止',
+  /*
+   * The session's own fold on the play screen (B2): the screen keeps the transcript and the composer
+   * in place and folds the eight panels around them, so each folded panel needs a heading the table
+   * of contents can name. This one names the RENAME form — the session's title, on the session's own
+   * screen (see `play.nameSubmit` below for why the form is here rather than in the home list).
+   */
+  'play.sessionTitle': '本会话',
   /* The rename form: the button names the act, the status line reports whether the row changed. */
   'play.nameSubmit': '保存名称',
   'play.nameChanged': '已改名为「{name}」',
@@ -833,6 +840,12 @@ export const zhCN = {
   'play.clockNoSegment': '当前 {date}',
   /** The clock readout's accessible name; a screen reader reads this, not the `·`. */
   'play.clockLabel': '世界时钟',
+  /**
+   * The clock's fold heading (B2). Distinct from `play.clockLabel`, which is the readout's
+   * accessible name INSIDE the sentence: this one names the fold in the heading and in the table of
+   * contents, and the reading itself travels beside it as the section's summary line.
+   */
+  'play.clockTitle': '时间',
   /*
    * MANUAL TIME ADVANCE (M1-T2) — the controls beside the clock.
    *
@@ -1705,6 +1718,7 @@ export const en: Messages = {
   'play.composerPlaceholder': 'For example: I push the door open and step into the dim tavern.',
   'play.send': 'Send',
   'play.stop': 'Stop',
+  'play.sessionTitle': 'This session',
   'play.nameSubmit': 'Save name',
   'play.nameChanged': 'Renamed to “{name}”',
   'play.nameFailed': 'The session was not renamed; nothing was written',
@@ -1724,6 +1738,7 @@ export const en: Messages = {
   'play.clock': 'Now {date} ({segment})',
   'play.clockNoSegment': 'Now {date}',
   'play.clockLabel': 'World clock',
+  'play.clockTitle': 'Time',
   'play.advanceTitle': 'Advance time',
   'play.advanceSegment': '+1 segment',
   'play.advanceHour': '+1 hour',

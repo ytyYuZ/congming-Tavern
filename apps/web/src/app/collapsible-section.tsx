@@ -31,6 +31,13 @@
  * acceptance criterion is about finding a section, not about restoring a view. It also keeps this
  * primitive free of the storage layer, which is what lets the co-creation panel (B2) reuse it.
  *
+ * WHY A SECTION MAY CARRY A SUMMARY LINE (added by the play screen, B2)
+ * The play screen's clock is 「常驻」 (docs/01 §F11-1): its sentence has to stay readable on the
+ * screen that plays a session even though the panel it used to live in is now one fold among eight.
+ * So a section may render a short trailing note in its heading — live, unlike the section list — and
+ * the play screen passes the clock sentence there. The note is optional and defaults to nothing, which
+ * keeps the editors' headings exactly as they were.
+ *
  * WHY THE TABLE OF CONTENTS IS BUTTONS AND NOT `<a href="#id">`
  * The router is an in-memory history (`app.tsx`): an anchor's fragment would go through it, and a
  * fragment navigation is a navigation. The entry is an act on the screen, not a route, so it is a
@@ -189,6 +196,19 @@ export interface CollapsibleSectionProps {
   readonly section: SectionDefinition;
   readonly open: boolean;
   readonly onToggle: (id: string) => void;
+  /**
+   * A short trailing note in the heading, e.g. the play screen's 「当前 纪元 1 一月 1 06:30（晨）」.
+   *
+   * It is a PROP and not a field of `SectionDefinition` on purpose: a section definition is a module
+   * constant whose values must read the same on every render, while a summary is live — the clock
+   * changes when a turn advances it — and it belongs to the ROUTE (the play screen owns the session
+   * it summarises), not to the section list.
+   *
+   * It sits INSIDE the toggle button: it is part of the heading a click acts on, so no new target is
+   * invented, and the accessible name stays the one `aria-label` sets — a summary is a glance for a
+   * sighted user, not a second name for the control.
+   */
+  readonly summary?: ReactNode;
   readonly children: ReactNode;
 }
 
@@ -196,7 +216,13 @@ export interface CollapsibleSectionProps {
  * One foldable section: a heading whose button says whether it is open, and a body that is always
  * rendered and merely hidden. See the file header for why neither half is optional.
  */
-export function CollapsibleSection({ section, open, onToggle, children }: CollapsibleSectionProps) {
+export function CollapsibleSection({
+  section,
+  open,
+  onToggle,
+  summary,
+  children,
+}: CollapsibleSectionProps) {
   const { t } = useTranslation();
   const headingId = `${sectionId(section.id)}-title`;
   const bodyId = `${sectionId(section.id)}-body`;
@@ -207,7 +233,7 @@ export function CollapsibleSection({ section, open, onToggle, children }: Collap
     : t('common.sectionExpand', { name: t(section.title) });
   return (
     <section className="field-group collapsible-section" id={sectionId(section.id)}>
-      <h3 className="section-title" id={headingId}>
+      <h3 className="section-title section-heading" id={headingId}>
         <button
           className="section-toggle"
           type="button"
@@ -224,6 +250,11 @@ export function CollapsibleSection({ section, open, onToggle, children }: Collap
             {open ? '▾' : '▸'}
           </span>
           <span className="section-toggle-label">{t(section.title)}</span>
+          {summary === undefined ? null : (
+            <span className="section-summary" data-summary={section.id}>
+              {summary}
+            </span>
+          )}
         </button>
       </h3>
       {/* `hidden` and never a missing element — the field inventory has to stay complete. */}

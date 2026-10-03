@@ -267,7 +267,26 @@ async function clickButton(host: HTMLElement, label: string): Promise<void> {
 }
 
 /**
- * Click one button inside a VARIABLE's row (its own 保存 / 删除).
+ * Click the button whose label is exactly `label`, inside one subtree.
+ *
+ * The screen's labels are no longer unique across the page (fix B2): the conversation comes first
+ * now, and a message bubble carries its own 删除 / 确认删除, so a whole-page search answers about the
+ * first bubble rather than about the panel under test. Whole-page `clickButton` stays for the cases
+ * that mean the page (the composer, and the bubbles themselves); a case about one panel names it.
+ */
+async function clickIn(scope: Element, label: string): Promise<void> {
+  const button = Array.from(scope.querySelectorAll('button')).find(
+    (candidate) => candidate.textContent === label,
+  );
+  if (button === undefined) throw new Error(`no button labelled ${label} in the given scope`);
+  await act(async () => {
+    button.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
+/**
+ * Click one button inside a variable's row (its own 保存 / 删除).
  *
  * Scoped to the row because the status bar renders one save button per variable, so a
  * whole-document search would have to guess which one belongs to the value under test.
@@ -419,10 +438,26 @@ describe('route smoke tests', () => {
     // The transcript came from the database through the store's live subscription, so
     // both rows are on screen — which is the "重启后仍在" half of the acceptance.
     expect(host.textContent).toContain('我推开门');
+    /*
+     * THE ORDER IS ASSERTED INSIDE `.transcript`, NOT OVER THE WHOLE PAGE (fix B2).
+     * The composer's placeholder is 「例如：我推开门，走进昏暗的酒馆。」 (`play.composerPlaceholder`,
+     * `packages/i18n/src/catalog.ts`), so the phrase this assertion searches for exists OUTSIDE the
+     * transcript too. Which of the two a whole-page `indexOf` reads first is then a fact about
+     * layout: with the composer below the conversation — what `PlayRoute` renders today — the page's
+     * first hit is the transcript's own user row (measured; see `documents why the order assertion is
+     * scoped to the transcript, not the page`), but put the composer above it and the placeholder
+     * wins, leaving a whole-page assertion green even with the transcript rendered back-to-front.
+     * Scoping the order assertions (and the two bubble-class ones) to the transcript makes them about
+     * the conversation in either layout, which is what this case is named for. The 发送/停止/输入区
+     * assertions stay on the page: they are the screen's own furniture rather than the transcript's.
+     */
+    const transcriptHtml = transcriptOf(host).innerHTML;
+    expect(transcriptHtml.indexOf('我推开门')).toBeLessThan(
+      transcriptHtml.indexOf('门后是昏暗的酒馆。'),
+    );
+    expect(transcriptHtml).toContain('bubble-user');
+    expect(transcriptHtml).toContain('bubble-assistant');
     const html = host.innerHTML;
-    expect(html.indexOf('我推开门')).toBeLessThan(html.indexOf('门后是昏暗的酒馆。'));
-    expect(html).toContain('bubble-user');
-    expect(html).toContain('bubble-assistant');
     expect(html).toContain('发送');
     expect(html).toContain('停止');
     expect(host.querySelector('#turn-input')).not.toBeNull();
@@ -449,6 +484,11 @@ describe('route smoke tests', () => {
     expect(host.textContent).not.toContain('the API key was rejected');
     expect(host.textContent).not.toContain(API_KEY);
     expect(host.textContent).not.toContain('重试');
+    // AND THE BANNER IS NOT FOLDED (fix B2): the refusal is about this screen, so it has to be
+    // readable without opening anything. `closest` is the question "does this belong to a fold".
+    const banner = host.querySelector('.notice-error');
+    expect(banner).not.toBeNull();
+    expect(banner?.closest('.section-body')).toBeNull();
   });
 
   it('the play view offers to retry only when the adapter said it is retryable', async () => {
@@ -778,12 +818,15 @@ describe('M1-M1 / M1-T4: the save-point panel', () => {
     expect(host.textContent).toContain('确认回滚');
     expect((await getSession(session.id))?.state.clock).toBe(0);
 
-    // 「删除」 alone changes nothing either.
-    await clickButton(host, '删除');
-    expect(host.textContent).toContain('确认删除');
+    // 「删除」 alone changes nothing either — SCOPED to the panel (fix B2). The transcript now renders
+    // above the folds, and a message bubble carries its own 删除 / 确认删除, so the whole-page
+    // `clickButton` this line used to be would arm the bubble's delete and leave the save point
+    // alone. The scope is the panel because the panel is what this case is about.
+    await clickIn(checkpointPanel(host), '删除');
+    expect(checkpointPanel(host).textContent).toContain('确认删除');
     expect((await listCheckpoints(session.id)).length).toBe(1);
 
-    await clickButton(host, '确认删除');
+    await clickIn(checkpointPanel(host), '确认删除');
     await waitForState(() => useChatStore.getState().checkpoints.length === 0);
     expect(await listCheckpoints(session.id)).toEqual([]);
     expect(host.textContent).toContain('还没有存档点');
@@ -1111,9 +1154,75 @@ describe('M1-G3: the local key encryption section', () => {
   });
 });
 
-/** The labels of every button in `host`, for "which action is offered here" assertions. */
-function buttonLabels(host: HTMLElement): string[] {
-  return Array.from(host.querySelectorAll('button')).map((button) => button.textContent ?? '');
+/**
+ * The labels of every button in `scope`, for "which action is offered here" assertions.
+ *
+ * `Element` rather than `HTMLElement` because B2's assertions ask the question of a SUBTREE
+ * (`openingPanel(host)`, `checkpointPanel(host)`) as well as of the page: the folds render headings
+ * that are buttons too, so a page-wide answer to "is 跳过 offered" is no longer the same question.
+ */
+function buttonLabels(scope: Element): string[] {
+  return Array.from(scope.querySelectorAll('button')).map((button) => button.textContent ?? '');
+}
+
+/**
+ * The transcript subtree, for order assertions that must not match the composer's placeholder
+ * (fix B2): `play.composerPlaceholder` contains 「我推开门」, so a whole-page `indexOf` compares
+ * the composer with the transcript instead of comparing the transcript's own rows.
+ */
+function transcriptOf(host: HTMLElement): Element {
+  const transcript = host.querySelector('.transcript');
+  if (transcript === null) throw new Error('the play view rendered no transcript');
+  return transcript;
+}
+
+/**
+ * The save-point panel's own subtree (fix B2).
+ *
+ * Its labels are not unique on the page any more: the transcript renders above the folds, and each
+ * bubble editor offers 删除 / 确认删除, so "which 删除 was clicked" has to be said out loud.
+ */
+function checkpointPanel(host: HTMLElement): Element {
+  const panel = host.querySelector('.checkpoints');
+  if (panel === null) throw new Error('the play view rendered no checkpoint panel');
+  return panel;
+}
+
+/**
+ * The opening panel's own subtree (fix B2).
+ *
+ * The panel is folded now: its FOLD exists whenever the choice is live, but its buttons only exist
+ * inside the panel's body — so "which opening actions are offered" is a question about `.opening`
+ * and not about the page. Asking the page would answer with the fold's own heading text
+ * (开场/play.openingTitle), which is exactly what these assertions must not confuse with a choice.
+ */
+function openingPanel(host: HTMLElement): Element {
+  const panel = host.querySelector('.opening');
+  if (panel === null) throw new Error('the play view rendered no opening panel');
+  return panel;
+}
+
+/**
+ * The heading of one fold, addressed the way a user addresses it: the toggle button the heading is.
+ * Scoped to the toggle so the words in the body (headers, hints) cannot satisfy it.
+ */
+function sectionToggle(host: HTMLElement, id: string): HTMLElement {
+  const toggle = host.querySelector(`button[data-action="section-toggle"][data-section="${id}"]`);
+  if (toggle === null) throw new Error(`the play view rendered no section-toggle-${id}`);
+  return toggle as HTMLElement;
+}
+
+/**
+ * Whether one fold's body is mounted AND hidden.
+ *
+ * `hidden` rather than "not in the DOM", because B2 requires every field to stay mounted: the two
+ * assertions are deliberately separate, so a future collapse that unmounts would fail on the first
+ * one instead of passing quietly.
+ */
+function foldIsClosed(host: HTMLElement, id: string): boolean {
+  const body = host.querySelector(`#section-${id}-body`);
+  if (body === null) throw new Error(`fold ${id} rendered no body`);
+  return body.hasAttribute('hidden');
 }
 
 /* ──────────────────── M1-S2: the message stream and its tree ──────────────────── */
@@ -1705,9 +1814,16 @@ describe('M1-S3: the opening panel', () => {
     // The rendered copy is pinned by the zh-CN row this file writes in `beforeEach`, which is
     // what makes "the panel is in the active language" a checked fact rather than an assumption.
     expect(host.textContent).toContain(zh.t('play.openingHint'));
-    expect(buttonLabels(host)).toContain(zh.t('play.openingWrite'));
-    expect(buttonLabels(host)).toContain(zh.t('play.openingGenerate'));
-    expect(buttonLabels(host)).toContain(zh.t('play.openingSkip'));
+    /*
+     * THE CHOICES ARE SOUGHT IN THE PANEL, NOT ON THE PAGE (fix B2): the panel is folded now, and
+     * the fold's own heading is a button whose label is play.openingTitle — so a page-wide button
+     * list answers "which panels exist" rather than "which choices are offered". The panel is open
+     * by default (see `PLAY_SECTIONS`), so these three are still reachable without a first click.
+     */
+    expect(buttonLabels(openingPanel(host))).toContain(zh.t('play.openingWrite'));
+    expect(buttonLabels(openingPanel(host))).toContain(zh.t('play.openingGenerate'));
+    expect(buttonLabels(openingPanel(host))).toContain(zh.t('play.openingSkip'));
+    expect(foldIsClosed(host, 'opening')).toBe(false);
     expect(host.querySelector('.opening-input')).not.toBeNull();
     // Nothing is stored by merely showing the panel: offering a choice is not choosing.
     expect(await getChain(session.id)).toEqual([]);
@@ -1731,9 +1847,11 @@ describe('M1-S3: the opening panel', () => {
     await waitForText(host, '酒馆的门在身后合上。');
 
     // THE PANEL IS GONE once the chain is non-empty — the empty-transcript position is what
-    // offered the choice, and it no longer holds.
+    // offered the choice, and it no longer holds. THE WHOLE PANEL, not just its fold (fix B2): the
+    // old page-wide `buttonLabels(host)` no longer answers this question (the other folds' headings
+    // are buttons too), so the assertion is that `.opening` itself is not rendered.
     expect(host.querySelector('.opening-input')).toBeNull();
-    expect(buttonLabels(host)).not.toContain(zh.t('play.openingWrite'));
+    expect(host.querySelector('.opening')).toBeNull();
 
     // AND A SECOND ATTEMPT IS A NO-OP even when a caller reaches the action directly: an
     // opening is a start, so a second row with `parentId: null` must be impossible. Wrapped in
@@ -1827,7 +1945,9 @@ describe('M1-S3: the opening panel', () => {
     // other half — a caller that reaches it directly is refused too.
     await waitForState(() => useChatStore.getState().messageChain.length === 1);
     expect(host.querySelector('.opening-input')).toBeNull();
-    expect(buttonLabels(host)).not.toContain(zh.t('play.openingGenerate'));
+    // The panel is not merely folded away, it is not OFFERED (fix B2): see the note in the
+    // hand-written case above for why this is asked of `.opening` and not of the page's buttons.
+    expect(host.querySelector('.opening')).toBeNull();
     // Wrapped in `act` like every other direct store call in this file: the action updates the
     // store, so an unwrapped call would leave React warning that the DOM assertions above may
     // have read a tree it never flushed.
@@ -2486,6 +2606,188 @@ describe('M1-S4: the cast intervention', () => {
           speakerReasonText({ kind: 'desire-ability', desire: 90, ability: 80 }),
         ),
       }),
+    );
+  });
+});
+
+/* ───────────────── B2: the play screen's folds ───────────────── */
+
+/**
+ * B2's ACCEPTANCE IS A LAYOUT: the conversation and the composer stay on screen, everything else is
+ * folded, and folding means "still mounted, merely hidden" — the panels' fields are addressed by
+ * `querySelector` all over this file, so a fold that unmounted them would break tests that have
+ * nothing to do with layout.
+ *
+ * These cases therefore ask the DOM three different questions, and they are deliberately not the
+ * same question:
+ *   1. WHERE a panel is (`closest('.section-body')`) — the layout itself;
+ *   2. WHETHER a fold is closed (`hidden` on the body) while its body still exists — the B1 contract;
+ *   3. WHAT the heading shows while closed (the clock's own sentence) — 「常驻」 for the clock.
+ */
+describe('the play screen folds everything but the conversation (B2)', () => {
+  const zh = createTranslator('zh-CN');
+
+  it('leaves the transcript and the composer unfolded, and folds the panels', async () => {
+    const session = await createSession({ title: 'folds' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+
+    // EVERY panel is inside a fold's body — including the opening panel, which is open by default
+    // but still a fold. `.world-clock` is the clock's reading (`WorldClock`), `.session-rename` is
+    // the session form, `.variables` is the status bar.
+    for (const panel of [
+      '.session-rename',
+      '.world-clock',
+      '.time-controls',
+      '.variables',
+      '.checkpoints',
+      '.forks',
+      '.scheduler',
+      '.cast-intervention',
+      '.opening',
+    ]) {
+      const element = host.querySelector(panel);
+      expect(element, panel).not.toBeNull();
+      expect(element?.closest('.section-body'), panel).not.toBeNull();
+    }
+
+    // AND THE TWO THINGS THE SCREEN KEEPS ARE NOT: the conversation and the composer (with 发送 and
+    // 停止 inside it). Asserted as "not in any fold", so this case fails if a later change folds one
+    // of them rather than only if it moves. The banner is the third kept thing; it only exists in an
+    // error, and its own case below asserts that it is unfolded too.
+    expect(transcriptOf(host).closest('.section-body')).toBeNull();
+    expect(host.querySelector('.composer')?.closest('.section-body')).toBeNull();
+    expect(host.querySelector('#turn-input')?.closest('.section-body')).toBeNull();
+  });
+
+  it('shows the clock reading in the 时间 heading while its body stays mounted and hidden', async () => {
+    const session = await createSession({ title: 'folded-clock' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.clockTitle'));
+
+    // The summary is the clock's OWN sentence — the same `worldClockText` the panel prints — so a
+    // folded clock still reads 「当前 …」 on screen without a click. Built through the same pair the
+    // view uses, so a catalog rewording follows rather than breaks it.
+    const summary = host.querySelector('[data-summary="clock"]');
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toBe(await rememberedClock(session.id));
+
+    // FOLDED, NOT UNMOUNTED: the body is in the DOM with `hidden` on it, and so is the reading
+    // inside it. The two assertions are separate on purpose (see `foldIsClosed`).
+    expect(foldIsClosed(host, 'clock')).toBe(true);
+    expect(host.querySelector('.world-clock')).not.toBeNull();
+  });
+
+  it('opens only the session fold and the opening choice by default, and mounts every panel', async () => {
+    const session = await createSession({ title: 'fold-defaults' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.openingTitle'));
+
+    // The session fold is the one open by default: it is what names the session, and it is the only
+    // panel whose content is read rather than acted on. The opening fold is open because a session
+    // that has not started has no other action — hiding the only way to begin would be a dead screen.
+    expect(foldIsClosed(host, 'session')).toBe(false);
+    expect(foldIsClosed(host, 'opening')).toBe(false);
+    for (const id of ['clock', 'advance', 'status', 'checkpoints', 'forks', 'scheduler', 'cast']) {
+      expect(foldIsClosed(host, id), id).toBe(true);
+    }
+
+    // ...AND NOTHING WAS UNMOUNTED TO DO IT: every panel's own control is still in the DOM, which is
+    // what keeps `querySelector`-based cases elsewhere in this file working, and what keeps a
+    // half-typed draft in a folded panel from being lost.
+    expect(host.querySelector('#session-rename-name')).not.toBeNull();
+    expect(host.querySelector('.world-clock')).not.toBeNull();
+    expect(host.querySelector('#advance-minutes')).not.toBeNull();
+    expect(host.querySelector('#checkpoint-label')).not.toBeNull();
+  });
+
+  it('opens a fold on its own heading and on its table-of-contents entry', async () => {
+    const session = await createSession({ title: 'fold-toggle' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.checkpointTitle'));
+
+    expect(foldIsClosed(host, 'checkpoints')).toBe(true);
+    // The heading is a button whose accessible name is the ACT (common.sectionExpand/Collapse) and
+    // whose state is `aria-expanded` — the B1 contract, asserted here on the play screen's own fold.
+    expect(sectionToggle(host, 'checkpoints').getAttribute('aria-expanded')).toBe('false');
+
+    await act(async () => {
+      sectionToggle(host, 'checkpoints').click();
+    });
+    expect(foldIsClosed(host, 'checkpoints')).toBe(false);
+    expect(sectionToggle(host, 'checkpoints').getAttribute('aria-expanded')).toBe('true');
+    // The panel's own field is the proof that opening reveals the panel rather than clearing a flag.
+    expect(host.querySelector('#checkpoint-label')).not.toBeNull();
+
+    await act(async () => {
+      sectionToggle(host, 'checkpoints').click();
+    });
+    expect(foldIsClosed(host, 'checkpoints')).toBe(true);
+
+    // THE TABLE OF CONTENTS OPENS ITS TARGET TOO. This is the only way to reach a folded panel from
+    // the top of the screen, so the jump is asserted by the target becoming visible.
+    await act(async () => {
+      const jump = host.querySelector(
+        'button[data-action="section-jump"][data-section="checkpoints"]',
+      );
+      if (jump === null) throw new Error('no table-of-contents entry for checkpoints');
+      (jump as HTMLElement).click();
+    });
+    expect(foldIsClosed(host, 'checkpoints')).toBe(false);
+  });
+
+  /**
+   * THE SCOPE OF THE ORDER ASSERTION IS ITSELF A CHECKED FACT (fix B2, A5's lesson).
+   *
+   * `play.composerPlaceholder` is 「例如：我推开门，走进昏暗的酒馆。」, whose first four characters are
+   * the user row's own opening words. A whole-page `indexOf('我推开门')` therefore asks where that
+   * phrase is rendered FIRST, and the answer is a question about layout, not about the chain:
+   *
+   * - MEASURED, with the composer under the transcript (what `PlayRoute` renders today): the
+   *   transcript's own markup begins at offset 8669 of this page's HTML and the first 「我推开门」 is at
+   *   8806 — INSIDE that markup. The composer sits further down, so the old whole-page form happened
+   *   to compare the transcript's two rows. It was right for a reason it did not state.
+   * - A layout that puts the composer ABOVE the transcript — the input-first arrangement the screen's
+   *   own decision allows — flips that: the placeholder wins the whole-page `indexOf`, and the
+   *   assertion stays green even with the transcript rendered back-to-front.
+   *
+   * So the order assertion itself is scoped to `.transcript` (see `the play view renders the PERSISTED
+   * chain, oldest first`), and this case pins the facts that make the scope necessary rather than
+   * decorative: the placeholder really does carry the phrase, the composer really does sit after the
+   * transcript today, and the transcript's own comparison is the persisted order. Reword the
+   * placeholder or move the composer up and this case fails — which is the signal to re-read the note
+   * above rather than let it quietly stop describing the screen.
+   */
+  it('documents why the order assertion is scoped to the transcript, not the page', async () => {
+    const session = await createSession({ title: 'order-scope' });
+    const user = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '我推开门',
+    });
+    const assistant = await appendMessage({
+      sessionId: session.id,
+      parentId: user.id,
+      role: 'assistant',
+      content: '门后是昏暗的酒馆。',
+    });
+    await setHeadMessageId(session.id, assistant.id);
+
+    const host = await mountAt(`/play/${session.id}`, '门后是昏暗的酒馆。');
+
+    // 1. THE COLLISION IS REAL: the phrase the old assertion searched for also lives in the composer.
+    expect(host.querySelector('#turn-input')?.getAttribute('placeholder')).toContain('我推开门');
+
+    // 2. ...AND THE COMPOSER IS BELOW THE TRANSCRIPT TODAY, which is the only reason the old
+    //    whole-page form was not already answering with the placeholder.
+    const pageHtml = host.innerHTML;
+    expect(pageHtml.indexOf('class="transcript"')).toBeLessThan(
+      pageHtml.indexOf('class="composer"'),
+    );
+    expect(pageHtml.indexOf('我推开门')).toBeGreaterThan(pageHtml.indexOf('class="transcript"'));
+
+    // 3. INSIDE THE TRANSCRIPT the persisted order is the one being compared — the property the
+    //    scoped assertion in `the play view renders the PERSISTED chain, oldest first` relies on.
+    const transcriptHtml = transcriptOf(host).outerHTML;
+    expect(transcriptHtml.indexOf('我推开门')).toBeLessThan(
+      transcriptHtml.indexOf('门后是昏暗的酒馆。'),
     );
   });
 });

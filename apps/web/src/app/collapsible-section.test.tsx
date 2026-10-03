@@ -478,4 +478,61 @@ describe('the collapse primitive (fix B1)', () => {
       host.remove();
     }
   });
+
+  /**
+   * The SUMMARY LINE (added by the play screen, B2) is the primitive's one optional extra: a heading
+   * that says what is folded under it while the fold is CLOSED — the play screen's world clock.
+   *
+   * Three things are asserted, because three things were decided when the prop was added: it renders
+   * INSIDE the toggle (so it invents no second target and the fold still has exactly one button), it
+   * carries the section's id (so a test can address the line the way this one does), and a caller that
+   * passes nothing gets NO node — which is what keeps the two editors' headings unchanged by it.
+   */
+  it('renders an optional summary line inside the heading, and nothing when the caller passes none', async () => {
+    const probeSections: readonly SectionDefinition[] = [
+      { id: 'one', title: 'world.sectionBasic', openByDefault: false },
+      { id: 'two', title: 'world.sectionRegions', openByDefault: false },
+    ];
+    const [first, second] = probeSections as readonly [SectionDefinition, SectionDefinition];
+    const host = document.createElement('div');
+    document.body.append(host);
+    const probeRoot = createRoot(host);
+    await act(async () => {
+      probeRoot.render(
+        <div>
+          <CollapsibleSection
+            section={first}
+            open={false}
+            onToggle={() => undefined}
+            summary="当前 纪元 1 一月 1 06:30（晨）"
+          >
+            <input data-field="probe-one" />
+          </CollapsibleSection>
+          <CollapsibleSection section={second} open={false} onToggle={() => undefined}>
+            <input data-field="probe-two" />
+          </CollapsibleSection>
+        </div>,
+      );
+    });
+    try {
+      const toggle = sectionOf(host, 'one').toggle;
+      const summary = toggle.querySelector('.section-summary');
+      expect(summary?.textContent).toBe('当前 纪元 1 一月 1 06:30（晨）');
+      expect(summary?.getAttribute('data-summary')).toBe('one');
+      // ONE button in the heading, and the line is inside it: the fold's target did not multiply.
+      expect(host.querySelector('#section-one-title')?.querySelectorAll('button')).toHaveLength(1);
+      // The state is still the button's, not the line's, and the body is still mounted-and-hidden.
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(bodyOf(host, 'one').hasAttribute('hidden')).toBe(true);
+      expect(host.querySelector('[data-field="probe-one"]')).not.toBeNull();
+      // NO SUMMARY, NO NODE: a heading without one renders exactly what it rendered before B2.
+      expect(sectionOf(host, 'two').toggle.querySelector('.section-summary')).toBeNull();
+      expect(host.querySelector('[data-summary="two"]')).toBeNull();
+    } finally {
+      await act(async () => {
+        probeRoot.unmount();
+      });
+      host.remove();
+    }
+  });
 });

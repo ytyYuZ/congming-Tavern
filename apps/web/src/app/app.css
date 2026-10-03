@@ -866,6 +866,58 @@ body {
   width: 0.75rem;
 }
 
+/*
+ * The play screen's folded panels (fix B2) put every heading's summary line on the RIGHT of the same
+ * row: `<h3>` is the row, the toggle is its control, and `.section-summary` is pushed to the far end
+ * by the auto margin. `baseline` keeps the line sitting on the title's baseline rather than centred
+ * against it, which is what makes it read as a subtitle rather than as a second heading.
+ */
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/*
+ * The play screen's summary line: what the fold is, in one glance, while the fold is CLOSED — the
+ * world clock's reading (「常驻」) and nothing that a heading of its own could not already say.
+ *
+ * It is inside the toggle button, so the row is not a new target: `tabular-nums` keeps the minute
+ * from shifting the line as the clock advances, and `text-align: left` undoes the `inline-flex`
+ * button's own centring so a wrapped line still reads from the same edge.
+ */
+.section-summary {
+  margin-left: auto;
+  padding-left: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+/*
+ * THE PLAY SCREEN'S PANELS LOST THEIR OWN TOP RULES (fix B2). Each of these used to separate itself
+ * from the panel above with `border-top` + `margin-top` + `padding-top`, because the play screen was
+ * one column of stacked panels. They are now the bodies of `.field-group.collapsible-section` folds,
+ * which already draws that rule and that spacing — so the first row inside a fold is no longer
+ * pushed away from its own heading by a stray gap and a second border. The DECLARATION rather than
+ * the class is what is overridden: `.opening-write`, `.advance-custom` and their neighbours inside
+ * these panels are untouched.
+ */
+.time-controls,
+.checkpoints,
+.forks,
+.variables,
+.scheduler,
+.cast-intervention,
+.opening,
+.session-rename {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 /* The validation panel. Always rendered (「校验可用」), green when there is nothing to report. */
 .issues {
   border-top: 1px solid var(--line);
