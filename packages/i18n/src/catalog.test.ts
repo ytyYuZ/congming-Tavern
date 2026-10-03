@@ -25,6 +25,7 @@ import { LOCALES } from './locale';
 const AREAS = [
   'common',
   'nav',
+  'pack',
   'setup',
   'home',
   'session',

@@ -145,6 +145,70 @@ export const zhCN = {
    */
   'nav.sessions': '会话',
   'nav.currentSession': '回到当前会话',
+  /**
+   * The third door onto content (acceptance fix A4). The two libraries show what is
+   * ALREADY here; this one moves content in and out, which is why it sits beside them
+   * rather than inside Settings.
+   */
+  'nav.packs': '内容包',
+
+  /* ── pack: import and export a content pack (acceptance fix A4) ──────────── */
+  /**
+   * WHY THIS AREA EXISTS AT ALL
+   * The manual acceptance test found no way to import or export a content pack, and
+   * no way to obtain the example pack, from inside the app. `/packs` is that way, and
+   * every sentence it says is here. The finding DETAILS the page shows are NOT here:
+   * they are `packages/importers`' own diagnostics, one vocabulary that must not be
+   * re-worded into a second one (`import-package.ts` says so itself).
+   */
+  'pack.title': '内容包',
+  'pack.hint':
+    '把当前的库导出成一个 .stpack 文件，或者从文件、内置示例导入。导入会先给出报告，确认之后才写入。',
+  'pack.exampleWhy':
+    '内置示例「长日港 · 末班渡」在进程内构建，并走与你所选文件完全相同的一条导入路径。命令行的 stpack 写入的是 JSON 文件库，与浏览器应用使用的 IndexedDB 不是同一个库，所以应用内需要这个入口。',
+  'pack.exportTitle': '导出',
+  'pack.exportHint': '把库里每个世界和角色的最新版本（连同世界书条目）打包成一个 .stpack 文件。',
+  'pack.exportButton': '导出内容包',
+  'pack.exportEmpty': '库里还没有世界或角色，没有可导出的内容。',
+  'pack.exported': '已导出 {name}',
+  'pack.exportFailed': '导出失败：{detail}',
+  'pack.importTitle': '导入',
+  'pack.importHint':
+    '选择一个 .stpack 文件。解析后先显示报告，确认才会写入；被拒绝的导入不会改动任何数据。',
+  'pack.chooseFile': '选择文件…',
+  'pack.importExample': '导入示例内容包',
+  'pack.previewTitle': '导入报告（尚未写入）',
+  'pack.previewHint': '下面是这次导入将会发生的改动。确认之前不会写入任何数据。',
+  'pack.confirm': '确认导入',
+  'pack.cancel': '取消',
+  'pack.resultTitle': '导入结果',
+  'pack.resultHint': '上表的内容已经写入。',
+  'pack.refused': '这个包无法导入，库没有改动。',
+  'pack.findings': '报告与提示',
+  'pack.noFindings': '没有问题。',
+  'pack.packageLine': '{name}（{kind}，格式版本 {formatVersion}）',
+  'pack.counts': '新增 {created} · 复用 {reused} · 改名 {remapped} · 跳过 {skipped}',
+  'pack.importedTitle': '导入的世界与角色',
+  'pack.entityWorld': '世界',
+  'pack.entityWorldbook': '世界书条目',
+  'pack.entityCharacter': '角色',
+  'pack.entityPromptPreset': '提示预设',
+  'pack.entitySession': '会话',
+  'pack.entityMessage': '消息',
+  'pack.entityCheckpoint': '存档点',
+  'pack.entityAgenda': '日程',
+  'pack.entityMemory': '记忆',
+  'pack.actionCreated': '新增',
+  'pack.actionReused': '复用',
+  'pack.actionRemapped': '改名',
+  'pack.actionSkipped': '跳过',
+  'pack.openWorlds': '打开世界库',
+  'pack.openCharacters': '打开角色库',
+  'pack.startExample': '用示例开局',
+  'pack.startExampleHint': '按示例包建议的搭配（长日港，扮演沈砚），用刚导入的行新建一个会话。',
+  'pack.startExampleUnavailable': '示例行不在库里，无法用示例开局。',
+  'pack.startFailed': '未能创建会话：{detail}',
+  'pack.fileUnreadable': '无法读取这个文件：{detail}',
 
   /* ── setup: the BYO-Key screen, then the appearance section (M1-G2) ──────── */
   'setup.loading': '正在读取设置…',
@@ -1110,6 +1174,62 @@ export const en: Messages = {
   'nav.characters': 'Characters',
   'nav.sessions': 'Sessions',
   'nav.currentSession': 'Back to the current session',
+  'nav.packs': 'Content packs',
+
+  /* ── pack ───────────────────────────────────────────────────────────────── */
+  'pack.title': 'Content packs',
+  'pack.hint':
+    'Export this library to one .stpack file, or import one from a file or the built-in example. An import shows its report first and writes only once you confirm.',
+  'pack.exampleWhy':
+    'The built-in example (长日港 · 末班渡) is built in process and imported through exactly the same path as a file you pick. The stpack command-line tool writes a JSON-file library, which is not the IndexedDB database this app uses, so the app needs an entry of its own.',
+  'pack.exportTitle': 'Export',
+  'pack.exportHint':
+    'Package the newest version of every world and character in this library, with its worldbook entries, into one .stpack file.',
+  'pack.exportButton': 'Export content pack',
+  'pack.exportEmpty':
+    'This library holds no world and no character yet, so there is nothing to export.',
+  'pack.exported': 'Exported {name}',
+  'pack.exportFailed': 'Export failed: {detail}',
+  'pack.importTitle': 'Import',
+  'pack.importHint':
+    'Pick a .stpack file. Its report is shown first and nothing is written until you confirm; a refused import changes nothing at all.',
+  'pack.chooseFile': 'Choose a file…',
+  'pack.importExample': 'Import the example content pack',
+  'pack.previewTitle': 'Import report (nothing written yet)',
+  'pack.previewHint':
+    'This is the change the import would make. Nothing is written until you confirm.',
+  'pack.confirm': 'Confirm import',
+  'pack.cancel': 'Cancel',
+  'pack.resultTitle': 'Import result',
+  'pack.resultHint': 'The rows listed above have been written.',
+  'pack.refused': 'This package cannot be imported; the library is unchanged.',
+  'pack.findings': 'Findings',
+  'pack.noFindings': 'No findings.',
+  'pack.packageLine': '{name} ({kind}, format version {formatVersion})',
+  'pack.counts': 'created {created} · reused {reused} · remapped {remapped} · skipped {skipped}',
+  'pack.importedTitle': 'Imported worlds and characters',
+  'pack.entityWorld': 'World',
+  'pack.entityWorldbook': 'Worldbook entry',
+  'pack.entityCharacter': 'Character',
+  'pack.entityPromptPreset': 'Prompt preset',
+  'pack.entitySession': 'Session',
+  'pack.entityMessage': 'Message',
+  'pack.entityCheckpoint': 'Checkpoint',
+  'pack.entityAgenda': 'Agenda',
+  'pack.entityMemory': 'Memory',
+  'pack.actionCreated': 'created',
+  'pack.actionReused': 'reused',
+  'pack.actionRemapped': 'remapped',
+  'pack.actionSkipped': 'skipped',
+  'pack.openWorlds': 'Open the world library',
+  'pack.openCharacters': 'Open the character library',
+  'pack.startExample': 'Start the example session',
+  'pack.startExampleHint':
+    'Create a session from the rows just imported, using the pairing the example pack suggests (长日港, playing 沈砚).',
+  'pack.startExampleUnavailable':
+    'The example rows are not in this library, so the example session cannot be started.',
+  'pack.startFailed': 'Could not create the session: {detail}',
+  'pack.fileUnreadable': 'Could not read this file: {detail}',
 
   /* ── setup ──────────────────────────────────────────────────────────────── */
   'setup.loading': 'Loading settings…',

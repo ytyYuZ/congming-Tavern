@@ -54,6 +54,7 @@ import { CharacterRoute } from './routes/character';
 import { CharactersRoute } from './routes/characters';
 import { HomeRoute } from './routes/home';
 import { NewSessionRoute } from './routes/new-session';
+import { PacksRoute } from './routes/packs';
 import { PlayRoute } from './routes/play';
 import { SetupRoute } from './routes/setup';
 import { WorldRoute } from './routes/world';
@@ -128,6 +129,22 @@ const characterRoute = createRoute({
 });
 
 /**
+ * Importing and exporting a content pack (M1-A4).
+ *
+ * WHY THIS IS A ROUTE OF ITS OWN. It is the one screen that moves the WHOLE library across the
+ * boundary of the app, in either direction, so it is something a user goes TO — the same reason
+ * the two card libraries are routes rather than panels. It is also the only address that can
+ * answer "where do I get the example pack?", which is what the acceptance run could not find:
+ * `tools/stpack-cli` builds the same bundle but writes a JSON-file library, not this app's
+ * IndexedDB, so the app needs an entry of its own.
+ */
+const packsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/packs',
+  component: PacksPage,
+});
+
+/**
  * The header every route shares: the product name, the language picker, the session links, and the
  * only link to the setup screen.
  *
@@ -180,9 +197,11 @@ function AppHeader() {
           </Link>
         )}
         {/* The two card libraries (M1-W1 / M1-C1) sit beside the setup link, because a library is
-            something a user goes TO rather than something a screen offers. */}
+            something a user goes TO rather than something a screen offers. `/packs` joins them
+            (M1-A4) for the same reason: it moves whole libraries, not one card. */}
         <Link to="/worlds">{t('nav.worlds')}</Link>
         <Link to="/characters">{t('nav.characters')}</Link>
+        <Link to="/packs">{t('nav.packs')}</Link>
         <Link to="/setup">{t('nav.settings')}</Link>
         <select
           className="locale-picker"
@@ -292,6 +311,17 @@ function CharacterPage() {
   );
 }
 
+function PacksPage() {
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <PacksRoute />
+      </main>
+    </>
+  );
+}
+
 export const routeTree = rootRoute.addChildren([
   homeRoute,
   setupRoute,
@@ -301,6 +331,7 @@ export const routeTree = rootRoute.addChildren([
   worldRoute,
   charactersRoute,
   characterRoute,
+  packsRoute,
 ]);
 
 /** A router over the tree, starting at `initialPath`. A factory so each test is fresh. */

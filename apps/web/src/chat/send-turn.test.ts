@@ -772,14 +772,15 @@ describe('M1-S6: variables through a turn', () => {
  *   (c) `Message.meta`
  *   (d) user-facing error text, including a gateway that echoes the key back
  *
- * WHY (a) IS PROVEN AT THE SOURCE, AND WHAT THAT DOES AND DOES NOT COVER
- * `apps/web` declares no dependency on `@smarttavern/importers` (there is no workspace link for
- * it), so this file cannot run the exporter. The export side is therefore proven where the
- * exporter lives — `packages/importers/src/export-secrets.test.ts` shows that `settings` and
- * `providers` are never opened by an export at all — and the APP side is proven here, one level
- * upstream: an export can only copy bytes that are in the database, so the assertion is that
- * after the Web-side migration the plaintext key exists in NO row of ANY collection. That is
- * strictly stronger than checking the exporter's own collection list, and it needs no import.
+ * WHY (a) IS PROVEN FROM THE ROWS, AND WHAT THAT DOES AND DOES NOT COVER
+ * The app now DOES depend on `@smarttavern/importers` — M1-A4 added the workspace link so that
+ * `/packs` can export — and `apps/web/src/packs/pack.test.ts` scans the bytes this app's own
+ * export produces. The assertion below still stays one level upstream, and is still the stronger
+ * one: an export can only copy bytes that are in the database, so what is proven here is that
+ * after the Web-side migration the plaintext key exists in NO row of ANY collection — including
+ * rows the exporter's own collection list has no opinion about. The export side is also proven
+ * where the exporter lives (`packages/importers/src/export-secrets.test.ts` shows `settings` and
+ * `providers` are never opened by an export at all).
  */
 describe('invariant 6: the key cannot reach an export, a log, a meta or an error text', () => {
   /** One stored turn, so the assertions below run against a database that has content. */
