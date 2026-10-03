@@ -149,8 +149,168 @@ export function SetupRoute() {
       ) : (
         <p className="muted">{t('setup.loading')}</p>
       )}
+      <ProviderListSection />
       <AppearanceSection />
     </>
+  );
+}
+
+/**
+ * The saved provider configurations (ADR-034): one row per `provider.<id>`, plus 新增.
+ *
+ * WHY THE LIST IS ITS OWN SECTION AND NOT PART OF THE FORM (M1-G2's appearance section records the
+ * same rule): the form edits ONE configuration, and the list is about WHICH one that is. Nesting it
+ * inside the form would make "switch" and "save" two answers to the same question, and a delete that
+ * refused would have to sit inside a form whose submit means something else.
+ *
+ * WHY A REFUSED DELETE IS RENDERED HERE AND NOT IN THE STORE
+ * ADR-034 requires the refusal to NAME the sessions that pin the row, and a sentence is the i18n
+ * layer's (ADR-030) — `state/settings-store.ts` may not import it, so `remove` answers the sessions
+ * and this view says the words. The row is NOT deleted when that happens, which is the point.
+ *
+ * WHY DELETING TAKES TWO CLICKS
+ * A configuration row is the only place an API key lives, and the ciphertext is the ONLY copy of it
+ * (`secrets/provider-secret.ts`): a one-click delete would be a one-click irreversible act. The
+ * confirmation is local state on the list, so a reload always starts unconfirmed.
+ */
+function ProviderListSection() {
+  const { t } = useTranslation();
+  const providers = useSettingsStore((state) => state.providers);
+  const activeId = useSettingsStore((state) => state.activeId);
+  const remembered = useSettingsStore((state) => state.remembered);
+  const add = useSettingsStore((state) => state.add);
+  const switchTo = useSettingsStore((state) => state.switch);
+  const remove = useSettingsStore((state) => state.remove);
+  const forgetRemembered = useSettingsStore((state) => state.forgetRemembered);
+  /** The row whose delete is awaiting confirmation. */
+  const [confirming, setConfirming] = useState<string | undefined>(undefined);
+  /** What the last delete answered: the sessions that pin the row, or a done/missing note. */
+  const [refused, setRefused] = useState<
+    { readonly titles: readonly string[]; readonly count: number } | undefined
+  >(undefined);
+  const [removed, setRemoved] = useState(false);
+
+  const onAdd = async (): Promise<void> => {
+    setRefused(undefined);
+    setRemoved(false);
+    await add();
+  };
+
+  const onSwitch = async (providerId: string): Promise<void> => {
+    setRefused(undefined);
+    setRemoved(false);
+    await switchTo(providerId);
+  };
+
+  const onDelete = async (providerId: string): Promise<void> => {
+    if (confirming !== providerId) {
+      // First click arms the confirmation; nothing is removed and no other row's confirmation is
+      // left armed, so the button always describes the row it belongs to.
+      setConfirming(providerId);
+      setRefused(undefined);
+      return;
+    }
+    const outcome = await remove(providerId);
+    setConfirming(undefined);
+    if (outcome.kind === 'pinned') {
+      setRefused({
+        count: outcome.sessions.length,
+        titles: outcome.sessions.map((session) => session.title),
+      });
+      setRemoved(false);
+      return;
+    }
+    setRefused(undefined);
+    setRemoved(outcome.kind === 'removed');
+  };
+
+  return (
+    <section className="providers" aria-labelledby="providers-title" data-section="providers">
+      <h2 id="providers-title">{t('setup.providersTitle')}</h2>
+      <p className="muted">{t('setup.providersHint')}</p>
+
+      {providers.length === 0 ? null : (
+        <ul className="provider-list" data-list="providers">
+          {providers.map((entry) => {
+            const active = entry.id === activeId;
+            return (
+              <li key={entry.id} className="provider-row" data-provider={entry.id}>
+                <span className="provider-id">{entry.id}</span>
+                {active ? (
+                  <span className="provider-active">{t('setup.providerActive')}</span>
+                ) : null}
+                {entry.settings.secret.kind === 'none' ? (
+                  <span className="muted">{t('setup.providerKeyMissing')}</span>
+                ) : null}
+                {remembered.includes(entry.id) ? (
+                  <span className="muted" data-status="provider-remembered">
+                    {t('setup.providerRemembered')}
+                  </span>
+                ) : null}
+                <div className="btn-row">
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={active}
+                    onClick={() => {
+                      void onSwitch(entry.id);
+                    }}
+                  >
+                    {t('setup.providerUse')}
+                  </button>
+                  {remembered.includes(entry.id) ? (
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => {
+                        void forgetRemembered(entry.id);
+                      }}
+                    >
+                      {t('setup.rememberForget')}
+                    </button>
+                  ) : null}
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => {
+                      void onDelete(entry.id);
+                    }}
+                  >
+                    {confirming === entry.id
+                      ? t('setup.providerDeleteConfirm')
+                      : t('setup.providerDelete')}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <div className="btn-row">
+        <button
+          className="btn btn-primary"
+          type="button"
+          onClick={() => {
+            void onAdd();
+          }}
+        >
+          {t('setup.providerAdd')}
+        </button>
+      </div>
+
+      {refused === undefined ? null : (
+        <p className="notice notice-error" data-status="provider-refused">
+          {t('setup.providerDeleteRefused', {
+            count: refused.count,
+            // The separator comes from the catalog: `、` and `, ` are each language's own way of
+            // enumerating inside a sentence, so the sentence is punctuated in the active language.
+            titles: refused.titles.join(t('common.listSeparator')),
+          })}
+        </p>
+      )}
+      {removed ? <p className="notice notice-ok">{t('setup.providerDeleted')}</p> : null}
+    </section>
   );
 }
 

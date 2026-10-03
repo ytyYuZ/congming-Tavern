@@ -43,6 +43,16 @@
  * backend (ADR-003). It is deliberately NOT copied into a `Session`, a `Message`,
  * a `MessageMeta` or an `extensions` blob, and nothing in this module logs.
  *
+ * WHAT ADR-034 CHANGED ABOUT THAT SENTENCE
+ * "ONE row" became "one row PER provider": N `settings` rows keyed `provider.<id>` plus a
+ * `provider.default` marker, which is the `(key, value)` mechanism ADR-022 already froze
+ * rather than a nineteenth collection. The row key IS the pin a session holds
+ * (`refs.modelConfig.provider`, a bare string with no version), which is why the delete of
+ * a referenced row is refused here (`listSessionsPinningProvider`) instead of leaving a
+ * dangling reference. The M0/M1 row keyed `provider` is ADOPTED BY THE READER —
+ * `listProviderSettings` reports it as an ordinary first entry and writes nothing — the
+ * same rule `completeState` follows for an absent `Session.state` (ADR-032).
+ *
  * WHAT M1-G3 CHANGED ABOUT THAT ROW, AND WHAT IT DID NOT
  * The row's `apiKey` field now holds either the legacy plaintext STRING or an
  * encrypted envelope (`secrets/secret-crypto.ts`), and this module parses that
@@ -51,7 +61,9 @@
  * itself — it stores what it is given and reports what it finds, which is what keeps
  * "the row is the only copy" (a claim about STORAGE) separable from "the copy is
  * sealed" (a claim about CRYPTO). `secrets/provider-secret.ts` owns the second claim
- * and is the only caller that ever builds an `encrypted` value.
+ * and is the only caller that ever builds an `encrypted` value. Each row's envelope is
+ * its own (ADR-034: the envelope is per row), so no key is shared between rows and an
+ * error about one row can never name another's.
  *
  * The import below is a LEAF (`secrets/secret-crypto.ts` imports nothing from the
  * app), which is why it is allowed here: this module must not import the i18n layer
@@ -134,8 +146,42 @@ import { readTable, write } from './database';
  * port's single addressing rule: `id` holds the KEY. There is one settings row
  * today, so the key is a constant; a second one (theme, locale) is a second id and
  * no schema change.
+ *
+ * WHAT ADR-034 CHANGED, AND WHAT IT DELIBERATELY DID NOT
+ * "How many provider configurations" is now "how many rows", keyed `provider.<id>`,
+ * which is the mechanism ADR-022 already provided — no nineteenth collection. This
+ * constant is therefore the LEGACY key: the single row M0/M1 wrote, which the READER
+ * below adopts as the first `provider.<id>` entry (the `completeState` precedent, ADR-032:
+ * the read boundary is where an old row becomes a trusted value, and a migration row is
+ * for a change of MEANING, which this is not).
  */
-export const PROVIDER_SETTINGS_ID = 'provider';
+export const LEGACY_PROVIDER_SETTINGS_ID = 'provider';
+
+/**
+ * The prefix of a provider row's key: `provider.<id>`.
+ *
+ * The id inside is a `mintUuidV7()` — measured, not assumed: `IdSchema` is
+ * `string().min(1).max(200)` with NO charset constraint, so a prefixed id is a legal row
+ * key, and `Session.refs.modelConfig.provider` is a bare `string` (not a `UuidV7`, not a
+ * versioned `Ref`), so the row KEY is the pin and no second id field is needed.
+ */
+export const PROVIDER_ROW_PREFIX = 'provider.';
+
+/**
+ * The settings key whose VALUE names the provider a NEW session pins.
+ *
+ * ADR-034's second point: "which provider is in use" is not a global the play screen needs —
+ * `Session.refs.modelConfig` already pins one per session — so the only question left is
+ * which row a NEW session should pin, and that is this default fact. It is stored in its own
+ * `settings` row so that adding, switching or deleting a provider cannot rewrite the row
+ * that holds an API key envelope.
+ */
+export const PROVIDER_DEFAULT_SETTINGS_ID = 'provider.default';
+
+/** The row key of one provider: `provider.<id>`. The one place that spelling is built. */
+export function providerSettingsId(providerId: string): string {
+  return `${PROVIDER_ROW_PREFIX}${providerId}`;
+}
 
 /** A `settings` row: the port's `RowBase` plus the JSON payload §7 specifies. */
 export interface SettingsRow extends RowBase {
@@ -363,16 +409,146 @@ export async function writeMessageWidthSetting(messageWidth: MessageWidth): Prom
 
 /* ────────────────────────────── settings I/O ─────────────────────────────── */
 
-/** Read the stored provider configuration; a first run answers empty strings. */
-export async function readProviderSettings(): Promise<ProviderSettings> {
-  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
-    PROVIDER_SETTINGS_ID,
-  );
-  return toProviderSettings(row?.value);
+/**
+ * One provider configuration row: the id that PINS it plus the payload.
+ *
+ * The id is what `Session.refs.modelConfig.provider` holds (ADR-034: the pin is a bare
+ * string and the row key IS that string's other half), so a caller that lists providers is
+ * listing the set of values a session may pin.
+ */
+export interface ProviderEntry {
+  /** The `provider.<id>` row's id, i.e. the value a session pins. */
+  readonly id: string;
+  /** That row's payload: endpoint, model, key slot. */
+  readonly settings: ProviderSettings;
 }
 
 /**
- * Store the provider configuration — the WHOLE row, key slot included, in ONE write.
+ * True for a row id that holds a provider configuration (`provider`, `provider.<id>`).
+ *
+ * The `provider.default` marker is EXCLUDED, and that exclusion is the whole reason this is a
+ * function rather than a `startsWith` at each call site: `provider.default` shares the prefix, so a
+ * reader that only matched the prefix would report the default marker as a provider with an empty
+ * endpoint — a phantom entry in the list, and one whose deletion would look like a provider delete.
+ */
+function isProviderRowId(id: string): boolean {
+  if (id === PROVIDER_DEFAULT_SETTINGS_ID) return false;
+  return id === LEGACY_PROVIDER_SETTINGS_ID || id.startsWith(PROVIDER_ROW_PREFIX);
+}
+
+/**
+ * The id of the provider row M0/M1 wrote, as it appears in a LIST.
+ *
+ * WHY IT NEEDS AN ID AT ALL: a session's pin is the row key, and the legacy row's key is
+ * `provider` — so the honest answer is that the legacy row's id IS `provider`, and a session
+ * created before this change that pins `'openai-compatible'` is not pointing at it (that
+ * string was a placeholder for a row that never existed; `createSession` records why).
+ * Inventing a uuid here would make the adopted row unaddressable by the one caller that has
+ * to name it again (the default key, and the delete refusal).
+ */
+export const ADOPTED_PROVIDER_ID = LEGACY_PROVIDER_SETTINGS_ID;
+
+/**
+ * Read one provider configuration row; a missing row answers empty strings.
+ *
+ * This is the LOW-LEVEL read (one key, exactly as stored). `readProviderSettings` is the
+ * caller-facing one: it resolves "the provider this app should edit" — the stored default,
+ * the adopted legacy row, or the first row — so that a first run, an M0 database and an
+ * ADR-034 database all answer something usable without the caller knowing which it is.
+ */
+export async function readProviderSettingsById(providerId: string): Promise<ProviderSettings> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(providerId);
+  return toProviderSettings(row?.value);
+}
+
+/** Read the stored default provider id, or `undefined` when there is not a usable one. */
+export async function readDefaultProviderId(): Promise<string | undefined> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
+    PROVIDER_DEFAULT_SETTINGS_ID,
+  );
+  return typeof row?.value === 'string' && row.value !== '' ? row.value : undefined;
+}
+
+/**
+ * Store which provider a NEW session pins.
+ *
+ * Its own row, and a plain string: the default is a FACT ("this is the one to use next"),
+ * not a second copy of a provider, and a value that names a row nobody has is reported as
+ * absent by the reader that resolves it rather than being repaired here — the honest answer
+ * for a dangling default is "there is no default", which the list's first entry then fills.
+ */
+export async function writeDefaultProviderId(providerId: string): Promise<void> {
+  await write(async (tx) => {
+    const row: SettingsRow = { id: PROVIDER_DEFAULT_SETTINGS_ID, value: providerId };
+    await settingsOf(tx).put(row);
+  });
+}
+
+/** Every provider row's id, WITHOUT the default marker (`provider.default` is not a provider). */
+async function providerRowIds(): Promise<string[]> {
+  const rows = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).toArray();
+  return (
+    rows
+      .map((row) => row.id)
+      .filter(isProviderRowId)
+      // The adopted legacy row comes FIRST: it is the oldest configuration a database can
+      // hold, and a list that put a later row above it would make "add a provider" look like
+      // it reordered the user's existing one.
+      .sort((left, right) => {
+        if (left === right) return 0;
+        if (left === ADOPTED_PROVIDER_ID) return -1;
+        if (right === ADOPTED_PROVIDER_ID) return 1;
+        // `provider.<uuidv7>` ids embed a millisecond timestamp, so a string compare is
+        // creation order for rows this app minted (docs/04 §4) and a stable, arbitrary order
+        // for anything else a reader finds there.
+        return left < right ? -1 : 1;
+      })
+  );
+}
+
+/**
+ * Every stored provider configuration, in row order — THE ADOPTION BOUNDARY (ADR-034).
+ *
+ * The M0/M1 row keyed `provider` is reported as an ordinary entry whose id is `provider`, and
+ * nothing is written: no migration row, no rewritten key. According to ADR-032's precedent, the
+ * read is where an old row becomes a trusted value, and writing a new `provider.<uuid>` copy
+ * would create the one state this app must never be in — the same key existing twice, in two
+ * rows, one of which a later save would leave behind.
+ */
+export async function listProviderSettings(): Promise<ProviderEntry[]> {
+  const ids = await providerRowIds();
+  return Promise.all(ids.map(async (id) => ({ id, settings: await readProviderSettingsById(id) })));
+}
+
+/**
+ * Which provider row the app edits and a new session pins: the stored default when it names a
+ * row that EXISTS, else the adopted legacy row, else the first row, else `undefined` (a first
+ * run with nothing configured).
+ */
+export async function resolveProviderId(): Promise<string | undefined> {
+  const ids = await providerRowIds();
+  const stored = await readDefaultProviderId();
+  // A default that names a row nobody has is IGNORED rather than repaired: the row may be
+  // coming back (a slow write, another tab), and rewriting the user's choice here would be a
+  // write on a read path. `deleteProviderSettings` is where a stale default is really fixed.
+  if (stored !== undefined && ids.includes(stored)) return stored;
+  return ids[0];
+}
+
+/**
+ * Read the provider configuration this app should edit — the resolved default row.
+ *
+ * A first run answers empty strings, exactly as it did before ADR-034: the interface of this
+ * function is unchanged, which is what keeps the play path, the co-creation panel and the
+ * settings form reading ONE resolved provider instead of each learning the row list.
+ */
+export async function readProviderSettings(): Promise<ProviderSettings> {
+  const id = await resolveProviderId();
+  return id === undefined ? toProviderSettings(undefined) : readProviderSettingsById(id);
+}
+
+/**
+ * Store one provider configuration — the WHOLE row, key slot included, in ONE write.
  *
  * WHY ONE PUT AND NOT TWO ("write the config", "write the secret")
  * The user's save is one gesture, and the failure mode of splitting it is the one
@@ -385,11 +561,19 @@ export async function readProviderSettings(): Promise<ProviderSettings> {
  *
  * WHAT IT DOES NOT DO: it does not encrypt. A caller that wants an encrypted row
  * passes an `encrypted` secret, which only `secrets/provider-secret.ts` builds.
+ *
+ * `providerId` OMITTED means "the row this app edits" (`resolveProviderId`), which is what
+ * keeps every pre-ADR-034 caller writing to the row it just read. A caller that names an id
+ * writes THAT row and nothing else — the property ADR-034 is built on.
  */
-export async function writeProviderSettings(settings: ProviderSettings): Promise<void> {
+export async function writeProviderSettings(
+  settings: ProviderSettings,
+  providerId?: string,
+): Promise<void> {
+  const id = providerId ?? (await resolveProviderId()) ?? ADOPTED_PROVIDER_ID;
   await write(async (tx) => {
     const row: SettingsRow = {
-      id: PROVIDER_SETTINGS_ID,
+      id,
       value: {
         baseUrl: settings.baseUrl,
         model: settings.model,
@@ -401,6 +585,72 @@ export async function writeProviderSettings(settings: ProviderSettings): Promise
     };
     await settingsOf(tx).put(row);
   });
+}
+
+/**
+ * Remove one provider row. Reports whether a row was there, so a caller can tell a delete
+ * from a no-op instead of claiming it removed something.
+ *
+ * A dangling default is fixed HERE and not on the read path: after the removal, a
+ * `provider.default` that named this row is pointed at whatever row remains (or cleared when
+ * none does). That is a real meaning change on a write the user asked for, which is where it
+ * belongs.
+ *
+ * The caller is responsible for the REFUSAL half — ADR-034's "a pinned provider cannot be
+ * deleted" is decided by `listSessionsPinningProvider` below, because naming the pinning
+ * sessions is a UI sentence and this module may not import the i18n layer (ADR-030).
+ */
+export async function deleteProviderSettings(providerId: string): Promise<boolean> {
+  // Never the default marker: `provider.default` is not a provider, and deleting it through
+  // this door would be a silent "clear the default" that reads like a provider deletion.
+  if (!isProviderRowId(providerId)) return false;
+  return write(async (tx) => {
+    const rows = settingsOf(tx);
+    const existing = await rows.get(providerId);
+    if (existing === undefined) return false;
+    await rows.remove(providerId);
+    const defaultRow = await rows.get(PROVIDER_DEFAULT_SETTINGS_ID);
+    if (defaultRow === undefined || defaultRow.value !== providerId) return true;
+    const remaining = (await rows.list())
+      .map((row) => row.id)
+      .filter((id) => isProviderRowId(id) && id !== providerId);
+    if (remaining.length === 0) {
+      await rows.remove(PROVIDER_DEFAULT_SETTINGS_ID);
+    } else {
+      // The adopted legacy row sorts first in `listProviderSettings`, so a database that
+      // still holds one falls back to it rather than to an arbitrary survivor.
+      const next = remaining.includes(ADOPTED_PROVIDER_ID)
+        ? ADOPTED_PROVIDER_ID
+        : (remaining[0] as string);
+      await rows.put({ id: PROVIDER_DEFAULT_SETTINGS_ID, value: next });
+    }
+    return true;
+  });
+}
+
+/**
+ * The sessions that PIN a provider row — ADR-034's load-bearing rule.
+ *
+ * The pin has no version (`Session.refs.modelConfig.provider` is a bare string), so a session
+ * follows the row's CURRENT content; deleting the row is the only act that can break that
+ * link, and a dangling pin is the defect `docs/04` §12 defines elsewhere as "an exported
+ * package that references something it does not carry". So the delete is refused and the
+ * caller names these sessions.
+ *
+ * Read as rows and parsed, like every other read here: `modelConfig` is schema-required, but a
+ * row written by an older version — or by a package import — is still untrusted input, and a
+ * missing `refs` must be "no pin" rather than a crash.
+ */
+export async function listSessionsPinningProvider(providerId: string): Promise<Session[]> {
+  const rows = await readTable<Session & RowBase>(COLLECTIONS.sessions).toArray();
+  const pinned: Session[] = [];
+  for (const row of rows) {
+    const parsed = SessionSchema.safeParse({ ...row, state: completeState(row) });
+    if (parsed.success && parsed.data.refs.modelConfig.provider === providerId) {
+      pinned.push(parsed.data);
+    }
+  }
+  return pinned;
 }
 
 /** The stored form of a present secret: the legacy string, or the envelope's JSON. */
@@ -421,6 +671,13 @@ function secretToJson(secret: Exclude<StoredProviderSecret, { kind: 'none' }>): 
  * make 「新建会话」 the thing that blocks the setup wizard. There is no such argument
  * for a world, a card or a preset: those ARE the choice a session is, so they are
  * arguments (`NewSessionRefs` below), not defaults this module may invent.
+ *
+ * WHAT ADR-034 CHANGED HERE, AND WHY IT IS STILL A DEFAULT: the placeholder is used only
+ * when the caller does NOT name a provider row (`NewSessionRefs.providerId`). A caller that
+ * knows the resolved default passes it, so a new session pins a row that EXISTS — the pin
+ * is what the delete refusal and the provider list read. The placeholder stays for the
+ * caller that has no settings row to pin (a test, a first run before anything is
+ * configured), because a session row must still be writable then.
  */
 const PLACEHOLDER_PROVIDER = 'openai-compatible';
 
@@ -445,6 +702,18 @@ export interface NewSessionRefs {
   readonly promptPreset: EntityPin;
   /** Absent means "this session binds no rule pack", which is what the optional field means. */
   readonly rulePack?: EntityPin;
+  /**
+   * The provider row this session pins (ADR-034), when the caller knows it.
+   *
+   * WHY IT IS OPTIONAL AND NOT REQUIRED: a session's pin is METADATA about which endpoint
+   * produced the transcript — it decides nothing about a turn (`state/chat-store.ts` sends
+   * with the provider the user is editing). Requiring it would make every existing caller
+   * — and every test whose subject is a transcript, not a provider — invent a row id,
+   * which is the placeholder churn M1-S1 deleted on the world side. Required would ALSO
+   * force the create form to refuse when nothing is configured, and "create a session
+   * before you have a key" is the flow BYO-Key is documented to allow.
+   */
+  readonly providerId?: string;
 }
 
 /**
@@ -496,7 +765,7 @@ export async function createSession(options: {
       promptPreset: { ...options.refs.promptPreset },
       ...(options.refs.rulePack === undefined ? {} : { rulePack: { ...options.refs.rulePack } }),
       modelConfig: {
-        provider: PLACEHOLDER_PROVIDER,
+        provider: options.refs.providerId ?? PLACEHOLDER_PROVIDER,
         model: PLACEHOLDER_PROVIDER,
         params: { ...DEFAULT_SAMPLING },
       },

@@ -388,9 +388,11 @@ describe('M1-G2: a change takes effect now, and the row is written', () => {
   it('keeps the appearance controls usable while the provider row is still loading', async () => {
     installPrefersColorScheme(true);
     // The form's own gate: a read that never answers, so `useSettingsStore.loaded` stays
-    // false and the BYO-Key form is still showing its loading sentence.
+    // false and the BYO-Key form is still showing its loading sentence. ADR-034 made `load()`
+    // resolve WHICH provider row to edit before it reads one — `resolveProviderId` is that
+    // first step, so it is the read that has to hang for `loaded` to stay false.
     const pending = new Promise<never>(() => undefined);
-    vi.spyOn(repository, 'readProviderSettings').mockReturnValue(pending);
+    vi.spyOn(repository, 'resolveProviderId').mockReturnValue(pending);
 
     const { host } = await mountAt('/setup', '外观');
     expect(host.textContent).toContain('正在读取设置…');

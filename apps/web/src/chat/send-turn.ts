@@ -114,6 +114,21 @@ export interface SendTurnDeps {
    * it is the bottom of it.
    */
   calendar?: Calendar;
+  /**
+   * The id of the provider ROW this turn was configured from (ADR-034) — what gets recorded as the
+   * session's pin.
+   *
+   * WHY IT IS A DEPENDENCY AND NOT A CONSTANT: the pin exists so a transcript says which
+   * configuration produced it, and after ADR-034 that configuration is a `provider.<id>` ROW. A
+   * constant would name a row nobody has, which is precisely the dangling reference the delete
+   * refusal exists to prevent. `state/chat-store.ts` passes the row it read the endpoint and the
+   * key from, so the pin cannot disagree with the request.
+   *
+   * Absent means "the caller has no settings row" (a test driving this module directly), and the
+   * session then keeps the pin it already had — see `recordSessionModel`'s call site. It is NOT a
+   * "there is no provider" value: the request still carries `config`.
+   */
+  providerId?: string;
 }
 
 /**
@@ -313,8 +328,12 @@ export async function sendTurn(
         })
       : undefined;
   if (asked !== undefined) await setHeadMessageId(session.id, asked.id);
+  // The model is always recorded (it is the id this turn actually asked for), and the PROVIDER is
+  // recorded only when the caller named the settings row it came from (ADR-034). Without one the
+  // session keeps the pin it already had rather than being relabelled with a constant that names
+  // no row — a dangling pin would be worse than an uninformative one.
   await recordSessionModel(session.id, {
-    provider: PROVIDER_ID,
+    provider: deps.providerId ?? session.refs.modelConfig.provider,
     model: deps.config.model,
   });
 
@@ -379,9 +398,6 @@ export async function sendTurn(
     ...(params.turnPlanId === undefined ? {} : { turnPlanId: params.turnPlanId }),
   });
 }
-
-/** The provider id recorded on the session. `OpenAICompatibleProvider.id` is per-host. */
-const PROVIDER_ID = 'openai-compatible';
 
 /** Everything one stream has to remember between events. */
 interface TurnDraft {

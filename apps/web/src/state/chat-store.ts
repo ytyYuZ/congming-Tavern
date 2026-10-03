@@ -155,6 +155,7 @@ import {
 } from '../chat/vars';
 import { subscribe } from '../db/database';
 import {
+  ADOPTED_PROVIDER_ID,
   appendMessage,
   createCheckpoint as createCheckpointRow,
   createSession,
@@ -567,12 +568,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const refs = sessionPinsOf(draft);
     if (refs === undefined) return undefined;
     try {
+      // The provider row this session PINS (ADR-034): the resolved settings row, so the pin names
+      // something that exists — which is what the delete refusal and the `/setup` list read. A
+      // first run has no row and the placeholder stands in, because 新建会话 must not be the thing
+      // that blocks the setup wizard (`db/repository.ts` records that reasoning).
+      const providerId = useSettingsStore.getState().activeId;
       // The default title is PERSISTED DATA written in the ACTIVE language: `createSession`
       // deliberately does not know about locales (`db/repository.ts` records why), so the
       // sentence is chosen here, where the locale store is reachable.
       const session = await createSession({
         title: translate('home.defaultSessionTitle'),
-        refs,
+        refs: { ...refs, ...(providerId === undefined ? {} : { providerId }) },
         initialClock: draft.initialClock,
       });
       // The ROW is written first and the in-memory state adopts what it returned: the next
@@ -1578,11 +1584,21 @@ async function runTurn(
     apiKey: settings.key ?? '',
     model: settings.provider.model,
   };
+  // WHICH ROW THAT CONFIGURATION CAME FROM (ADR-034), so the turn records a pin that names an
+  // existing `provider.<id>` row instead of a constant nobody has. It is the same store read the
+  // endpoint and the key came from, so the pin cannot disagree with the request. `activeId` is
+  // absent only before the first `load()` has answered, and the adopted legacy row's id is what
+  // such a database resolves to (`db/repository.ts`).
+  const providerId = settings.activeId ?? ADOPTED_PROVIDER_ID;
   const signal = controller?.signal ?? new AbortController().signal;
   try {
     const result = await sendTurn(
       {
         config,
+        // The row the pin should name (ADR-034). It travels as a dependency rather than being
+        // hard-coded in `chat/send-turn.ts`, because only this store knows which settings row the
+        // endpoint and the key came from.
+        providerId,
         // The session's calendar, so the time block the model is sent is in the world's own
         // month names and hours — the SAME value the clock on screen renders from
         // (`WorldClock`), which is the point of reading it once in `open`.

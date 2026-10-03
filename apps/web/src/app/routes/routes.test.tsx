@@ -322,6 +322,20 @@ async function waitForState(predicate: () => boolean, timeoutMs = 4_000): Promis
 }
 
 /**
+ * The label of every link in the SHARED HEADER's nav, in document order (acceptance fix A1).
+ *
+ * Scoped to `.app-nav` rather than to the page's whole text because the property under test is
+ * which LINKS the header offers: the session titles on `/`, the empty states of the two
+ * libraries and the transcript on `/play` are all copy that a whole-page assertion could be
+ * satisfied by (the home empty state literally contains 「会话」), which would make the check
+ * green for the wrong reason. The locale picker is a `<select>`, so the anchors are exactly the
+ * navigation links.
+ */
+function headerNavLabels(host: HTMLElement): string[] {
+  return Array.from(host.querySelectorAll('.app-nav a')).map((link) => link.textContent ?? '');
+}
+
+/**
  * The clock sentence the PERSISTED session row says should be on screen right now.
  *
  * Built through `clockOf` + `worldClockText` — the same pair the view renders through — so
@@ -498,6 +512,53 @@ describe('route smoke tests', () => {
     expect(useChatStore.getState().draft.text).toBe('guard');
     await settle();
     expect(container?.textContent).toContain('guard');
+  });
+});
+
+/* ──────────── A1: the header's way back out of a card editor ──────────── */
+
+/**
+ * WHY THIS LIVES BESIDE THE ROUTE TESTS (acceptance fix A1)
+ * The first manual acceptance test found the hole: a user who opened a world card or a
+ * character card could not get back to their session, because the shared header offered the two
+ * libraries and Settings only and `/play/$sessionId` needs an id that only the store holds. The
+ * fix is a property of `AppHeader` — which links exist, and WHEN the session link appears — so it
+ * is asserted on the LABELS the catalog supplies and not on markup: a rename follows through
+ * `translate`, while a missing key still fails (and in the type check as well).
+ *
+ * WHY IT IS EXERCISED THROUGH THE REAL `<App/>` ON THE LIBRARY SCREEN
+ * `AppHeader` is rendered by every page wrapper, so the screens where the user got stuck are the
+ * only ones that can show the fix actually reaches them. That also puts the assertions on a
+ * harness this file already has (jsdom, `fake-indexeddb`, the act flag, the zh-CN pin and the
+ * database lifecycle): the fixture session is a real row, so nothing here is a look-alike.
+ */
+describe('A1: the header offers a way back to the open session', () => {
+  it('offers the session list, and no session link, while no session is open', async () => {
+    const host = await mountAt('/worlds', '世界卡库');
+
+    const labels = headerNavLabels(host);
+    expect(labels).toContain(translate('nav.sessions'));
+    // With no session open there is no id the second link could honestly carry.
+    expect(labels).not.toContain(translate('nav.currentSession'));
+    // And the links that were already there are untouched by the fix.
+    expect(labels).toContain(translate('nav.worlds'));
+    expect(labels).toContain(translate('nav.characters'));
+    expect(labels).toContain(translate('nav.settings'));
+  });
+
+  it('adds the link back to the session once one is open, on the editors too', async () => {
+    const session = await createSession({ title: '当前会话' });
+    // Seeded the way the play view leaves it — `chat-store` is module-level and survives
+    // navigation, which is exactly what lets a header rendered by another screen know the id.
+    await act(async () => {
+      useChatStore.setState({ session });
+    });
+
+    const host = await mountAt('/worlds', '世界卡库');
+
+    const labels = headerNavLabels(host);
+    expect(labels).toContain(translate('nav.currentSession'));
+    expect(labels).toContain(translate('nav.sessions'));
   });
 });
 

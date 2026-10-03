@@ -48,6 +48,7 @@ import { type ChangeEvent, useEffect } from 'react';
 import { useAppearanceEffect } from '../appearance/use-appearance-effect';
 import { useTranslation } from '../i18n/use-translation';
 import { useAppearanceStore } from '../state/appearance-store';
+import { useChatStore } from '../state/chat-store';
 import { useLocaleStore } from '../state/locale-store';
 import { CharacterRoute } from './routes/character';
 import { CharactersRoute } from './routes/characters';
@@ -127,18 +128,32 @@ const characterRoute = createRoute({
 });
 
 /**
- * The header every route shares: the product name, the language picker, and the only
- * link to the setup screen.
+ * The header every route shares: the product name, the language picker, the session links, and the
+ * only link to the setup screen.
  *
  * WHY IT DOES NOT LOAD THE PERSISTED LOCALE ITSELF
  * The read is `<App/>`'s (see that component's comment): it is the ONE place every mount
  * path goes through, whereas this header is rendered by each page separately. What this
  * component needs from the store is exactly two fields — the locale to render in, and the
  * setter.
+ *
+ * WHY IT IS NOT EXPORTED FOR TESTS (it briefly was). The acceptance fix A1 was first tested by
+ * rendering this component alone, which turned out to be the wrong shape three times over: `<Link>`
+ * needs router context, the locale store's initial value follows the BROWSER (jsdom reports
+ * `en-US`, so the labels under test were English), and a seeded session is a real row. Its
+ * assertions now live in `app/routes/routes.test.tsx`, which mounts the real `<App/>` on the very
+ * library screen where the missing link was reported — so no seam is needed and this stays private.
  */
 function AppHeader() {
   const { t, locales, localeLabels, setLocale } = useTranslation();
   const current = useLocaleStore((state) => state.locale);
+  /**
+   * The session this tab has open, read from the store rather than from the route (acceptance fix
+   * A1). `AppHeader` is rendered by every page, so it cannot know which session the user came from;
+   * the store can, because `chat-store` is module-level and survives navigation. Named
+   * `openSession` rather than `current` because `current` above is the locale.
+   */
+  const openSession = useChatStore((state) => state.session);
 
   const onLocaleChange = (event: ChangeEvent<HTMLSelectElement>): void => {
     const raw = event.target.value;
@@ -153,6 +168,17 @@ function AppHeader() {
     <header className="app-header">
       <h1>{t('common.appName')}</h1>
       <nav className="app-nav">
+        {/* The two ways OUT of an editor (acceptance fix A1). Before this, the header offered the
+            two libraries and Settings only, so a user who opened a world or a character card had no
+            way back to their session: `/play/$sessionId` needs an id, and only the store knows it.
+            The list link is always there; the session link appears only when one is open, because
+            without an id there is nothing honest to point at. */}
+        <Link to="/">{t('nav.sessions')}</Link>
+        {openSession === undefined ? null : (
+          <Link to="/play/$sessionId" params={{ sessionId: openSession.id }}>
+            {t('nav.currentSession')}
+          </Link>
+        )}
         {/* The two card libraries (M1-W1 / M1-C1) sit beside the setup link, because a library is
             something a user goes TO rather than something a screen offers. */}
         <Link to="/worlds">{t('nav.worlds')}</Link>

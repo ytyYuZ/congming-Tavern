@@ -49,6 +49,19 @@ export const zhCN = {
   /** The error banner's re-send button; also what a retryable failure needs. */
   'common.retry': '重试',
   'common.close': '关闭',
+  /** Dismiss a dialog without acting; the pair of `common.save`. */
+  'common.cancel': '取消',
+  /** Start something new in a list (a provider row) — a verb, unlike `common.addItem`. */
+  'common.add': '新增',
+  /**
+   * The separator between items of a list rendered INSIDE a sentence.
+   *
+   * It is a catalog entry rather than a literal at the call site because the punctuation is part
+   * of the language: Chinese enumerates with `、` and English with a comma and a space, so a
+   * sentence that names several sessions (`setup.providerDeleteRefused`'s `{titles}`) would be
+   * punctuated in one language's convention whichever language the rest of it was written in.
+   */
+  'common.listSeparator': '、',
   /*
    * THE CARD EDITORS' SHARED CHROME (M1-W1 / M1-C1).
    *
@@ -124,6 +137,14 @@ export const zhCN = {
   /** The two card libraries (M1-W1 / M1-C1), reachable from every screen. */
   'nav.worlds': '世界',
   'nav.characters': '角色',
+  /**
+   * The two ways OUT of an editor (acceptance fix A1): the session list, and the session that is
+   * currently open. The first manual acceptance test found that the editor screens had no way back
+   * to a session at all — the header offered the two libraries and Settings only, and
+   * `/play/$sessionId` needs an id that only the store can supply.
+   */
+  'nav.sessions': '会话',
+  'nav.currentSession': '回到当前会话',
 
   /* ── setup: the BYO-Key screen, then the appearance section (M1-G2) ──────── */
   'setup.loading': '正在读取设置…',
@@ -222,6 +243,44 @@ export const zhCN = {
   'setup.secretNoSession': '当前标签页没有已解锁的口令',
   'setup.secretUnreadable': '存储的密钥无法识别，请重新填写密钥',
   'setup.secretStorageFailed': '保存失败，密钥未被修改',
+
+  /*
+   * THE UNLOCK DIALOG (Phase A2) — the same act as this screen's 「解锁」, offered where the
+   * refusal actually happened. The acceptance test's first failure was that the only passphrase
+   * field lived here, so a user who never opened this screen could not use a key they had saved.
+   *
+   * `setup.rememberLabel` is the OPT-IN and it is OFF by default: `secrets/unlock-memory.ts`
+   * records exactly what it stores (the derived, non-extractable key — never the passphrase) and
+   * why that is device-local state rather than a nineteenth collection.
+   */
+  'setup.unlockTitle': '解锁密钥',
+  'setup.unlockHint': '输入这条配置的口令即可发送请求。口令不会被保存。',
+  'setup.unlockTarget': '这条配置：{provider}',
+  'setup.rememberLabel': '在这台设备上记住解锁',
+  'setup.rememberHint':
+    '只记住解锁后的密钥（不可导出的 WebCrypto 密钥），不保存口令；本设备的解锁可在「设置」里忘记。',
+  'setup.rememberForget': '忘记本设备的解锁',
+  'setup.rememberRevoked': '已忘记本设备的解锁；密钥内容没有改变，仍然可以用口令解锁。',
+
+  /*
+   * THE PROVIDER LIST (ADR-034) — `provider.<id>` rows plus a `provider.default` marker. The
+   * sentences here are about the LIST, not about the AES envelope (which the section above
+   * states); the delete refusal names the sessions that pin the row, because the pin has no
+   * version and a deleted row would leave them pointing at nothing.
+   */
+  'setup.providersTitle': '模型服务',
+  'setup.providersHint':
+    '可以保存多份服务配置，各自使用自己的一份密钥。新建会话会钉住当前选中的这一份；已经被会话钉住的配置不能删除。',
+  'setup.providerAdd': '新增配置',
+  'setup.providerActive': '当前使用',
+  'setup.providerUse': '切换到这份配置',
+  'setup.providerDelete': '删除这份配置',
+  'setup.providerKeyMissing': '尚未保存密钥',
+  'setup.providerRemembered': '本设备已记住解锁',
+  'setup.providerDeleteConfirm': '确认删除',
+  'setup.providerDeleteRefused':
+    '不能删除：还有 {count} 个会话钉住了这份配置（{titles}）。可以先在那些会话里改用别的配置。',
+  'setup.providerDeleted': '已删除这份配置',
 
   /* ── home: the session list ─────────────────────────────────────────────── */
   'home.newSession': '新建会话',
@@ -978,8 +1037,12 @@ export const zhCN = {
    * lie the user cannot act on — the provider's own 401 would say the key is wrong when it
    * is simply still locked (`state/chat-store.ts` picks this code before it builds a
    * request, so nothing is sent).
+   *
+   * IT NO LONGER SAYS "GO TO SETTINGS" (Phase A2): the unlock dialog is offered right here, on
+   * the banner that shows this sentence, because the first manual acceptance test showed that
+   * "go to another screen" is not an answer a user can act on mid-turn.
    */
-  'error.keyLocked': '密钥已加密且处于锁定状态，请到「设置」解锁后再发送',
+  'error.keyLocked': '密钥已加密且处于锁定状态：点下面的「解锁」并输入口令即可继续',
   /*
    * SHOWN (M1-S2). A regenerate / edit / continue names a message the user could see a
    * moment ago; another tab — or a save-point rollback — can move the branch in between.
@@ -1006,6 +1069,9 @@ export const en: Messages = {
   'common.save': 'Save',
   'common.retry': 'Retry',
   'common.close': 'Close',
+  'common.cancel': 'Cancel',
+  'common.add': 'Add',
+  'common.listSeparator': ', ',
   'common.loading': 'Loading…',
   'common.addItem': 'Add',
   'common.removeItem': 'Remove',
@@ -1042,6 +1108,8 @@ export const en: Messages = {
   'nav.settings': 'Settings',
   'nav.worlds': 'Worlds',
   'nav.characters': 'Characters',
+  'nav.sessions': 'Sessions',
+  'nav.currentSession': 'Back to the current session',
 
   /* ── setup ──────────────────────────────────────────────────────────────── */
   'setup.loading': 'Loading settings…',
@@ -1108,6 +1176,29 @@ export const en: Messages = {
   'setup.secretNoSession': 'No passphrase is unlocked in this tab',
   'setup.secretUnreadable': 'The stored key is not readable; enter the key again',
   'setup.secretStorageFailed': 'The save failed; the key was not changed',
+  'setup.unlockTitle': 'Unlock the key',
+  'setup.unlockHint':
+    'Enter this configuration passphrase to send requests. The passphrase is not saved.',
+  'setup.unlockTarget': 'This configuration: {provider}',
+  'setup.rememberLabel': 'Remember the unlock on this device',
+  'setup.rememberHint':
+    'Only the unlocked key is remembered (a non-extractable WebCrypto key); the passphrase is never saved. You can forget this device unlock in Settings.',
+  'setup.rememberForget': 'Forget this device unlock',
+  'setup.rememberRevoked':
+    'This device unlock was forgotten. The stored key is unchanged and the passphrase still opens it.',
+  'setup.providersTitle': 'Model services',
+  'setup.providersHint':
+    'You can save several service configurations, each with its own key. A new session pins the selected one, and a configuration a session pins cannot be deleted.',
+  'setup.providerAdd': 'Add configuration',
+  'setup.providerActive': 'In use',
+  'setup.providerUse': 'Switch to this configuration',
+  'setup.providerDelete': 'Delete this configuration',
+  'setup.providerKeyMissing': 'No key stored yet',
+  'setup.providerRemembered': 'Unlock remembered on this device',
+  'setup.providerDeleteConfirm': 'Confirm delete',
+  'setup.providerDeleteRefused':
+    'Cannot delete: {count} sessions pin this configuration ({titles}). Switch those sessions to another configuration first.',
+  'setup.providerDeleted': 'This configuration was deleted',
 
   /* ── home ───────────────────────────────────────────────────────────────── */
   'home.newSession': 'New session',
@@ -1563,7 +1654,8 @@ export const en: Messages = {
   'error.notConfigured': 'Enter the endpoint and model name in Settings first.',
   'error.localFailure': 'Unknown local error.',
   'error.promptBudget': 'This request is over the model budget, so it was not sent. {detail}',
-  'error.keyLocked': 'The key is encrypted and locked. Unlock it in Settings before sending.',
+  'error.keyLocked':
+    'The key is encrypted and locked. Choose Unlock below and enter the passphrase to continue.',
   'error.messageMissing': 'That message is no longer on the active branch. Refresh and try again.',
 };
 

@@ -316,6 +316,15 @@ export interface CoCreateState {
   reject: (proposalId: string) => Promise<boolean>;
   /** Put the draft payload back the way it was before the accepted proposal. */
   undoAccept: () => Promise<boolean>;
+  /**
+   * Clear the finding beside the transcript.
+   *
+   * Phase A2 added it for the ONE refusal the user can fix without leaving this screen: a
+   * `key_locked` finding now offers an unlock dialog, and a sentence that no longer applies must
+   * not stay on screen once the key is open (`state/settings-store.ts` owns the unlock itself).
+   * Nothing else is cleared: a proposal or a generation in flight is not a claim about the key.
+   */
+  dismissFinding: () => void;
   /** Forget the conversation. Nothing in the database is touched. */
   reset: () => void;
 }
@@ -995,6 +1004,12 @@ export const useCoCreateStore = create<CoCreateState>((set, get) => {
       // button still offers the one thing it promises instead of silently becoming a no-op.
       if (restored) set({ undoable: undefined, finding: undefined });
       return restored;
+    },
+
+    dismissFinding(): void {
+      // Only the finding. A pending proposal, a generation in flight and the undo snapshot are
+      // all still true after the key is unlocked — nothing else may be cleared with it.
+      if (get().finding !== undefined) set({ finding: undefined });
     },
 
     reset(): void {

@@ -54,6 +54,7 @@ import type { MessageKey } from '@smarttavern/i18n';
 import type { Id } from '@smarttavern/schema';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useTranslation } from '../i18n/use-translation';
+import { UnlockAction } from '../secrets/unlock-dialog';
 import type { CoCreateGeneration, GenerationStepState } from '../state/co-create-store';
 import { useCoCreateStore } from '../state/co-create-store';
 import { useContentStore } from '../state/content-store';
@@ -124,6 +125,7 @@ export function CoCreatePanel({ kind, id, data }: CoCreatePanelProps) {
   const accept = useCoCreateStore((state) => state.accept);
   const reject = useCoCreateStore((state) => state.reject);
   const undoAccept = useCoCreateStore((state) => state.undoAccept);
+  const dismissFinding = useCoCreateStore((state) => state.dismissFinding);
   const reset = useCoCreateStore((state) => state.reset);
   const [input, setInput] = useState('');
   const [chosen, setChosen] = useState<readonly string[]>([]);
@@ -278,6 +280,20 @@ export function CoCreatePanel({ kind, id, data }: CoCreatePanelProps) {
               {t(finding.code, { detail: finding.detail ?? '' })}
             </p>
           )}
+
+          {/*
+            THE UNLOCK ACTION FOR A LOCKED KEY (Phase A2). `state/co-create-store.ts` refuses a turn
+            while the key is locked and reports it as `error.keyLocked`, which is a finding the author
+            can fix HERE — the alternative, sending them to another screen, is the failure the first
+            manual acceptance test found. Mounted after the notice rather than inside it (a `<p>`
+            cannot hold a button), and the finding is cleared when the unlock lands so a stale refusal
+            does not stay on screen next to the conversation it blocked.
+          */}
+          {finding?.code === 'error.keyLocked' ? (
+            <div className="btn-row" data-action="co-create-unlock">
+              <UnlockAction onUnlocked={dismissFinding} />
+            </div>
+          ) : null}
 
           <form className="composer" onSubmit={onSubmit}>
             <textarea

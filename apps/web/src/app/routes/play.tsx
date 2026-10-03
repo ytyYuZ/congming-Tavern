@@ -105,7 +105,9 @@ import {
   variableKindOf,
   variableText,
 } from '../../chat/vars';
+import { KEY_LOCKED_CODE } from '../../i18n/error-keys';
 import { useTranslation } from '../../i18n/use-translation';
+import { UnlockAction } from '../../secrets/unlock-dialog';
 import { type CastIntervention, interventionOf } from '../../session/cast';
 import type { ForkPoint } from '../../session/fork';
 import { MAX_SPEAKERS_PER_ROUND, type TurnSchedule } from '../../session/scheduler';
@@ -117,7 +119,6 @@ import {
 } from '../../session/scheduler-text';
 import { errorSentence, useChatStore } from '../../state/chat-store';
 import { useSettingsStore } from '../../state/settings-store';
-
 export function PlayRoute({ sessionId }: { sessionId: string }) {
   const { t } = useTranslation();
   const session = useChatStore((state) => state.session);
@@ -206,6 +207,15 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
         <div className="notice notice-error">
           <div>{errorSentence(error)}</div>
           <div className="btn-row">
+            {/*
+              THE ONE ACTION THE LOCK REFUSAL OFFERS (Phase A2). `key_locked` is not a provider
+              failure: the configuration is complete and this tab simply has not opened its key,
+              so the fix belongs on the screen that reported it rather than on `/setup`. Unlocking
+              re-reads the row (`state/settings-store.ts`), so this banner disappears without a
+              reload — `error` is cleared with it because a refusal that no longer applies must
+              not stay on screen.
+            */}
+            {error.code === KEY_LOCKED_CODE ? <UnlockAction onUnlocked={dismissError} /> : null}
             {error.retryable && error.turnText !== '' ? (
               <button
                 className="btn"
