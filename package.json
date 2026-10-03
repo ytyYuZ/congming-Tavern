@@ -20,6 +20,8 @@
     "schema:export": "node tools/schema-export/export.mjs",
     "stpack": "node tools/stpack-cli/bin/stpack.mjs",
     "build": "tsc -b --noCheck --noEmit false && pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" build",
+    "dev": "pnpm --filter @smarttavern/web dev",
+    "start": "pnpm build && pnpm --filter @smarttavern/web preview",
     "ci": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "ci:local": "node tools/scripts/run-ci-local.mjs"
   },
