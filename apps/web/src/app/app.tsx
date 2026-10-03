@@ -53,6 +53,7 @@ import { useFeatureStore } from '../state/feature-store';
 import { useLocaleStore } from '../state/locale-store';
 import { CharacterRoute } from './routes/character';
 import { CharactersRoute } from './routes/characters';
+import { HelpRoute } from './routes/help';
 import { HomeRoute } from './routes/home';
 import { NewSessionRoute } from './routes/new-session';
 import { PacksRoute } from './routes/packs';
@@ -146,6 +147,20 @@ const packsRoute = createRoute({
 });
 
 /**
+ * The in-app guided help (C2).
+ *
+ * WHY THIS IS A ROUTE OF ITS OWN AND NOT A PANEL OR A SETUP TAB. It answers the first question a new
+ * user has — "what is all this?" — in the application's own language, and it is something a reader
+ * goes TO and comes back from, which is what an address is for. It renders from the catalogs only:
+ * no card, no session, no database row.
+ */
+const helpRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/help',
+  component: HelpPage,
+});
+
+/**
  * The header every route shares: the product name, the language picker, the session links, and the
  * only link to the setup screen.
  *
@@ -203,6 +218,10 @@ function AppHeader() {
         <Link to="/worlds">{t('nav.worlds')}</Link>
         <Link to="/characters">{t('nav.characters')}</Link>
         <Link to="/packs">{t('nav.packs')}</Link>
+        {/* The tenth link (C2). It sits last among the destinations because it is the way to read
+            ABOUT the others rather than a fourth library: the tour is what a reader opens when the
+            rest of the header is still unfamiliar. */}
+        <Link to="/help">{t('nav.help')}</Link>
         <Link to="/setup">{t('nav.settings')}</Link>
         <select
           className="locale-picker"
@@ -323,6 +342,17 @@ function PacksPage() {
   );
 }
 
+function HelpPage() {
+  return (
+    <>
+      <AppHeader />
+      <main className="app-main">
+        <HelpRoute />
+      </main>
+    </>
+  );
+}
+
 export const routeTree = rootRoute.addChildren([
   homeRoute,
   setupRoute,
@@ -333,6 +363,7 @@ export const routeTree = rootRoute.addChildren([
   charactersRoute,
   characterRoute,
   packsRoute,
+  helpRoute,
 ]);
 
 /** A router over the tree, starting at `initialPath`. A factory so each test is fresh. */

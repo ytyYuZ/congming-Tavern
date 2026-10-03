@@ -208,7 +208,7 @@ const CONFIG = { baseUrl: BASE_URL, apiKey: API_KEY, model: MODEL };
  *
  * 默认是关闭的（`settings` 行缺席即关闭，读取处就是判定处）——关闭时的两态对照见
  * `apps/web/src/chat/feature-switch.test.ts`。播种就写在这一行：把它从某个 `sendTurn`
- * 的 deps 里去掉，那个用例立刻变红（实测日志见 `.local-appdata/c1-seed-bites.log`）。
+ * 的 deps 里去掉，那个用例立刻变红（落地时实测过一次）。
  */
 const TIME_AND_SCHEDULING_ON = { timeAndScheduling: true } as const;
 

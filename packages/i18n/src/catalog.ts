@@ -162,6 +162,11 @@ export const zhCN = {
    * rather than inside Settings.
    */
   'nav.packs': '内容包',
+  /**
+   * The tenth link: the in-app tour of the application (C2). It is NOT a screen's own label — the
+   * page it opens is copy-driven — so it belongs here rather than in the `help` area.
+   */
+  'nav.help': '帮助',
 
   /* ── pack: import and export a content pack (acceptance fix A4) ──────────── */
   /**
@@ -1134,6 +1139,194 @@ export const zhCN = {
   'play.continueNeedsAssistant': '只能在角色发言之后续写',
   /** An edit that the store refused — a message that left the active branch meanwhile. */
   'play.editFailed': '未能保存这条修改，请刷新后重试',
+  /*
+   * ── help: the in-app guided tour (C2) ────────────────────────────────────
+   *
+   * THE NINETEEN SECTIONS MIRROR `docs/07-使用指南.md` SECTION FOR SECTION — same count, same
+   * order, same meaning — so a reader can carry the numbering from this tour into the long
+   * document. They are a CONDENSATION and not a copy: quoting the guide's own paragraphs here
+   * would create a second, silently drifting edition of it. The guide remains the long form, and
+   * the tour says where it is (`help.docPointer`).
+   *
+   * WHY ONE KEY PER SECTION AND NOT ONE PER BULLET: each value is a newline-separated list of
+   * points, which the route splits into a `<ul>`. That keeps this block readable, keeps the zh
+   * and en listings diffable line by line, and keeps the key count at a size a reviewer can
+   * check against the guide's table of contents.
+   *
+   * WHY SECTION 19 READS THE WAY IT DOES: `docs/07` §19 still says the application-level
+   * 「时间与调度」 switch is unimplemented, which stopped being true when ADR-037's switch landed
+   * (off by default, turned on in 设置). An in-app help page that repeated the stale sentence
+   * would send a reader looking for a control that exists.
+   */
+  'help.title': '应用内帮助',
+  'help.intro':
+    '这里用十九节把应用讲一遍：每节几条要点，顺序与仓库里的长文档一致。想读细节时，那篇文档是完整版。',
+  'help.documentPreview': '本页是长文档的浓缩版，不是把文档搬进浏览器。',
+  'help.docPointer':
+    '完整文档在仓库的 `docs/07-使用指南.md`：十九节的编号与本页一一对应，从第 1 节「这是什么」到第 19 节「本指南未覆盖 / 待补」。应用不服务仓库文件，所以这里只给出路径，不做成链接。',
+  'help.footer': '本页只讲现在能做什么和暂时做不到什么；以界面与代码为准。',
+  'help.sec01Title': '这是什么',
+  'help.sec01':
+    '本地优先、多端、AI 辅助的角色扮演与 TRPG 工作台，用法是三段式：创建世界 → 创建角色 → 开始扮演。\n' +
+    '没有官方后端，也没有账号，你的世界、角色、会话、偏好与密钥都放在这台设备的浏览器数据库里。\n' +
+    '模型请求由浏览器直接发给你自己配置的服务，自带密钥。\n' +
+    '兼容 SillyTavern 的数据格式，不是复刻它的引擎。\n' +
+    '数据契约先于界面，所以有些数据字段在卡片和包里已经存在，界面还没有编辑它的地方。\n' +
+    '仍是开发中的版本，功能和界面都会变。',
+  'help.sec02Title': '安装与启动',
+  'help.sec02':
+    '前置条件：Node.js ≥ 22.12.0，以及 pnpm（只用 pnpm，不要与 npm / yarn 混用）。\n' +
+    'pnpm install 装依赖，pnpm dev 启动开发服务器，pnpm start 预览构建产物，pnpm build 只构建。\n' +
+    'pnpm test 跑测试，pnpm test:watch 是监听模式，pnpm lint 是代码检查，pnpm typecheck 是类型检查，pnpm ci 一次跑完构建前的检查。\n' +
+    'pnpm dev 与 pnpm start 会在终端打印本地地址，只在本机提供服务。\n' +
+    '桌面壳是可选的，挂载的就是网页这份界面，需要 Rust 工具链与 WebView2 运行时。',
+  'help.sec03Title': '首次运行：语言与外观',
+  'help.sec03':
+    '语言下拉一直在页面顶部，不在设置页里；选项只有中文与 English，语言名用各自的语言书写。\n' +
+    '没选过语言时看浏览器偏好，认不出来就回落到中文；选择会存进本机数据库。\n' +
+    '切换语言立即生效：界面文案跟着变，已经写进数据的文本（例如会话标题）不会跟着变。\n' +
+    '设置页的「外观」一节有三个本机设置：主题（跟随系统 / 亮色 / 暗色）、字号、消息宽度。\n' +
+    '这三项与语言存在同一个本机数据库里，与用户数据分开存放。',
+  'help.sec04Title': '首次运行：配置模型服务',
+  'help.sec04':
+    '设置页的「模型服务」是模型请求的唯一入口；配置可以有多份，每份有自己的密钥。\n' +
+    '填的是服务地址（Base URL）、API Key 与模型名，地址必须是 http(s) URL；本地服务可以留空密钥。\n' +
+    '模型名可以手填，也可以点「获取模型列表」从服务端拉一份，列表只显示前 200 个，输入框始终是自由文本。\n' +
+    '当前保存的模型如果不在列表里，会被保留并标记说明，不会悄悄改掉。\n' +
+    '「测试连接」只证明这个地址可达、模型列表有响应，不校验模型名是否可用、上下文预算是否够、别的路径上是否有跨域限制。\n' +
+    '一份配置可以新增、切换为当前使用、删除；还有会话钉着它时删除会被拒绝，并告诉你被几个会话钉住。',
+  'help.sec05Title': '首次运行：密钥加密与解锁',
+  'help.sec05':
+    '密钥只写进这台设备的数据库，不会进导出包、日志或消息元数据。\n' +
+    '默认是明文；设置口令后以 WebCrypto 加密存储，口令至少 8 个字符。\n' +
+    '锁定状态发请求会被拒绝；解锁后的密钥只在当前标签页的内存里，刷新后要重新解锁。\n' +
+    '口令不会被保存，忘记口令就无法恢复密钥，只能重新填写一次密钥。\n' +
+    '口令错误时存储内容不做任何修改，可以无限次重试。\n' +
+    '解锁对话框里可以勾选「在这台设备上记住解锁」：记住的是不可导出的密钥而不是口令，记录存在一个独立的数据库里，可以在设置里忘记。',
+  'help.sec06Title': '世界卡与角色卡',
+  'help.sec06':
+    '世界卡库与角色卡库各自有一张新建卡片，填一个名字就可以开始写。\n' +
+    '世界卡按分区编辑：基本 / 地区 / 势力 / 规则 / 叙事 / 历法与时间 / 时间节奏 / 开场。\n' +
+    '角色卡按分区编辑：SillyTavern 字段 / 发言档案 / 视觉档案 / 默认采样参数，字段名与 SillyTavern V2/V3 保持一致。\n' +
+    '角色卡上不保存玩家 / 卡司标记：身份由会话决定，同一张卡可以在不同会话里扮演不同身份。\n' +
+    '历法是数据不是常量：一天几小时、一小时几分钟都可以不是 24/60，时段可以跨午夜，起始时刻可以是负数。\n' +
+    '自动保存只写草稿，点「发布新版本」才会生成新版本；已发布的版本不可变。\n' +
+    '发布前校验不通过会被拒绝并列出问题字段，此时不会产生新版本；「放弃草稿」会回退到已发布版本。\n' +
+    '自定义字段存在卡片数据的 customFields 里，字段名就是键，所以改名等于删除后重新添加。\n' +
+    '参考图目前只保存资源 ID，应用还不管理图片本身。',
+  'help.sec07Title': '创建会话',
+  'help.sec07':
+    '「新建会话」页把开局要钉住的东西一次选完；身份属于会话，不属于角色卡。\n' +
+    '先选世界卡与世界版本：这一步就把版本钉死，该世界之后发新版本也不影响这个会话。\n' +
+    '勾选参与的角色卡（至少一张），再指定一张玩家角色；其余勾选的卡自动成为卡司，由 AI 扮演。\n' +
+    '提示预设与规则包：目前只有内置预设，也不能绑定规则包。\n' +
+    '初始时钟按「自历法纪元起的分钟数」填写，留空就用所选世界版本的起始时刻，必须是整数分钟。\n' +
+    '创建失败会明确告诉你「创建失败，没有写入会话」。\n' +
+    '模型信息在第一次成功生成时才写进会话，让转录上标注的模型就是实际产出它的那个；采样参数的界面还没有提供。',
+  'help.sec08Title': '扮演界面：开场、时钟、消息流',
+  'help.sec08':
+    '开场面板只在会话还没有第一条消息时出现，三种方式任选：写开场、AI 生成开场、跳过开场；一旦写下就不能再重选，空内容会被拒绝。\n' +
+    '「时间」一节即使折叠着，折叠头也会显示当前世界时间（日期，可能带时段名）。\n' +
+    '时间推进只有手动这一种：+1 时段、+1 小时、+1 天，以及自定义分钟（可以是负数）；这些控件只在设置页的「时间推进与多角色发言调度」开关打开后才出现。\n' +
+    '时钟属于会话状态，会随存档点一起回滚。\n' +
+    '每条消息可以「继续写」（只能在角色发言之后续写）、「重新生成」（生成兄弟分支，用上一条 / 下一条切换，切分支不会删掉另一条）、「编辑」与「删除」。\n' +
+    '删除只对链尾生效，后面还有内容时会被拒绝，而且是两步确认。\n' +
+    '底部输入框写你的行动或台词；发送后可以「停止」正在进行的生成。',
+  'help.sec09Title': '状态栏与变量',
+  'help.sec09':
+    '状态栏是会话级的一组自由变量，类型有文本、数值、布尔三种。\n' +
+    '{{getvar}} 读取它，{{setvar}} 赋值，{{addvar}} 做增量；布尔值写 true 或 false。\n' +
+    '变量是会话级、扁平的，没有全局 / 角色 / 会话的多级查找链。\n' +
+    '数值只接受有限数（空白不是 0，是拒绝），布尔只接受 true / false，文本可以是空串。\n' +
+    '写进转录的是算好的绝对值，所以回看历史时看到的就是当时的值。\n' +
+    '变量会随存档点一起回滚；让 AI 自己写状态或关系尚未提供。',
+  'help.sec10Title': '定点存档、读档与分叉',
+  'help.sec10':
+    '存档点会记下当前的消息位置、时钟、变量与卡司状态，可以给它起个名字。\n' +
+    '读档是一次整体回滚，不会出现「时钟回去了、变量还在现在」这种半吊子状态。\n' +
+    '读档不删消息，也不改世界、角色与预设的绑定；也允许存一个「还没有任何消息」的档。\n' +
+    '读档与删除都是两步确认，删除一个不存在的存档点不会报错。\n' +
+    '分叉会新建一个会话，带着所选位置的消息、时钟、变量与卡司状态，以及此前存档点的副本，原会话完全不受影响。\n' +
+    '分叉有两种位置：在当前进度分叉，或从此存档分叉；新会话标题会带「（分叉）」后缀。\n' +
+    '存档点已被删除或属于别的会话时，分叉会被拒绝并说明原因。',
+  'help.sec11Title': 'AI 共创',
+  'help.sec11':
+    '与模型讨论一张卡，模型只能提案，不能直接改你的数据。\n' +
+    '流程是四步：说要求、看「实时预览」（预览的就是要写进草稿的那份数据）、采纳或否决、把这次采纳撤销回去。\n' +
+    '采纳写的是草稿，仍然要再点「发布新版本」才会成为版本。\n' +
+    '会让卡片不合法的提案、无法应用的操作、不是可解析提案的回答、动了不该动字段的提案，都会被拒绝，而且草稿不变。\n' +
+    '生成模式按步骤写一张卡：每个步骤单独请求一次，逐步骤采纳或否决，可以跳过或停止。\n' +
+    '字段级操作只改你选中的那一个字段（重写 / 扩写 / 精简），动到别处会被直接拒绝。\n' +
+    '发言档案评估只依据卡片已有内容，并给出理由；卡片内容太少时在本地就拒绝，不发请求。\n' +
+    '使用共创前要先在设置里配好模型服务。',
+  'help.sec12Title': '卡司干预与发言调度',
+  'help.sec12':
+    '调度在本地完成，模型无法突破：每轮最多 3 人发言。\n' +
+    '单人的条数上限与冷却轮数写在角色卡的发言档案里，按角色生效。\n' +
+    '面板会说明下一位发言者及理由，或者本轮没有人可以发言；不能发言的角色也会被点名原因。\n' +
+    '手动指派优先于本地打分，被指派的角色会排到你指定的位置。\n' +
+    '对任一卡司角色可以禁言 / 解除禁言、移出场景 / 恢复出场，也可以撤销这次干预。\n' +
+    '两种干预都只影响调度、不改角色卡，属于会话的实时状态，会随存档点一起回滚。\n' +
+    '本节描述的调度与卡司干预都只在设置页的「时间推进与多角色发言调度」开关打开后才存在（默认关闭）；关闭时这三组控件与目录项都不出现，时钟只留下读数。',
+  'help.sec13Title': '内容包：导出、导入与示例',
+  'help.sec13':
+    '顶部导航的「内容包」页是导出、导入与示例内容的唯一入口。\n' +
+    '导出会把库里每个世界和角色的最新版本（连同世界书条目）打包成一个 .stpack 文件，由浏览器下载。\n' +
+    '导入先显示报告（包名、格式版本，以及逐条实体的新增 / 复用 / 改名 / 跳过），确认之后才写入。\n' +
+    '被拒绝的导入不会改动任何数据。\n' +
+    '内置示例「长日港 · 末班渡」走的是与你选文件完全相同的一条导入路径，导入后还可以「用示例开局」。\n' +
+    '命令行 stpack 写的是 JSON 文件库，与浏览器应用使用的数据库不是同一个库。',
+  'help.sec14Title': 'SillyTavern 兼容性',
+  'help.sec14':
+    '数据层的兼容已经实现并有测试覆盖，但界面里现在没有「导入 / 导出 SillyTavern 文件」的按钮，命令行工具也没有这条命令。\n' +
+    '角色卡 JSON 能读 SillyTavern V1/V2/V3 卡，也能写回。\n' +
+    '角色卡 PNG：卡片 JSON 放在 tEXt 块里，读的时候优先用 ccv3 块，没有再退回 chara，并会报告用的是哪一个。\n' +
+    '导出一张 PNG 必须给底图，没有底图时不产出任何字节；给了底图时其余数据块按原样保留。\n' +
+    '世界书两种写法都读：独立的 world_info 文件，以及卡片里的 character_book。\n' +
+    '不认识的字段原样保留并在导入报告里逐条点名；已知的两处语义缺口（constant 恒注入、conditions 条件注入）也会被报告。',
+  'help.sec15Title': '数据存在哪里',
+  'help.sec15':
+    '数据在浏览器数据库里，按站点隔离：换地址、换浏览器、换设备都是另一个空库。\n' +
+    '清空站点数据或换浏览器就等于数据没了，要搬到别处只能导出内容包再导入；应用没有官方同步服务，也没有云备份。\n' +
+    '库里按集合存放不同种类的行；界面目前用到的是其中一部分，有些集合已经定义好但还没有界面在用。\n' +
+    '设置行里放着本机偏好与草稿：语言、主题、字号、消息宽度、模型服务配置、默认使用哪一份，以及世界卡与角色卡的草稿。\n' +
+    '密钥的加密行与用户数据在一起，而「在这台设备上记住解锁」的记录放在另一个独立的数据库里。',
+  'help.sec16Title': '命令行工具 stpack',
+  'help.sec16':
+    '仓库里有一个命令行工具，用 pnpm stpack -- <参数> 调用。\n' +
+    'stpack validate 检查一个包，stpack inspect 打印摘要与内容列表，stpack unpack 把包解到目录。\n' +
+    'stpack import 导入到一个 JSON 文件库并打印报告，stpack example 生成内置示例内容包。\n' +
+    '常用选项：--json、--force、--dry-run、--select a,b 与 -h。\n' +
+    '退出码 0 成功、1 包不合法或导入被拒、2 用法错误、3 读写失败。\n' +
+    '要记住：stpack import 的目标是 JSON 文件库，不是应用使用的浏览器数据库，命令行导入的内容不会出现在应用界面里。',
+  'help.sec17Title': '常见问题',
+  'help.sec17':
+    '密钥被锁定：这条配置的密钥已加密而当前标签页没有解锁，点提示里的「解锁」输入口令即可。\n' +
+    '口令忘了无法恢复，只能在设置里重新填写一次密钥。\n' +
+    '「测试连接」成功但生成仍失败：逐条排除解锁状态、模型名是否与服务的实际名称一致、是否超出上下文预算、别的请求路径上的浏览器来源限制。\n' +
+    '同一个 .stpack 文件可以重复导入：文件选择框每次选择后都会被重置。\n' +
+    '导入被拒绝时库不会变；消息删不掉是因为它后面还有内容；读档不会删消息；分叉不影响原会话。\n' +
+    '某份配置删不掉，是因为还有会话钉着它，提示里会说明被几个会话钉住。\n' +
+    '改了卡片版本号没变，是因为自动保存只写草稿。\n' +
+    '不能直接输入网址打开某一页：应用用的是内存路由，地址栏里没有可分享的页面地址。',
+  'help.sec18Title': '开发者：本地验证与约定',
+  'help.sec18':
+    'pnpm ci:local 按 lockfile → lint → typecheck → test → build 的顺序跑完本地 CI，任何一步失败就停下并打印汇总；也可以只跑子集。\n' +
+    '依赖方向只有一条：packages/schema ← packages/core ← 适配器包 ← apps/*，由脚本真实遍历 import 图强制。\n' +
+    '界面文案必须写进目录，不许在界面代码里硬编码中文；检查命令是 pnpm check:i18n。\n' +
+    '语言名用各自语言书写（中文 / English），刻意不翻译；界面文案与模型提示词是两件事，开发日志写英文。\n' +
+    '背景文档：需求规格、技术架构、决策记录、分享格式规范与工程约定都按编号放在仓库的 docs 目录下。',
+  'help.sec19Title': '本指南未覆盖 / 待补',
+  'help.sec19':
+    '提示预设的编辑器：现在只能用内置预设，不能新建或导入预设。\n' +
+    '规则包：会话模板里没有可绑定的规则包，骰点、检定与检索属于规则层，尚未提供。\n' +
+    '世界书的编辑界面：条目能随内容包导入导出，但应用里还没有编辑它们的页面。\n' +
+    '资源（图片）管线：参考图只保存资源 ID，没有生图流程，相关字段只是数据。\n' +
+    '记忆与日程：存储里已经留了集合，界面还没有用它们的地方。\n' +
+    '让 AI 自己写状态或关系（例如自动更新变量、好感度）。\n' +
+    'SillyTavern 文件的导入 / 导出入口：映射层已实现并有测试，但界面与命令行都没有暴露这条操作。\n' +
+    '「时间与调度」的应用级开关：已经落地在设置页（默认关闭），打开后时间可手动推进、时钟读数进入每回合提示、本地调度器决定发言者；仍未接线的是卡片数据里那套「自动推进时间」的节奏字段。\n' +
+    '主题包、更多界面语言，以及桌面端的打包与发布细节（安装包签名、更新机制、部分受限环境无法启动窗口）。',
 
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
@@ -1272,6 +1465,7 @@ export const en: Messages = {
   'nav.sessions': 'Sessions',
   'nav.currentSession': 'Back to the current session',
   'nav.packs': 'Content packs',
+  'nav.help': 'Help',
 
   /* ── pack ───────────────────────────────────────────────────────────────── */
   'pack.title': 'Content packs',
@@ -1877,6 +2071,178 @@ export const en: Messages = {
   'play.nothingToContinue': 'There is nothing to continue yet',
   'play.continueNeedsAssistant': 'You can continue only after a character has spoken',
   'play.editFailed': 'That change was not saved. Refresh and try again.',
+  /* ── help: the in-app guided tour (C2); see the zh block for why it is shaped this way ── */
+  'help.title': 'In-app help',
+  'help.intro':
+    'Nineteen short sections walk through the application: a few points each, in the same order as the long document in the repository. That document is the full version when you want the details.',
+  'help.documentPreview':
+    'This page condenses the long document; it does not render it in the browser.',
+  'help.docPointer':
+    'The full document lives in the repository at `docs/07-使用指南.md`: its nineteen sections are numbered exactly like this page, from section 1, “这是什么”, to section 19, “本指南未覆盖 / 待补”. The application does not serve repository files, so this is the path itself and not a link.',
+  'help.footer':
+    'This page covers what works today and what does not yet; the interface and the code are the authority.',
+  'help.sec01Title': 'What this is',
+  'help.sec01':
+    'A local-first, multi-device, AI-assisted role-play and TRPG workbench. The shape is: create a world → create characters → start playing.\n' +
+    'There is no official backend and no account: your worlds, characters, sessions, preferences and keys live in this device’s browser database.\n' +
+    'Model requests go from the browser straight to a service you configure, with your own key.\n' +
+    'It is compatible with SillyTavern’s data formats, not a copy of its engine.\n' +
+    'The data contract comes before the interface, so some fields already exist in cards and packages while the interface has nowhere to edit them yet.\n' +
+    'This is still a version in development: features and screens will change.',
+  'help.sec02Title': 'Install and start',
+  'help.sec02':
+    'Requirements: Node.js ≥ 22.12.0, and pnpm (pnpm only — do not mix it with npm or yarn).\n' +
+    'pnpm install installs dependencies, pnpm dev starts the dev server, pnpm start previews a build, pnpm build only builds.\n' +
+    'pnpm test runs the tests, pnpm test:watch watches, pnpm lint checks the code, pnpm typecheck checks types, pnpm ci runs the pre-build checks in one go.\n' +
+    'pnpm dev and pnpm start print a local address in the terminal and serve this machine only.\n' +
+    'The desktop shell is optional: it mounts this same web interface and needs a Rust toolchain and the WebView2 runtime.',
+  'help.sec03Title': 'First run: language and appearance',
+  'help.sec03':
+    'The language picker always sits in the page header, not in the settings page; the options are 中文 and English, each written in its own language.\n' +
+    'Before you have chosen, the browser’s preference is used, falling back to Chinese when it cannot be recognised; the choice is stored in this device’s database.\n' +
+    'Switching language takes effect immediately for the interface, but text already written into data (a session title, for example) does not change.\n' +
+    'The Appearance section of the settings page has three local settings: theme (follow the system / light / dark), font size and message width.\n' +
+    'Those three live in the same local database as the language and are kept apart from your user data.',
+  'help.sec04Title': 'First run: configuring a model service',
+  'help.sec04':
+    'Model services in the settings page is the only entry point for model requests; you can keep several configurations, each with its own key.\n' +
+    'You fill in a service address (Base URL), an API key and a model name; the address must be an http(s) URL, and a local service may leave the key blank.\n' +
+    'The model name can be typed, or you can fetch the endpoint’s list — only the first 200 are shown, and the field always stays free text.\n' +
+    'If the model you have saved is not in that list it is kept and flagged, never silently replaced.\n' +
+    'Test connection only proves the address is reachable and the model list answers; it does not check that the model name is usable, that the context budget is enough, or that no cross-origin limit applies to other paths.\n' +
+    'A configuration can be added, switched to, or deleted; deletion is refused while sessions still pin it, and the refusal says how many and which.',
+  'help.sec05Title': 'First run: encrypting and unlocking keys',
+  'help.sec05':
+    'A key is written only to this device’s database: it never enters an export package, a log or message metadata.\n' +
+    'Keys are plain text by default; setting a passphrase stores them encrypted with WebCrypto, and the passphrase is at least 8 characters.\n' +
+    'While locked, requests are refused; an unlocked key lives only in this tab’s memory, so a refresh locks it again.\n' +
+    'The passphrase is never saved, and forgetting it means the key cannot be recovered — you simply enter the key again.\n' +
+    'A wrong passphrase changes nothing that is stored, so you can retry as often as you like.\n' +
+    'The unlock dialog offers “remember the unlock on this device”: it remembers the non-exportable key rather than the passphrase, in a separate database, and Settings can forget it.',
+  'help.sec06Title': 'World cards and character cards',
+  'help.sec06':
+    'The world library and the character library each offer a new card; a name is enough to begin.\n' +
+    'A world card is edited in sections: basic / regions / factions / rules / narrative / calendar and time / time rhythm / opening.\n' +
+    'A character card is edited in sections: SillyTavern fields / speaking profile / visual profile / default sampling parameters, and its field names match SillyTavern V2/V3.\n' +
+    'A character card carries no player/cast marker: that belongs to the session, so one card can be the player in one session and a cast member in another.\n' +
+    'The calendar is data, not a constant: a day need not have 24 hours nor an hour 60 minutes, a segment may cross midnight, and the starting moment may be negative.\n' +
+    'Autosave writes a draft only; Publish a new version is what creates a version, and published versions are immutable.\n' +
+    'A failed validation refuses the publish and lists the fields, creating no version; Discard draft returns to the published version.\n' +
+    'Custom fields live in the card’s customFields, where the field name is the key — so renaming means deleting and adding again.\n' +
+    'Reference images currently store an asset id only; the application does not manage the images themselves yet.',
+  'help.sec07Title': 'Creating a session',
+  'help.sec07':
+    'The new-session page pins everything an opening needs in one pass; identity belongs to the session, not to the card.\n' +
+    'Choose the world card and world version first: that pins the version, so later versions of that world do not affect this session.\n' +
+    'Tick the character cards that take part (at least one) and designate one as the player; the rest automatically become the cast, played by the AI.\n' +
+    'Prompt presets and rule packs: only built-in presets exist so far, and no rule pack can be bound.\n' +
+    'The initial clock is entered as minutes since the calendar’s epoch; leaving it blank uses the chosen world version’s starting moment, and it must be a whole number of minutes.\n' +
+    'A failed creation says so plainly: nothing was written.\n' +
+    'The model is recorded on the first successful generation, so the transcript names the model that actually produced it; sampling parameters have no interface yet.',
+  'help.sec08Title': 'The play screen: opening, clock, message stream',
+  'help.sec08':
+    'The opening panel appears only while the session has no first message, and offers three ways to start: write the opening, generate one, or skip it; once it is written it cannot be chosen again, and empty text is refused.\n' +
+    'The “time” section shows the world time (a date, with the segment name when there is one) in its fold header, even while it is folded.\n' +
+    'Time is advanced by hand only: +1 segment, +1 hour, +1 day, or a custom number of minutes, including negative amounts; those controls appear only once the “time advance and multi-speaker scheduling” switch on the settings page is on.\n' +
+    'The clock is part of the session state, so it rolls back together with a save point.\n' +
+    'Each message offers Continue writing (only after a character’s turn), Regenerate (a sibling branch, switched with previous/next, and switching never deletes the other one), Edit, and Delete.\n' +
+    'Delete works on the tip of the chain only: it is refused while anything follows the message, and it takes two clicks.\n' +
+    'The box at the bottom is where you write your action or line; a running generation can be stopped.',
+  'help.sec09Title': 'The status bar and variables',
+  'help.sec09':
+    'The status bar is a session-level set of free variables, of type text, number or boolean.\n' +
+    '{{getvar}} reads one, {{setvar}} assigns it and {{addvar}} adds to it; booleans are written true or false.\n' +
+    'Variables are session-level and flat — there is no global/character/session lookup chain.\n' +
+    'A number must be finite (blank is a refusal, not 0), a boolean must be true or false, and text may be empty.\n' +
+    'What reaches the transcript is the resolved value, so reading history shows the value of that moment.\n' +
+    'Variables roll back with a save point; letting the AI write state or relationships is not available yet.',
+  'help.sec10Title': 'Save points, loading and forking',
+  'help.sec10':
+    'A save point records the current message position, clock, variables and cast state, and can be given a name.\n' +
+    'Loading one rolls the whole session back, so you never get a half-rolled state such as an old clock beside current variables.\n' +
+    'Loading deletes no messages and changes no world, character or preset binding; a save point before any message is allowed too.\n' +
+    'Loading and deleting both take two clicks, and deleting a save point that is already gone does not error.\n' +
+    'A fork creates a new session carrying the messages, clock, variables and cast state of the chosen position plus copies of the earlier save points; the original session is untouched.\n' +
+    'You can fork at the current position or from a save point, and the new session’s title carries a fork suffix.\n' +
+    'A fork is refused, with the reason, when the save point is gone or belongs to another session.',
+  'help.sec11Title': 'AI co-creation',
+  'help.sec11':
+    'This is a discussion with the model about one card, and the model can only propose — it never edits your data directly.\n' +
+    'Four steps: say what you want, read the live preview (the very data that would be written to the draft), accept or reject, and undo the acceptance if you change your mind.\n' +
+    'Accepting writes to the draft, so Publish a new version is still needed before it becomes a version.\n' +
+    'A proposal that would make the card invalid, an operation that cannot be applied, an unparseable answer, or a change to a field this request must not touch are all refused, and the draft is left unchanged.\n' +
+    'Generation mode writes a card step by step: each step is its own request, accepted or rejected one at a time, and can be skipped or stopped.\n' +
+    'A field-level action changes one chosen field only (rewrite / expand / shorten); a proposal that touches anything else is refused.\n' +
+    'The speaking-profile assessment works from the card’s existing content and gives its reasons; too little content is refused locally without a request.\n' +
+    'Co-creation needs a configured model service first.',
+  'help.sec12Title': 'Cast intervention and turn scheduling',
+  'help.sec12':
+    'Scheduling happens locally and the model cannot exceed it: at most 3 speakers per round.\n' +
+    'A character’s line cap and cooldown rounds live in that card’s speaking profile.\n' +
+    'The panel names the next speaker with the reason, or says that nobody can speak this round; a character who cannot be chosen is told why.\n' +
+    'A manual assignment outranks the local score and puts the character where you put them.\n' +
+    'Any cast member can be muted/unmuted or taken off stage/brought back, and the intervention can be undone.\n' +
+    'Both interventions affect scheduling only and never the card; they are live session state and roll back with a save point.\n' +
+    'Everything this section describes — the scheduler and the cast interventions — exists only while the “time advance and multi-speaker scheduling” switch on the settings page is on (it is off by default); while it is off, those three sections and their table-of-contents entries do not appear at all, and the clock is left as a reading.',
+  'help.sec13Title': 'Content packs: export, import and the example',
+  'help.sec13':
+    'The Content packs page in the top navigation is the only entry point for exporting, importing and the built-in example.\n' +
+    'Exporting packs the latest version of every world and character (with their worldbook entries) into one .stpack file, which the browser downloads.\n' +
+    'Importing shows a report first — package name, format version, and each entity as created / reused / remapped / skipped — and writes only after you confirm.\n' +
+    'A refused import changes no data at all.\n' +
+    'The built-in example, 长日港 · 末班渡, travels the exact same import path as a file you choose, and can be followed by “start with the example”.\n' +
+    'The command-line stpack tool writes a JSON-file library, which is not the database the browser application uses.',
+  'help.sec14Title': 'SillyTavern compatibility',
+  'help.sec14':
+    'The data layer is compatible and covered by tests, but the interface has no import/export button for SillyTavern files yet, and the command-line tool has no such command either.\n' +
+    'Character-card JSON reads SillyTavern V1/V2/V3 cards and writes back.\n' +
+    'A character-card PNG keeps its JSON in a tEXt chunk; reading prefers the ccv3 chunk, falls back to chara, and reports which one it used.\n' +
+    'Writing a PNG requires a base image, and without one not a single byte is produced; with one, every other chunk is preserved byte for byte.\n' +
+    'World books are read in both shapes: a standalone world_info file, and a card’s character_book.\n' +
+    'Unknown fields are preserved and named in the import report, and the two known semantic gaps (SillyTavern’s always-injected constant, our conditions) are reported as well.',
+  'help.sec15Title': 'Where the data lives',
+  'help.sec15':
+    'Data lives in the browser database, isolated per site: another address, another browser or another device is another empty database.\n' +
+    'Clearing site data or changing browser therefore means the data is gone, and the only way to move it is to export a content pack and import it; there is no official sync service and no cloud backup.\n' +
+    'The database stores different kinds of row in collections; the interface uses some of them today, while others are defined but unused.\n' +
+    'The settings rows hold local preferences and drafts: language, theme, font size, message width, model-service configurations, which one is the default, and the world and character drafts.\n' +
+    'The encrypted key row sits with your user data, while the “remember the unlock on this device” record lives in a separate database.',
+  'help.sec16Title': 'The command-line tool stpack',
+  'help.sec16':
+    'The repository ships a command-line tool, invoked as pnpm stpack -- <arguments>.\n' +
+    'stpack validate checks a package, stpack inspect prints a summary and its contents, and stpack unpack unpacks it into a directory.\n' +
+    'stpack import imports into a JSON-file library and prints a report, and stpack example generates the built-in example package.\n' +
+    'Common options: --json, --force, --dry-run, --select a,b and -h.\n' +
+    'Exit codes: 0 success, 1 invalid package or refused import, 2 usage error, 3 read/write failure.\n' +
+    'Remember: stpack import targets a JSON-file library, not the browser database the application uses, so what you import there never appears in the interface.',
+  'help.sec17Title': 'Frequently asked questions',
+  'help.sec17':
+    'A key is locked: that configuration’s key is encrypted and this tab has not unlocked it — use the Unlock control in the notice and enter the passphrase.\n' +
+    'A forgotten passphrase cannot be recovered: enter the key again in the settings page.\n' +
+    'Test connection succeeds but generation still fails: rule out the lock state, a model name that differs from the service’s real one, a context budget that is too small, and browser origin limits on other paths.\n' +
+    'The same .stpack file can be imported again because the file picker is reset after every choice.\n' +
+    'A refused import changes nothing; a message cannot be deleted while content follows it; loading a save point deletes no messages; a fork leaves the original session alone.\n' +
+    'A configuration that refuses to be deleted is still pinned by sessions, and the notice names how many and which.\n' +
+    'A card’s version number does not change on edit because autosave writes a draft only.\n' +
+    'A page cannot be opened by typing a URL: the router is in memory, so the address bar holds no shareable page address.',
+  'help.sec18Title': 'Developer: local verification and conventions',
+  'help.sec18':
+    'pnpm ci:local runs the local CI in the order lockfile → lint → typecheck → test → build, stopping at the first failure and printing a summary; a subset of steps works too.\n' +
+    'There is exactly one allowed dependency direction: packages/schema ← packages/core ← the adapter packages ← apps/*, enforced by a script that really walks the import graph.\n' +
+    'Interface copy must live in the catalog — no hard-coded Chinese in interface code; the check is pnpm check:i18n.\n' +
+    'Language names are written in their own language (中文 / English) and deliberately not translated; interface copy and model prompts are two different things, and development logs are written in English.\n' +
+    'Background documents — requirements, architecture, decision records, the sharing format and the engineering conventions — are numbered in the repository’s docs directory.',
+  'help.sec19Title': 'Not covered yet / to come',
+  'help.sec19':
+    'A prompt-preset editor: only built-in presets exist, and presets cannot be created or imported yet.\n' +
+    'Rule packs: a session template has none to bind, and dice, checks and retrieval belong to a rules layer that is not provided yet.\n' +
+    'A worldbook editing screen: entries travel with content packs, but the application has no page to edit them.\n' +
+    'The asset (image) pipeline: a reference image stores an asset id only, there is no generation flow, and the related fields are data only.\n' +
+    'Memory and agenda: the collections are defined in storage, but no screen uses them yet.\n' +
+    'Letting the AI write state or relationships (updating variables or affinity automatically, for example).\n' +
+    'An import/export entry point for SillyTavern files: the mapping layer is implemented and tested, but neither the interface nor the command line exposes it.\n' +
+    'The application-level “time and scheduling” switch: it has landed on the settings page (off by default), and once it is on, time can be advanced by hand, the clock reading enters every turn’s prompt, and the local scheduler decides who speaks; what is still unwired is the card data’s own “advance time automatically” rhythm.\n' +
+    'Theme packs, more interface languages, and the desktop packaging and release details (installer signing, the update mechanism, and windows that cannot start in some restricted environments).',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',

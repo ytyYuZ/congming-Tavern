@@ -172,7 +172,7 @@ function deleteDatabase(name: string): Promise<void> {
  *     `apps/web/src/chat/feature-switch.test.ts`。
  *
  * 这段播种是会咬的：删掉下面那一行 `writeTimeAndSchedulingSetting(true)`，上面这些 describe
- * 会立刻变红（实测日志：`.local-appdata/c1-seed-bites.log`）。
+ * 会立刻变红（落地时实测过一次：2 个测试文件红、5 个用例红）。
  */
 async function seedTimeAndScheduling(): Promise<void> {
   await writeTimeAndSchedulingSetting(true);
@@ -2931,5 +2931,242 @@ describe('C1: 关闭开关后，时间/调度/卡司三组控件与目录项都�
     // 目录不是空的：别的节还在（会话那一折就是必须有的一枚）。
     expect(host.querySelector('#section-session')).not.toBeNull();
     expect(tocEntry(host, 'session')).not.toBeNull();
+  });
+});
+
+/* ──────────────────── C2: 应用内双语帮助向导 ──────────────────── */
+
+/**
+ * C2 的验收是「读得懂」和「折叠不丢内容」两件事，而这两件事都只能对着真实渲染的 DOM 问：
+ *
+ * 1. 19 节的编号、顺序、标题必须与 `docs/07-使用指南.md` 的目录一致——这些断言用 19 个 `help.secNN`
+ *    键名当探针，所以「某节被删掉」或「某节被改名」都会直接变红，而不是靠数节点个数蒙过去。
+ * 2. 折叠仍然挂载、只 `hidden`：body 留在 DOM 里（`querySelector` 找得到），这是 B1 给全应用的约定，
+ *    帮助页多到 19 折，最容易被人顺手写成条件渲染。
+ * 3. zh / en 切换后同一节的文案跟着换：两段目录都住 `catalog.ts`，切语言不该只换标题。
+ * 4. 长文档的说明在页面上，而且是「路径」不是链接：应用不服务仓库文件。
+ */
+describe('C2: the in-app help route', () => {
+  const zh = createTranslator('zh-CN');
+  const en = createTranslator('en');
+
+  /** 19 节的 DOM 地址，与 `routes/help.tsx` 的 `HELP_SECTION_IDS` 同序。 */
+  const sectionIds = [
+    'sec01',
+    'sec02',
+    'sec03',
+    'sec04',
+    'sec05',
+    'sec06',
+    'sec07',
+    'sec08',
+    'sec09',
+    'sec10',
+    'sec11',
+    'sec12',
+    'sec13',
+    'sec14',
+    'sec15',
+    'sec16',
+    'sec17',
+    'sec18',
+    'sec19',
+  ];
+
+  /** `'01'`…`'19'`：`t()` 只接受字面的目录键，所以节号也要是字面量而不是拼出来的字符串。 */
+  type PaddedSection =
+    | '01'
+    | '02'
+    | '03'
+    | '04'
+    | '05'
+    | '06'
+    | '07'
+    | '08'
+    | '09'
+    | '10'
+    | '11'
+    | '12'
+    | '13'
+    | '14'
+    | '15'
+    | '16'
+    | '17'
+    | '18'
+    | '19';
+
+  /** 一节在目录里的跳转按钮（B1 的 `SectionToc` 给每个真的渲染出来的节一枚）。 */
+  function tocEntry(host: HTMLElement, id: string): Element | null {
+    return host.querySelector(`button[data-action="section-jump"][data-section="${id}"]`);
+  }
+
+  /** 一节的正文条目；折叠时 body 仍挂载，所以这份列表始终问得到。 */
+  function pointsOf(host: HTMLElement, id: string): string[] {
+    const body = host.querySelector(`#section-${id}-body`);
+    if (body === null) throw new Error(`help section ${id} rendered no body`);
+    return Array.from(body.querySelectorAll('li')).map((item) => item.textContent ?? '');
+  }
+
+  /**
+   * 用页头那枚语言选择器切语言，和用户的操作同一条路径（同 `appearance.test.tsx` 的写法）。
+   *
+   * WHY NOT `writeLocaleSetting` + REMOUNT: 那样证明的是「两段目录各自能渲染」，而这里要证明的是
+   * 「切换语言这一个动作会让同一节的正文跟着换」——也就是 store 的 update 真的流到了这 19 折。
+   */
+  async function chooseLocale(host: HTMLElement, locale: string): Promise<void> {
+    const select = host.querySelector('.locale-picker');
+    if (select === null) throw new Error('the header rendered no locale picker');
+    await act(async () => {
+      (select as HTMLSelectElement).value = locale;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+  }
+
+  it('renders all nineteen sections, numbered and ordered as the long document states them', async () => {
+    const host = await mountAt('/help', zh.t('help.sec01Title'));
+
+    for (const [index, id] of sectionIds.entries()) {
+      const number = String(index + 1).padStart(2, '0') as PaddedSection;
+      // 该在的都在：这一折、它的标题按钮、以及目录里的那一枚。
+      expect(host.querySelector(`#section-${id}`), id).not.toBeNull();
+      expect(sectionToggle(host, id), id).not.toBeNull();
+      expect(tocEntry(host, id), id).not.toBeNull();
+      expect(host.textContent, `help.sec${number}Title`).toContain(zh.t(`help.sec${number}Title`));
+      // 每一节都有几条要点（2–8 条），不是空壳。
+      expect(pointsOf(host, id).length, id).toBeGreaterThanOrEqual(2);
+    }
+
+    // 数量本身也钉住：多出一节（比如把某一节拆成两折）同样要有人改这份 19。
+    expect(host.querySelectorAll('.collapsible-section')).toHaveLength(19);
+    expect(host.querySelectorAll('button[data-action="section-jump"]')).toHaveLength(19);
+    // 目录与折叠头读的是同一个键，而不是各自写了一份标题：这条断言在任一边被写死成别的文案时变红。
+    expect(tocEntry(host, 'sec01')?.textContent).toBe(zh.t('help.sec01Title'));
+    expect(tocEntry(host, 'sec19')?.textContent).toBe(zh.t('help.sec19Title'));
+    expect(sectionToggle(host, 'sec19').querySelector('.section-toggle-label')?.textContent).toBe(
+      zh.t('help.sec19Title'),
+    );
+  });
+
+  it('condenses the long document instead of rendering it: it names the file and links nothing there', async () => {
+    const host = await mountAt('/help', 'docs/07-使用指南.md');
+
+    expect(host.textContent).toContain('docs/07-使用指南.md');
+    expect(host.textContent).toContain(zh.t('help.documentPreview'));
+    // 「给出路径」而不是「做成站内链接」：仓库文件不在这个 bundle 里，页面上任何指向它的链接都是假的。
+    const anchors = Array.from(host.querySelectorAll('a'));
+    expect(anchors.filter((anchor) => (anchor.getAttribute('href') ?? '').includes('07'))).toEqual(
+      [],
+    );
+    // 页头确实把「这是一份浓缩版」说出来了，而不是让读者以为文档本身就在浏览器里。
+    expect(host.querySelector('.help-document-preview')).not.toBeNull();
+  });
+
+  it('opens the first fold by default, and jumps to a folded section from the table of contents', async () => {
+    const host = await mountAt('/help', zh.t('help.sec01Title'));
+
+    expect(foldIsClosed(host, 'sec01')).toBe(false);
+    for (const id of ['sec02', 'sec19']) {
+      expect(foldIsClosed(host, id), id).toBe(true);
+    }
+
+    expect(foldIsClosed(host, 'sec05')).toBe(true);
+    await act(async () => {
+      const jump = tocEntry(host, 'sec05');
+      if (jump === null) throw new Error('no table-of-contents entry for sec05');
+      (jump as HTMLElement).click();
+    });
+    expect(foldIsClosed(host, 'sec05')).toBe(false);
+  });
+
+  it('keeps a folded section mounted and merely hidden, with its points still in the DOM', async () => {
+    const host = await mountAt('/help', zh.t('help.sec01Title'));
+
+    // 折叠：body 有 `hidden`，但 body 与里面的条目都还在——`querySelector` 问得到，这是 B1 的约定。
+    expect(foldIsClosed(host, 'sec05')).toBe(true);
+    const points = pointsOf(host, 'sec05');
+    expect(points.length).toBeGreaterThanOrEqual(2);
+    expect(points.join('\n')).toContain('加密');
+
+    // 收起第一节（默认开着的那一节），它的条目同样不许消失。
+    await act(async () => {
+      sectionToggle(host, 'sec01').click();
+    });
+    expect(foldIsClosed(host, 'sec01')).toBe(true);
+    expect(pointsOf(host, 'sec01').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('switches the section copy with the language, not just the headings', async () => {
+    const host = await mountAt('/help', zh.t('help.sec01Title'));
+
+    const zhPoints = pointsOf(host, 'sec05');
+    expect(zhPoints.join('\n')).toContain('加密');
+    expect(host.textContent).not.toContain(en.t('help.sec05Title'));
+
+    await chooseLocale(host, 'en');
+    await waitForText(host, en.t('help.sec05Title'));
+
+    // 同一节的正文跟着换了：这是两段目录各自的文案，不是 zh 段被复用到 en。
+    const enPoints = pointsOf(host, 'sec05');
+    expect(enPoints.join('\n')).toContain('WebCrypto');
+    expect(enPoints.join('\n')).not.toContain('加密');
+    expect(host.textContent).toContain(en.t('help.sec01Title'));
+  });
+
+  it('states where time and scheduling actually stands today, not what the stale guide said', async () => {
+    const host = await mountAt('/help', 'docs/07-使用指南.md');
+
+    // C1 之后应用级开关已经存在（默认关闭，设置页可开）。帮助页若照抄 `docs/07` §19 的旧句子
+    // （「尚未实现」），会把读者支去找一个不存在的控件——这一条钉住「按此刻事实写」。
+    const section19 = pointsOf(host, 'sec19').join('\n');
+    expect(section19).toContain('设置页');
+    // 同一份清单里那个旧说法必须不在：这条断言保护的事实就是「按事实写」。
+    expect(section19).not.toContain('尚未实现');
+    // 没接线的只剩卡片数据里那套自动推进；开关本身、时钟读数与调度器都已经能用。
+    expect(section19).toContain('自动推进时间');
+
+    // 开关拥有的是三组控件（推进 / 调度 / 卡司），所以每一节都得把这条前提写出来，而不是只写在
+    // 第 12 节：`play.tsx` 关闭时根本不渲染它们，帮助页若说「关闭时时间只能手动推进」就是在描述
+    // 一个不存在的界面。§8 讲推进控件、§12 讲调度与干预，两处都要点名这个开关。
+    const section08 = pointsOf(host, 'sec08').join('\n');
+    const section12 = pointsOf(host, 'sec12').join('\n');
+    expect(section08).toContain('开关');
+    expect(section12).toContain('默认关闭');
+    expect(section12).toContain('都不出现');
+    // 那句过时说法：「关闭时时间只能手动推进」——关闭时连推进控件都不渲染。
+    expect(section12).not.toContain('关闭时时间只能手动推进');
+  });
+
+  it('links the tenth header entry to /help, and the link really navigates there', async () => {
+    const host = await mountAt('/', zh.t('nav.sessions'));
+
+    // 只断言 `toContain` 是不够的（路由冒烟那一套就是这么写的），这里钉住整份清单：老几条都在、
+    // 帮助是第十条，而且顺序没被动过（`/` 上没有打开的会话，所以会话链接不在场）。
+    expect(headerNavLabels(host)).toEqual([
+      zh.t('nav.sessions'),
+      zh.t('nav.worlds'),
+      zh.t('nav.characters'),
+      zh.t('nav.packs'),
+      zh.t('nav.help'),
+      zh.t('nav.settings'),
+    ]);
+
+    const helpLink = Array.from(host.querySelectorAll('.app-nav a')).find(
+      (anchor) => anchor.textContent === zh.t('nav.help'),
+    );
+    expect(helpLink, 'the header offers no help link').not.toBeNull();
+    // `<Link>` 在内存历史上渲染成绝对 URL；比的是路径，所以起点写着什么都不影响这条断言。
+    const href = helpLink?.getAttribute('href') ?? '';
+    expect(new URL(href, window.location.origin).pathname).toBe('/help');
+
+    await act(async () => {
+      (helpLink as HTMLElement).click();
+    });
+    await waitForText(host, zh.t('help.sec01Title'));
+    expect(host.textContent).toContain(zh.t('help.sec01Title'));
+    // 站在帮助页上，这一折照旧是开着的第一折（导航不是把页面换成别的东西）。
+    expect(foldIsClosed(host, 'sec01')).toBe(false);
   });
 });

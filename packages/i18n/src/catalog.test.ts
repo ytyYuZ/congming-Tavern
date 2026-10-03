@@ -20,7 +20,9 @@ import { LOCALES } from './locale';
  * edit here rather than a prefix nobody reviewed. `co-create` was added by the AI co-creation
  * panel (M1-W2) for the same reason: its sentences are the PROPOSAL FLOW's — a conversation, a
  * patch, accept/reject, undo — not a world card's, and `M1-C2` and ADR-031's variable proposal
- * are the two callers that make that a distinction rather than a taste.
+ * are the two callers that make that a distinction rather than a taste. `help` was added by the
+ * in-app help route (C2): its nineteen sections mirror `docs/07-使用指南.md`, so its copy is the
+ * TOUR's — short points per section — and not a place for a screen's own labels.
  */
 const AREAS = [
   'common',
@@ -33,6 +35,7 @@ const AREAS = [
   'co-create',
   'character',
   'play',
+  'help',
   'error',
 ];
 
