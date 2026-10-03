@@ -399,6 +399,37 @@ export async function writeMessageWidthSetting(messageWidth: MessageWidth): Prom
 }
 
 /**
+ * The one application-level feature switch (ADR-037, docs/05-决策记录.md §757-774): the
+ * time-advance and multi-speaker scheduling half of play, keyed `feature.timeAndScheduling`.
+ *
+ * WHY THERE IS NO MIGRATION ROW AND NO PARSER: ADR-037 fixes the 口径 as 缺席即关闭，读取处
+ * 就是判定处. A library written before this switch existed has no such row, and an upgraded app
+ * must not silently start advancing the clock and handing turns to a scheduler; so `absent`,
+ * `false` and anything not exactly `true` all read as OFF, and THIS read is the only place the
+ * decision is made. Nothing is backfilled — one click on the setup page writes the row.
+ *
+ * WHY THE KEY IS NAMESPACED: unlike the appearance rows above it is not a display preference —
+ * it changes what a turn is made of, so it gets a flag-like name rather than a bare noun.
+ */
+export const TIME_AND_SCHEDULING_SETTINGS_ID = 'feature.timeAndScheduling';
+
+/** The stored feature switch; `false` when the row is missing or unusable (ADR-037). */
+export async function readTimeAndSchedulingSetting(): Promise<boolean> {
+  const row = await readTable<SettingsRow & RowBase>(COLLECTIONS.settings).get(
+    TIME_AND_SCHEDULING_SETTINGS_ID,
+  );
+  return row?.value === true;
+}
+
+/** Store the feature switch, exactly as given. */
+export async function writeTimeAndSchedulingSetting(enabled: boolean): Promise<void> {
+  await write(async (tx) => {
+    const row: SettingsRow = { id: TIME_AND_SCHEDULING_SETTINGS_ID, value: enabled };
+    await settingsOf(tx).put(row);
+  });
+}
+
+/**
  * The browser's preferred BCP-47 tags, or `[]` when it has none.
  *
  * `navigator.languages` is read through a parameterised key because this workspace

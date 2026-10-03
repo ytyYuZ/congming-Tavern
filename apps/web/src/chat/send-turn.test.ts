@@ -202,6 +202,16 @@ const MODEL = 'test-model-1';
 
 const CONFIG = { baseUrl: BASE_URL, apiKey: API_KEY, model: MODEL };
 
+/**
+ * 开启态播种（ADR-037）：本文件里验「时间块进提示词/系统块数量」的用例，验的都是开关
+ * 开启时的行为，所以显式把 `SendTurnDeps.timeAndScheduling` 播成 `true`。
+ *
+ * 默认是关闭的（`settings` 行缺席即关闭，读取处就是判定处）——关闭时的两态对照见
+ * `apps/web/src/chat/feature-switch.test.ts`。播种就写在这一行：把它从某个 `sendTurn`
+ * 的 deps 里去掉，那个用例立刻变红（实测日志见 `.local-appdata/c1-seed-bites.log`）。
+ */
+const TIME_AND_SCHEDULING_ON = { timeAndScheduling: true } as const;
+
 let databases = 0;
 let databaseName = '';
 
@@ -272,7 +282,7 @@ describe('sendTurn', () => {
     const wire = fakeWire(() => sseResponse(['你', '好']));
 
     const result = await sendTurn(
-      { config: CONFIG, transport: wire.fetch },
+      { ...TIME_AND_SCHEDULING_ON, config: CONFIG, transport: wire.fetch },
       { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
     );
 
@@ -337,13 +347,17 @@ describe('sendTurn', () => {
   it('sends the active chain as prior turns on the second turn', async () => {
     const session = await createSession({ title: 'test-session' });
     await sendTurn(
-      { config: CONFIG, transport: fakeWire(() => sseResponse(['第一次回答'])).fetch },
+      {
+        ...TIME_AND_SCHEDULING_ON,
+        config: CONFIG,
+        transport: fakeWire(() => sseResponse(['第一次回答'])).fetch,
+      },
       { sessionId: session.id, text: '第一次提问', signal: new AbortController().signal },
     );
 
     const wire = fakeWire(() => sseResponse(['第二次回答']));
     await sendTurn(
-      { config: CONFIG, transport: wire.fetch },
+      { ...TIME_AND_SCHEDULING_ON, config: CONFIG, transport: wire.fetch },
       { sessionId: session.id, text: '第二次提问', signal: new AbortController().signal },
     );
 
@@ -602,7 +616,7 @@ describe('the engines are wired in', () => {
     const wire = fakeWire(() => sseResponse(['好']));
 
     await sendTurn(
-      { config: CONFIG, transport: wire.fetch },
+      { ...TIME_AND_SCHEDULING_ON, config: CONFIG, transport: wire.fetch },
       { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
     );
 
@@ -628,7 +642,7 @@ describe('the engines are wired in', () => {
     const wire = fakeWire(() => sseResponse(['好']));
 
     await sendTurn(
-      { config: CONFIG, transport: wire.fetch, calendar: TWO_MOON },
+      { ...TIME_AND_SCHEDULING_ON, config: CONFIG, transport: wire.fetch, calendar: TWO_MOON },
       { sessionId: session.id, text: '第一句', signal: new AbortController().signal },
     );
 

@@ -119,6 +119,7 @@ import {
 } from '../../session/scheduler-text';
 import { renameIssueOf } from '../../session/title';
 import { errorSentence, useChatStore } from '../../state/chat-store';
+import { useFeatureStore } from '../../state/feature-store';
 import { useSettingsStore } from '../../state/settings-store';
 import {
   CollapsibleSection,
@@ -161,6 +162,16 @@ const PLAY_SECTIONS: readonly SectionDefinition[] = [
   { id: 'cast', title: 'play.castInterventionTitle', openByDefault: false },
   { id: 'opening', title: 'play.openingTitle', openByDefault: false },
 ];
+
+/**
+ * The three sections ADR-037's switch owns: 时间推进, 发言调度 and 卡司干预.
+ *
+ * WHY THEY ARE NAMED HERE AND NOT INLINE AT THE FILTER BELOW: the same list has to decide both the
+ * folds that render and the headings the table of contents offers, because those two must agree —
+ * a directory entry whose section does not render is exactly the bug B2 left behind for the opening
+ * panel. One list, read once, is what keeps them from drifting apart.
+ */
+const SCHEDULING_SECTIONS: readonly string[] = ['advance', 'scheduler', 'cast'];
 
 /**
  * One section of `PLAY_SECTIONS` by id.
@@ -335,8 +346,8 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
 }
 
 /**
- * Everything the play screen shows BESIDE the conversation: nine folds plus the table of contents
- * that reaches them (B2).
+ * Everything the play screen shows BESIDE the conversation: the folds `PLAY_SECTIONS` names, plus the
+ * table of contents that reaches them (B2).
  *
  * WHY THIS IS ITS OWN COMPONENT AND NOT NINE ELEMENTS IN `PlayRoute`'s JSX
  * `useSectionOpen` is a hook, and the fold state belongs to the SESSION this screen has open — but
@@ -351,6 +362,13 @@ export function PlayRoute({ sessionId }: { sessionId: string }) {
  * It is the answer to "where is the panel I want": eight headings a user cannot see yet are not a
  * directory. Each entry opens its section and scrolls to it (`jumpToSection`), which is why the list
  * is the first thing in the folded part of the screen rather than a decoration at its end.
+ *
+ * WHY THE DIRECTORY FOLLOWS WHAT ACTUALLY RENDERS
+ * The list below names the sections THIS render has, not the nine the module constant names: a
+ * heading that jumps to a section nobody rendered is worse than no heading, and the screen has two
+ * such cases — ADR-037's switch off (no 时间推进, 发言调度 or 卡司干预 section at all) and a session
+ * whose opening choice is already gone (no 开场 section, the case B2 left open). `sections` is
+ * therefore the one list the table of contents and the folds are both read from.
  *
  * WHY THE CLOCK'S SENTENCE IS A SECTION SUMMARY
  * The clock has to stay readable while it is folded (「常驻」, docs/01 §F11-1), so the reading — the
@@ -383,13 +401,27 @@ function PlaySections({
   };
   const openingOffered = !skipped && openingChoosing(session, messageChain);
   const clockSummary = worldClockText(clockOf(calendar, session), t);
+  // ADR-037 (docs/05-决策记录.md §757-774): with the switch off the screen offers no way to advance
+  // time and no scheduler, so those three sections do not exist here — and a section that does not
+  // render is not in the table of contents either, the same rule the opening panel follows below.
+  // The switch's constructed value is OFF (`state/feature-store.ts`), so the enabled layout is never
+  // flashed while the row is still being read; the world clock KEEPS its fold, because it is a
+  // reading of `SessionState.clock` rather than a way to move it and it injects nothing.
+  const timeAndScheduling = useFeatureStore((state) => state.timeAndScheduling);
+  const sections = PLAY_SECTIONS.filter(
+    (section) =>
+      (timeAndScheduling || !SCHEDULING_SECTIONS.includes(section.id)) &&
+      (section.id !== 'opening' || openingOffered),
+  );
+  const renderedIds = new Set(sections.map((section) => section.id));
 
   /**
    * One fold per panel, in the order the screen and the table of contents present them.
    *
    * The clock's line is the only summary — see the component note — and the opening panel is
    * deliberately NOT in this table: whether it exists and whether it is open are decided by the
-   * session's own start state, one block below.
+   * session's own start state, one block below. The list is filtered against the sections that
+   * render, so a panel can never outlive its heading.
    */
   const panels: readonly {
     readonly id: string;
@@ -414,11 +446,11 @@ function PlaySections({
     { id: 'forks', body: <ForkPanel sessionId={session.id} checkpoints={checkpoints} /> },
     { id: 'scheduler', body: <SchedulerPanel /> },
     { id: 'cast', body: <CastInterventionPanel sessionId={session.id} session={session} /> },
-  ];
+  ].filter((panel) => renderedIds.has(panel.id));
 
   return (
     <>
-      <SectionToc sections={PLAY_SECTIONS} onJump={(id) => jumpToSection(id, setFolds)} />
+      <SectionToc sections={sections} onJump={(id) => jumpToSection(id, setFolds)} />
       {panels.map(({ id, summary, body }) => (
         <CollapsibleSection
           key={id}

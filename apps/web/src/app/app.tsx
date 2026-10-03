@@ -49,6 +49,7 @@ import { useAppearanceEffect } from '../appearance/use-appearance-effect';
 import { useTranslation } from '../i18n/use-translation';
 import { useAppearanceStore } from '../state/appearance-store';
 import { useChatStore } from '../state/chat-store';
+import { useFeatureStore } from '../state/feature-store';
 import { useLocaleStore } from '../state/locale-store';
 import { CharacterRoute } from './routes/character';
 import { CharactersRoute } from './routes/characters';
@@ -363,26 +364,29 @@ function AppearanceEffect() {
  * The root component. The router is INJECTED rather than built here so `mount.ts`
  * can await its first load before rendering — see the file header.
  *
- * WHY THE STORED LANGUAGE AND APPEARANCE ARE READ HERE AND NOT IN `mountApp`
+ * WHY THE STORED LANGUAGE, APPEARANCE AND FEATURE SWITCHES ARE READ HERE AND NOT IN `mountApp`
  * Restoring the persisted preferences is an app-startup concern, but `mount.ts` is only
  * ONE of the ways `<App/>` is reached: a test renders it directly, and a future embedder
  * (the desktop shell's own frame, a storybook-style harness) would too. Putting the reads
  * in a mount effect here covers EVERY path by construction, and it is how this app
  * already loads its other stores — a component effect calling `useXStore.getState()`.
  * Each read only REFINES the store's constructed value (which is already usable: a
- * language from `navigator.languages`, an appearance of `system`/1/85), so it is safe for
- * it to land after the first paint; `state/locale-store.ts`'s `loadToken` and the same
- * guard in `state/appearance-store.ts` are what make it safe for it to land after a user
- * has already moved a control.
+ * language from `navigator.languages`, an appearance of `system`/1/85, a feature switch
+ * off — ADR-037's 缺席即关闭), so it is safe for it to land after the first paint;
+ * `state/locale-store.ts`'s `loadToken` and the same guard in
+ * `state/appearance-store.ts` / `state/feature-store.ts` are what make it safe for it to
+ * land after a user has already moved a control.
  */
 export function App({ router }: { router: ReturnType<typeof createAppRouter> }) {
   const loadLocale = useLocaleStore((state) => state.load);
   const loadAppearance = useAppearanceStore((state) => state.load);
+  const loadFeature = useFeatureStore((state) => state.load);
 
   useEffect(() => {
     void loadLocale();
     void loadAppearance();
-  }, [loadLocale, loadAppearance]);
+    void loadFeature();
+  }, [loadLocale, loadAppearance, loadFeature]);
 
   return (
     <>

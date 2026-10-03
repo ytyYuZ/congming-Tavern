@@ -160,6 +160,12 @@ export function worldClockText(reading: ClockDisplay, t: Translator['t']): strin
  * decision about who may call `advance`, not about what `advance` computes. The manual
  * controls on the play screen are the one caller today, and their whole policy is
  * "the user pressed the button".
+ *
+ * WHEN THAT WIRING ARRIVES IT MUST ASK ADR-037'S SWITCH FIRST. `feature.timeAndScheduling`
+ * (docs/05-决策记录.md §757-774, `state/feature-store.ts`) is the app-level answer to "does
+ * time advance at all", and with it OFF the manual controls are not rendered — so an implicit
+ * advance that skipped the switch would be the one path still moving the clock while the user
+ * believes time is stopped. The switch is a precondition, not a filter on the result.
  */
 export function advanceState(calendar: Calendar, state: SessionState, delta: number): SessionState {
   const step = advance({ delta, calendar, fromMinute: state.clock });
@@ -317,12 +323,19 @@ export function toWireMessages(chain: readonly Message[]): ChatMessage[] {
  * `{{setvar}}` / `{{addvar}}` it performs into `variableChanges`, which is a LOG and
  * not a write: `compose` is pure, and `chat/send-turn.ts` (the layer that owns
  * persistence) applies it to the state afterwards.
+ *
+ * `clock` IS OPTIONAL, AND ABSENT MEANS "THIS TURN ASKS FOR NO READING": ADR-037 §768's OFF
+ * side is spelled here as well as at `chat/send-turn.ts`, because this context is what the
+ * macros read. Passing nothing is not the same as passing a different calendar's value — the
+ * first makes the moment unreadable to EVERY block (including a preset the caller authored,
+ * whose `{{time}}` need not sit in a block this app knows by id), the second only hides the
+ * one block that happens to be filtered out. See the field's own comment below.
  */
 export function promptContext(
   session: Session,
   chain: readonly Message[],
   input: string,
-  clock: ClockDisplay,
+  clock?: ClockDisplay,
 ): PromptContext {
   const history = toWireMessages(chain);
   return {
@@ -332,7 +345,17 @@ export function promptContext(
     turnNumber: history.filter((message) => message.role === 'user').length + 1,
     history,
     input: { role: 'user', content: input },
-    clock,
+    // ADR-037 §768's landing spot. With the switch off the caller passes NOTHING, so the
+    // reading is ABSENT rather than swapped for another calendar's: `PromptContext extends
+    // MacroContext`, whose `clock` is optional and read optionally by the engine
+    // (`engine/prompt/compose.ts`'s `context.clock?.segments ?? []`, `macros.ts`'s
+    // `clock === undefined ? undefined : …`), and absence is a SUPPORTED state — the macros
+    // that need a moment stay unresolved (`{{time}}`/`{{date}}`/`{{segment}}`,
+    // `engine/prompt/macros.test.ts` asserts exactly that) and `timeOfDay` only accepts a segid
+    // a calendar declares. The property is spread in rather than set to `undefined` so the
+    // context really has no such field: "no reading" is then a shape, not a value someone can
+    // overwrite with a fallback.
+    ...(clock === undefined ? {} : { clock }),
     variables: session.state.vars,
   };
 }

@@ -269,6 +269,21 @@ export const zhCN = {
    */
   'setup.percentValue': '{percent}%',
   /*
+   * THE FEATURE SWITCHES (ADR-037, docs/05-决策记录.md §757-774) — today exactly one:
+   * `feature.timeAndScheduling`, the switch the play screen's 时间推进, 发言调度 and 卡司干预
+   * sections hang on.
+   *
+   * WHY THE HINT NAMES THE CONSEQUENCES RATHER THAN THE MECHANISM: the user is deciding whether
+   * time moves and whether something else decides who talks. "关闭" alone would leave the one
+   * thing that is easy to get wrong untold — that the world clock also stops being written into
+   * the prompt — so the sentence lists all three effects and says which state is the default
+   * (ADR-037's 缺席即关闭), because a switch nobody touched never had a row at all.
+   */
+  'setup.featureTitle': '功能',
+  'setup.featureTimeAndSchedulingLabel': '时间推进与多角色发言调度',
+  'setup.featureTimeAndSchedulingHint':
+    '开启后：时间可以手动推进，每回合的提示里会带上世界的当前时刻，本地调度器决定谁发言。关闭（默认）：这三件事都不参与——时刻不写进提示，也没有调度器决定发言者。',
+  /*
    * THE MODEL LIST (M1-G3) — the endpoint's own `GET /models` answer, offered beside the
    * free-text model field.
    *
@@ -1001,6 +1016,13 @@ export const zhCN = {
    * the question an unstated refusal leaves behind.
    */
   'play.schedulerBusy': '上一条回复还在生成中，请先停止或等待它写完',
+  /**
+   * ADR-037's switch is off, so the scheduler takes no part in the speaking decision and there
+   * is nobody for this call to ask. The panel is not rendered in that state either, which makes
+   * this the programmatic caller's sentence — the same reason `play.schedulerBusy` above exists
+   * rather than a bare `false`.
+   */
+  'play.schedulerOff': '时间推进与发言调度已在设置中关闭，可在“设置”里开启',
   'play.schedulerReasonManual': '你手动指派了顺序，TA 排在第 {position} 位',
   'play.schedulerReasonScore': '发言欲望 {desire} / 发言能力 {ability}，在可选角色里最高',
   'play.schedulerExcludedCapped': '单轮条数已达上限（{lines}/{limit}）',
@@ -1337,6 +1359,10 @@ export const en: Messages = {
   'setup.fontScaleLabel': 'Text size',
   'setup.messageWidthLabel': 'Message width',
   'setup.percentValue': '{percent}%',
+  'setup.featureTitle': 'Features',
+  'setup.featureTimeAndSchedulingLabel': 'Time advance and multi-speaker scheduling',
+  'setup.featureTimeAndSchedulingHint':
+    'On: time can be advanced by hand, each turn carries the world’s current moment, and the local scheduler decides who speaks. Off (the default): none of the three take part — no moment in the prompt, and no scheduler choosing speakers.',
 
   /* ── the model list, then the key encryption section (M1-G3) ────────────── */
   'setup.modelsFetch': 'Fetch models',
@@ -1800,6 +1826,7 @@ export const en: Messages = {
   'play.schedulerAssignLabel': 'Assign the turn to {name}',
   'play.schedulerUnknownCard': 'card no longer in the library',
   'play.schedulerBusy': 'The previous reply is still being written. Stop it or wait for it.',
+  'play.schedulerOff': 'Time advance and turn scheduling are off in settings',
   'play.schedulerReasonManual': 'you placed them at position {position} in your order',
   'play.schedulerReasonScore': 'desire {desire} / ability {ability}, the highest of the candidates',
   'play.schedulerExcludedCapped': 'line limit reached this round ({lines}/{limit})',

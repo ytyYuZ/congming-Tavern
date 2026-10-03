@@ -93,6 +93,7 @@ import {
 import type { ProviderSettings, StoredProviderSecret } from '../../db/repository';
 import { useTranslation } from '../../i18n/use-translation';
 import { useAppearanceStore } from '../../state/appearance-store';
+import { useFeatureStore } from '../../state/feature-store';
 import {
   type SecretIntent,
   type SecretSaveFailureKind,
@@ -151,6 +152,7 @@ export function SetupRoute() {
       )}
       <ProviderListSection />
       <AppearanceSection />
+      <FeatureSection />
     </>
   );
 }
@@ -405,6 +407,60 @@ function AppearanceSection() {
             {t('setup.percentValue', { percent: Math.round(messageWidth) })}
           </span>
         </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The feature switches (ADR-037, docs/05-决策记录.md §757-774) — today exactly one: 时间推进与
+ * 多角色发言调度, `feature.timeAndScheduling`.
+ *
+ * WHY THIS SECTION EXISTS AT ALL, WHEN THE DEFAULT IS OFF
+ * ADR-037 chooses default-off because the row cannot exist in a library written before the
+ * switch did, and an upgraded app must not silently start advancing the clock and handing turns
+ * to a scheduler. The cost of that choice is paid here: the switch is reachable and one click
+ * turns it on, so "off by default" is a default rather than a feature nobody can find.
+ *
+ * WHY IT IS A CHECKBOX AND NOT A SELECT
+ * Two states, one of them the default, and the user changes the decision in the same gesture that
+ * shows it — that is a box. The `<label>` is spelled with `htmlFor` and kept beside the input
+ * rather than wrapping it, matching the appearance rows above.
+ *
+ * WHY IT READS THE STORE DIRECTLY AND DOES NOT LOAD IT
+ * `<App/>` already starts the read on every mount (`app/app.tsx` records why one place is enough),
+ * and the switch's constructed value is a complete answer — OFF, ADR-037's 缺席即关闭 — so this
+ * section renders immediately and never shows a spinner. The box is CONTROLLED by the store, which
+ * is what makes its change reach the play screen at once: `state/feature-store.ts` updates the
+ * value before it awaits the write.
+ */
+function FeatureSection() {
+  const { t } = useTranslation();
+  const timeAndScheduling = useFeatureStore((state) => state.timeAndScheduling);
+  const setTimeAndScheduling = useFeatureStore((state) => state.setTimeAndScheduling);
+
+  const onTimeAndSchedulingChange = (event: ChangeEvent<HTMLInputElement>): void => {
+    // Not awaited, for the reason the appearance rows give: the store applies the switch
+    // immediately and reports a write failure through its own `error` field, so a slow write
+    // cannot stall the control.
+    void setTimeAndScheduling(event.target.checked);
+  };
+
+  return (
+    <section className="feature" aria-labelledby="feature-title">
+      <h2 id="feature-title">{t('setup.featureTitle')}</h2>
+
+      <div className="field">
+        <label htmlFor="feature-time-and-scheduling">
+          {t('setup.featureTimeAndSchedulingLabel')}
+        </label>
+        <input
+          id="feature-time-and-scheduling"
+          type="checkbox"
+          checked={timeAndScheduling}
+          onChange={onTimeAndSchedulingChange}
+        />
+        <p className="muted">{t('setup.featureTimeAndSchedulingHint')}</p>
       </div>
     </section>
   );

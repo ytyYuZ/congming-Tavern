@@ -70,7 +70,12 @@ import {
   writeSessionState,
 } from '../db/repository';
 import { PROMPT_BUDGET_CODE } from '../i18n/error-keys';
-import { BUILTIN_BUDGET, BUILTIN_CALENDAR, BUILTIN_PRESET } from './builtin-content';
+import {
+  BUILTIN_BUDGET,
+  BUILTIN_CALENDAR,
+  BUILTIN_PRESET,
+  withoutWorldClock,
+} from './builtin-content';
 import { clockOf, composeTurn, promptContext, promptSlots } from './clock';
 import { applyVariableChanges } from './vars';
 
@@ -112,8 +117,22 @@ export interface SendTurnDeps {
    * gets the same value such a session resolves to, which is exactly
    * `chat/clock.ts`'s `calendarOf` fallback. So the default cannot disagree with the read path:
    * it is the bottom of it.
+   *
+   * WITH `timeAndScheduling` OFF THIS IS NOT READ AT ALL — see that field.
    */
   calendar?: Calendar;
+  /**
+   * ADR-037's `feature.timeAndScheduling` switch (docs/05-决策记录.md §757-774), whose OFF side
+   * takes the world clock out of this turn. **Absent means OFF**: the `settings` row it is read
+   * from follows the 口径 缺席即关闭，读取处就是判定处, so a caller that has never heard of the
+   * switch gets the switch's default rather than the behaviour that predates it — the two can
+   * only agree by accident, and here they must not.
+   *
+   * WHY IT IS A DEPENDENCY AND NOT A STORE LOOKUP: the deps object is how this module stays
+   * clear of the state layer (ADR-017 — see `onDelta`), and `state/chat-store.ts` already reads
+   * the store once per turn, so the value travels here beside `config` and `calendar`.
+   */
+  timeAndScheduling?: boolean;
   /**
    * The id of the provider ROW this turn was configured from (ADR-034) — what gets recorded as the
    * session's pin.
@@ -222,9 +241,24 @@ function composeRequest(
   chain: readonly Message[],
   text: string,
 ): Composed {
+  const enabled = deps.timeAndScheduling === true;
+  const preset = deps.preset ?? BUILTIN_PRESET;
+  // ADR-037's second point, both halves at once — and the second half is about the READING, not
+  // about one block. The clock block leaves as a NEW preset (`withoutWorldClock`; the built-in
+  // constant is read back elsewhere and must not change), AND no reading is taken or passed at
+  // all: `promptContext` gets no fourth argument. Filtering by id alone would only hide the
+  // block this app knows — a caller's own preset may read the moment in a block with any id, and
+  // `{{time}}` in it would then still resolve off a substituted calendar. Passing nothing makes
+  // the moment unreadable to EVERY block, which is the state `chat/clock.ts` documents as
+  // supported (`{{time}}`/`{{date}}`/`{{segment}}` stay unresolved).
   const result = composeTurn(
-    deps.preset ?? BUILTIN_PRESET,
-    promptContext(session, chain, text, clockOf(deps.calendar ?? BUILTIN_CALENDAR, session)),
+    enabled ? preset : withoutWorldClock(preset),
+    promptContext(
+      session,
+      chain,
+      text,
+      enabled ? clockOf(deps.calendar ?? BUILTIN_CALENDAR, session) : undefined,
+    ),
     deps.budget ?? BUILTIN_BUDGET,
     promptSlots(session),
   );

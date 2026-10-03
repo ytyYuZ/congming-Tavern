@@ -199,6 +199,7 @@ import {
   type TurnSchedule,
 } from '../session/scheduler';
 import { renameIssueOf, titleNameOf } from '../session/title';
+import { useFeatureStore } from './feature-store';
 import { isProviderReady, useSettingsStore } from './settings-store';
 import { writeErrorName } from './write-error';
 
@@ -436,6 +437,8 @@ export interface ChatState {
    * Resolves to the schedule it computed, or `undefined` when there is no open session.
    * A read that resolves after the session changed is dropped, so a late card lookup cannot
    * publish a proposal for a session the user has left (the same token rule `open` uses).
+   * `undefined` is ALSO the answer when ADR-037's switch is off: the scheduler takes no part
+   * in the speaking decision then, so there is no proposal at all.
    */
   proposeNextTurn: () => Promise<TurnSchedule | undefined>;
   /**
@@ -448,6 +451,11 @@ export interface ChatState {
    * (`chat/send-turn.ts`, with the plan id and the speaker on the assistant row). A
    * "nobody can speak" outcome is a decision too, so its plan row is written and its reason
    * is left in `schedule` for the panel to render - never a silent stall.
+   *
+   * WITH ADR-037'S SWITCH OFF IT ANSWERS `refused` AND WRITES NOTHING: everything this action
+   * does is the scheduler deciding who speaks, so there is no decision to take and no plan to
+   * record. The composer's own turn is the single-speaker path then. See the implementation for
+   * why a scheduler-free "who speaks" rule is deliberately not invented here.
    */
   speakNextTurn: (characterId?: Id) => Promise<SpeakOutcome>;
   /**
@@ -1081,6 +1089,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** See the interface's `proposeNextTurn` for what this is and is not. */
   async proposeNextTurn(): Promise<TurnSchedule | undefined> {
+    // ADR-037: with the switch off the scheduler takes no part in the speaking decision —
+    // there is no proposal to compute and none to publish, and the panel that would read it is
+    // not rendered either.
+    if (!useFeatureStore.getState().timeAndScheduling) return undefined;
     const session = get().session;
     if (session === undefined) return undefined;
     const schedule = planTurn(
@@ -1097,6 +1109,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** See the interface's `speakNextTurn` for the order of the write and the turn. */
   async speakNextTurn(characterId?: Id): Promise<SpeakOutcome> {
+    // ADR-037: with the switch off the scheduler takes no part in the speaking decision, and
+    // every step below IS that decision — the chain read, `planTurn`, the `TurnPlan` row and the
+    // director's note all exist so that the scheduler can name the speaker. So the call is refused
+    // here, before any of them runs (see the interface for the other refusals this returns).
+    //
+    // WHY A REFUSAL AND NOT A SCHEDULER-FREE "SINGLE SPEAKER" PATH: a second rule for who speaks
+    // is what ADR-030/ADR-033 forbid — one question, one answer — and with the switch off the
+    // panel that calls this is not rendered at all, so such a rule would decide nothing anybody
+    // can see. One-on-one play is not what is lost by it: the composer's own turn (`send`) is the
+    // single-speaker direct path, and it is exactly the path the switch leaves untouched.
+    if (!useFeatureStore.getState().timeAndScheduling) {
+      return { kind: 'refused', key: 'play.schedulerOff' };
+    }
     const state = get();
     const session = state.session;
     if (session === undefined) return { kind: 'refused', key: 'error.messageMissing' };
@@ -1253,6 +1278,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * A delta that is not a whole, non-zero number of minutes is REFUSED rather than
    * rounded: the engine throws on a fractional delta, and "+0 minutes" is a button that
    * cannot do anything.
+   *
+   * WHAT ADR-037'S SWITCH MEANS HERE: `feature.timeAndScheduling` is the app-level answer
+   * to "does time advance at all", and with it OFF this action keeps no guard of its own —
+   * the play screen does not render the controls that call it, which is where the decision
+   * is enforced (`app/routes/play.tsx`), and a programmatic caller that reaches it has
+   * decided for itself. A future AUTOMATIC advance (docs/02 §5.7's `timeRhythm`) must ask
+   * the switch first: see the note on `advanceState` in `chat/clock.ts`.
    */
   async advance(delta: number): Promise<number | undefined> {
     const session = get().session;
@@ -1653,6 +1685,11 @@ async function runTurn(
         // month names and hours — the SAME value the clock on screen renders from
         // (`WorldClock`), which is the point of reading it once in `open`.
         calendar: useChatStore.getState().calendar,
+        // ADR-037's switch, read at the moment of the turn. OFF takes the world clock out of the
+        // assembled prompt, and it does so inside `chat/send-turn.ts` (which derives the preset
+        // and stops resolving the calendar above), because that module keeps clear of the state
+        // layer — so the decision is made here once and travels as a dependency.
+        timeAndScheduling: useFeatureStore.getState().timeAndScheduling,
         ...(transport === undefined ? {} : { transport }),
         // The streaming render: the answer appears as it arrives, because nothing is
         // persisted until the turn ends (see the partial-text policy in `send-turn`).

@@ -71,6 +71,7 @@ export {
   useCoCreateStore,
 } from './state/co-create-store';
 export { resetContentStore, useContentStore } from './state/content-store';
+export { resetFeatureStore, useFeatureStore } from './state/feature-store';
 export { resetLocaleStore, useLocaleStore } from './state/locale-store';
 export { resetSettingsStore, useSettingsStore } from './state/settings-store';
 

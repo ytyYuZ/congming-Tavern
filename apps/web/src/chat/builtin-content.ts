@@ -156,6 +156,17 @@ export type BuiltinSlot = (typeof BUILTIN_SLOTS)[number];
 export const BUILTIN_BUDGET: PromptBudget = { contextWindow: 8192, reservedOutput: 1024 };
 
 /**
+ * The block that injects the world clock (docs/02 §5.1's 硬注入).
+ *
+ * It has a name because ADR-037's `feature.timeAndScheduling` switch has to be able to take it
+ * out of a preset's blocks: its `budget.priority` is `required`, and the composer's budgeter
+ * never drops a `required` block, so neither `enabled: false` nor a priority change can express
+ * "the clock is not part of this turn". Filtering by id is the only lever, and a filter needs
+ * its id in one place rather than the literal copied onto both sides of the derivation.
+ */
+export const WORLD_CLOCK_BLOCK_ID = 'builtin-world-clock';
+
+/**
  * The blocks of the built-in preset, in `order`.
  *
  * WHY `required` ON THE FIRST TWO AND NOT ON THE THIRD: the system instruction, the
@@ -181,7 +192,7 @@ export const BUILTIN_PRESET: PromptPreset = {
       budget: { priority: 'required' },
     },
     {
-      id: 'builtin-world-clock',
+      id: WORLD_CLOCK_BLOCK_ID,
       name: '当前时间',
       role: 'system',
       // The one block whose content is fixed by this task (docs/02 §5.1's hard time
@@ -206,3 +217,25 @@ export const BUILTIN_PRESET: PromptPreset = {
   createdAt: 0,
   updatedAt: 0,
 };
+
+/**
+ * `preset` without the world-clock block — the OFF side of ADR-037's switch.
+ *
+ * A PURE DERIVATION, NEVER AN EDIT. `BUILTIN_PRESET` is a module constant that other code
+ * reads back: `session/roster.ts`'s `BUILTIN_PRESET_CHOICE` copies its `id`/`version`/`name`
+ * into the pin a new session records, and the chat tests derive how many system messages a
+ * turn has from `BUILTIN_PRESET.blocks`. Removing the block in place would leave every one of
+ * those readers describing a preset that no longer exists — permanently, and for every later
+ * test in the file — so this returns a NEW preset with a NEW blocks array and touches nothing.
+ *
+ * The clock block is the one thing here that reads a clock, so a caller that filters it out
+ * must also stop resolving one: see `chat/send-turn.ts`, which pairs this with passing NO clock
+ * at all — not another calendar's reading, which would leave a caller's own `{{time}}` block
+ * still able to render a moment the turn did not ask for.
+ */
+export function withoutWorldClock(preset: PromptPreset): PromptPreset {
+  return {
+    ...preset,
+    blocks: preset.blocks.filter((block) => block.id !== WORLD_CLOCK_BLOCK_ID),
+  };
+}

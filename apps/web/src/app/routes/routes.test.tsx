@@ -49,6 +49,7 @@ import {
   setHeadMessageId,
   writeLocaleSetting,
   writeProviderSettings,
+  writeTimeAndSchedulingSetting,
 } from '../../db/repository';
 // A session as a container, with the pins the create flow would have collected (M1-S1): this
 // file's subject is what the routes render, not which world a session pins.
@@ -63,9 +64,11 @@ import {
   configureChat,
   resetChat,
   resetDatabase,
+  resetFeatureStore,
   resetLocaleStore,
   resetSettingsStore,
   useChatStore,
+  useFeatureStore,
   useLocaleStore,
   useSettingsStore,
 } from '../../mount';
@@ -109,6 +112,9 @@ beforeEach(async () => {
   resetChat();
   resetSettingsStore();
   resetLocaleStore();
+  // ADR-037's switch is module-level state like the stores above, and its value survives a test
+  // that turned it on (the seeded describes below do exactly that), so it is reset with them.
+  resetFeatureStore();
   // Substituted AFTER `resetChat` (which forgets the transport) and BEFORE anything mounts:
   // every test in this file that does not open the composer gets a transport that fails
   // loudly, so a turn nobody asked for is an error rather than a silent no-op.
@@ -135,6 +141,7 @@ afterEach(async () => {
   resetChat();
   resetSettingsStore();
   resetLocaleStore();
+  resetFeatureStore();
   closeDatabase();
   await deleteDatabase(databaseName);
 });
@@ -146,6 +153,29 @@ function deleteDatabase(name: string): Promise<void> {
     request.onerror = () => resolve();
     request.onblocked = () => resolve();
   });
+}
+
+/* ──────────────────────── ADR-037 的开启态播种 ──────────────────────── */
+
+/**
+ * 开启态播种（ADR-037）：`feature.timeAndScheduling` 的默认是「关闭」（`settings` 行缺席即关闭，
+ * 见 `docs/05-决策记录.md:757-774`），而下面这些 describe 验的是开关**开启**时的行为——手动推进
+ * 时间、调度器决定谁发言、卡司干预，以及 B2 那些折叠面板里属于这三组的那几个。它们在挂载之前
+ * 把这一行写进存储。
+ *
+ * 为什么写 ROW 而不是 poke store：本文件自己的规矩（见上面的 `beforeEach`）——壳的合法 `load()`
+ * 会覆盖掉 poke，而写进存储的那一行会被同一次读取采纳，于是渲染出来的就是开启态。
+ *
+ * 关闭时的两态对照见：
+ *   · 同文件末尾 `C1: 关闭开关后，时间/调度/卡司三组控件与目录项都不在场`；
+ *   · chat 层（提示词里没有时间块、调度器不参与发言决定、存储行的两态）见
+ *     `apps/web/src/chat/feature-switch.test.ts`。
+ *
+ * 这段播种是会咬的：删掉下面那一行 `writeTimeAndSchedulingSetting(true)`，上面这些 describe
+ * 会立刻变红（实测日志：`.local-appdata/c1-seed-bites.log`）。
+ */
+async function seedTimeAndScheduling(): Promise<void> {
+  await writeTimeAndSchedulingSetting(true);
 }
 
 /* ───────────────────────── the async render helper ───────────────────────── */
@@ -619,6 +649,9 @@ describe('A1: the header offers a way back to the open session', () => {
  * proves the DOM shows the value the database holds, which a hardcoded sentence would not.
  */
 describe('M1-T2: the manual time advance', () => {
+  // 开启态播种（ADR-037）：本 describe 验的是开启态；默认是关闭，见 `seedTimeAndScheduling`。
+  beforeEach(seedTimeAndScheduling);
+
   it('moves the clock by each preset step, immediately, in the DOM and in the row', async () => {
     const session = await createSession({ title: 'test-session' });
     const host = await mountAt(`/play/${session.id}`, '发送');
@@ -708,6 +741,9 @@ describe('M1-T2: the manual time advance', () => {
 });
 
 describe('M1-M1 / M1-T4: the save-point panel', () => {
+  // 开启态播种（ADR-037）：本条用「+1 天」推进时钟后再回滚；默认是关闭，见 `seedTimeAndScheduling`。
+  beforeEach(seedTimeAndScheduling);
+
   it('saves with a label, lists it, and rolls the clock and the transcript back together', async () => {
     const session = await createSession({ title: 'test-session' });
     const first = await appendMessage({
@@ -863,6 +899,9 @@ describe('M1-M1 / M1-T4: the save-point panel', () => {
  * rows would pass for an implementation that saved nothing.
  */
 describe('M1-S6: the status bar', () => {
+  // 开启态播种（ADR-037）：本条用「+1 天」推进时钟后再回滚；默认是关闭，见 `seedTimeAndScheduling`。
+  beforeEach(seedTimeAndScheduling);
+
   it('edits a typed variable and rolls it back with the clock in one restore', async () => {
     const session = await createSession({ title: 'test-session' });
     const host = await mountAt(`/play/${session.id}`, '状态栏');
@@ -2036,6 +2075,9 @@ describe('M1-S3: the opening panel', () => {
  * voice profile the rule then uses - unasked.
  */
 describe('M1-S5: the turn scheduler', () => {
+  // 开启态播种（ADR-037）：本 describe 验的是开启态；默认是关闭，见 `seedTimeAndScheduling`。
+  beforeEach(seedTimeAndScheduling);
+
   /** The panel's copy, read from the zh-CN catalog directly (`M1-S3`'s argument, repeated). */
   const zh = createTranslator('zh-CN');
 
@@ -2410,6 +2452,9 @@ describe('M1-S5: the turn scheduler', () => {
  * function.
  */
 describe('M1-S4: the cast intervention', () => {
+  // 开启态播种（ADR-037）：本 describe 验的是开启态；默认是关闭，见 `seedTimeAndScheduling`。
+  beforeEach(seedTimeAndScheduling);
+
   /** The panel's copy, read from the zh-CN catalog directly (the M1-S3/M1-S5 argument, repeated). */
   const zh = createTranslator('zh-CN');
 
@@ -2625,6 +2670,10 @@ describe('M1-S4: the cast intervention', () => {
  *   3. WHAT the heading shows while closed (the clock's own sentence) — 「常驻」 for the clock.
  */
 describe('the play screen folds everything but the conversation (B2)', () => {
+  // 开启态播种（ADR-037）：这几条数的是「每一折都有 body」，包含时间/调度/卡司三组；
+  // 默认是关闭，见 `seedTimeAndScheduling`。
+  beforeEach(seedTimeAndScheduling);
+
   const zh = createTranslator('zh-CN');
 
   it('leaves the transcript and the composer unfolded, and folds the panels', async () => {
@@ -2789,5 +2838,98 @@ describe('the play screen folds everything but the conversation (B2)', () => {
     expect(transcriptHtml.indexOf('我推开门')).toBeLessThan(
       transcriptHtml.indexOf('门后是昏暗的酒馆。'),
     );
+  });
+});
+
+/**
+ * C1（ADR-037 的开关本身）：关闭时那三组控件不在场，目录里也没有它们。
+ *
+ * 这个开关的默认是「关闭」（`settings` 行缺席即关闭，见 `docs/05-决策记录.md:757-774`），所以本
+ * describe 的基线**不播种**——上面的 describe 验的是开启态，这一组验的是关闭态与两态的对照。
+ *
+ * 「目录跟随实际渲染」是 ADR-037 第①条与本组的同一条规则：目录项不是一张写死的清单，而是
+ * `PLAY_SECTIONS` 里真的渲染出来的那一部分。B2 留下的「开场」那一折同理——会话开始之后它不
+ * 渲染，所以目录里也不该有它（本组最后一条）。
+ */
+describe('C1: 关闭开关后，时间/调度/卡司三组控件与目录项都不在场', () => {
+  const zh = createTranslator('zh-CN');
+
+  /** 目录项（B1 的 `SectionToc` 给每个真的渲染出来的节一枚跳转按钮）。 */
+  function tocEntry(host: HTMLElement, id: string): Element | null {
+    return host.querySelector(`button[data-action="section-jump"][data-section="${id}"]`);
+  }
+
+  it('不渲染三组控件，也不把它们的节放进目录（时钟的只读读数照旧在场）', async () => {
+    const session = await createSession({ title: 'switch-off' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.sessionTitle'));
+
+    // 先等壳读完存储行：开关的初始值本来就是关闭，但要证明「关闭」是读出来的答案、不是还没读。
+    await waitForState(() => useFeatureStore.getState().ready);
+    expect(useFeatureStore.getState().timeAndScheduling).toBe(false);
+
+    // 1. 控件不在场——不是藏起来、也不是 disabled，是一个元素都没有。
+    for (const panel of ['.time-controls', '.scheduler', '.cast-intervention']) {
+      expect(host.querySelector(panel), panel).toBeNull();
+    }
+    for (const id of ['advance', 'scheduler', 'cast']) {
+      expect(host.querySelector(`#section-${id}`), id).toBeNull();
+      expect(tocEntry(host, id), id).toBeNull();
+    }
+    for (const label of [
+      zh.t('play.advanceTitle'),
+      zh.t('play.schedulerTitle'),
+      zh.t('play.castInterventionTitle'),
+    ]) {
+      expect(host.textContent).not.toContain(label);
+    }
+
+    // 2. 关掉的不是整个「时间」：时钟的只读读数不在 ADR-037 第①条的范围里（它没有行为，也不往
+    //    提示词里注入任何东西），所以它和它的目录项照旧在场。这两条断言的作用是：目录的收缩来自
+    //    「渲染了什么」，而不是「开关关着就少列几个」。
+    expect(host.querySelector('.world-clock')).not.toBeNull();
+    expect(host.querySelector('#section-clock')).not.toBeNull();
+    expect(tocEntry(host, 'clock')).not.toBeNull();
+    // ...而且这个还没开始的会话里，开场那一折是真的渲染的，目录里就真的有它（同一条规则）。
+    expect(host.querySelector('#section-opening')).not.toBeNull();
+    expect(tocEntry(host, 'opening')).not.toBeNull();
+  });
+
+  it('开启时三组控件与目录项都在场，且仍在各自那一折里（对照）', async () => {
+    await seedTimeAndScheduling();
+    const session = await createSession({ title: 'switch-on' });
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.sessionTitle'));
+    await waitForText(host, zh.t('play.advanceTitle'));
+
+    for (const panel of ['.time-controls', '.scheduler', '.cast-intervention']) {
+      const element = host.querySelector(panel);
+      expect(element, panel).not.toBeNull();
+      expect(element?.closest('.section-body'), panel).not.toBeNull();
+    }
+    for (const id of ['advance', 'scheduler', 'cast']) {
+      expect(host.querySelector(`#section-${id}`), id).not.toBeNull();
+      expect(tocEntry(host, id), id).not.toBeNull();
+    }
+    expect(host.textContent).toContain(zh.t('play.advanceTitle'));
+    expect(host.textContent).toContain(zh.t('play.schedulerTitle'));
+    expect(host.textContent).toContain(zh.t('play.castInterventionTitle'));
+  });
+
+  it('会话开始后不再渲染开场那一折，目录里也没有它——目录跟随的是渲染', async () => {
+    const session = await createSession({ title: 'started' });
+    const first = await appendMessage({
+      sessionId: session.id,
+      parentId: null,
+      role: 'user',
+      content: '我推开门',
+    });
+    await setHeadMessageId(session.id, first.id);
+
+    const host = await mountAt(`/play/${session.id}`, zh.t('play.sessionTitle'));
+
+    expect(host.querySelector('#section-opening')).toBeNull();
+    expect(tocEntry(host, 'opening')).toBeNull();
+    // 目录不是空的：别的节还在（会话那一折就是必须有的一枚）。
+    expect(host.querySelector('#section-session')).not.toBeNull();
+    expect(tocEntry(host, 'session')).not.toBeNull();
   });
 });
