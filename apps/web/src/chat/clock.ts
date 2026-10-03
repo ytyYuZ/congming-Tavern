@@ -162,7 +162,7 @@ export function worldClockText(reading: ClockDisplay, t: Translator['t']): strin
  * "the user pressed the button".
  *
  * WHEN THAT WIRING ARRIVES IT MUST ASK ADR-037'S SWITCH FIRST. `feature.timeAndScheduling`
- * (docs/05-决策记录.md §757-774, `state/feature-store.ts`) is the app-level answer to "does
+ * (docs/05-决策记录.md §758-775, `state/feature-store.ts`) is the app-level answer to "does
  * time advance at all", and with it OFF the manual controls are not rendered — so an implicit
  * advance that skipped the switch would be the one path still moving the clock while the user
  * believes time is stopped. The switch is a precondition, not a filter on the result.

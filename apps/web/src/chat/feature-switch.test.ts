@@ -2,7 +2,7 @@
  * ADR-037 的开关本身（C1）：`settings` 行 `feature.timeAndScheduling`，**行缺席＝关闭**。
  *
  * WHY THIS FILE EXISTS
- * `docs/05-决策记录.md:757-774` 定的是一件事：升级上来的老库没有这一行，所以默认是关闭；用户
+ * `docs/05-决策记录.md:758-775` 定的是一件事：升级上来的老库没有这一行，所以默认是关闭；用户
  * 在设置里点一下才打开。别处那些「播种开启态」的文件验的是开启态与开关之前逐字一致，这里验的是
  * 另一半——**关闭时那三件事同时成立**：
  *   ① 不推进：`TimeControls`/`SchedulerPanel`/`CastInterventionPanel` 三组控件不渲染，目录里

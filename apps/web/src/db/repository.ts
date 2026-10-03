@@ -399,7 +399,7 @@ export async function writeMessageWidthSetting(messageWidth: MessageWidth): Prom
 }
 
 /**
- * The one application-level feature switch (ADR-037, docs/05-决策记录.md §757-774): the
+ * The one application-level feature switch (ADR-037, docs/05-决策记录.md §758-775): the
  * time-advance and multi-speaker scheduling half of play, keyed `feature.timeAndScheduling`.
  *
  * WHY THERE IS NO MIGRATION ROW AND NO PARSER: ADR-037 fixes the 口径 as 缺席即关闭，读取处

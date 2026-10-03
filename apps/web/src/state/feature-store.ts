@@ -1,5 +1,5 @@
 /**
- * The application-level feature switches in the UI (ADR-037, docs/05-决策记录.md §757-774),
+ * The application-level feature switches in the UI (ADR-037, docs/05-决策记录.md §758-775),
  * next to the other preference stores: `appearance-store.ts` (look), `locale-store.ts`
  * (language) and `settings-store.ts` (BYO-Key).
  *

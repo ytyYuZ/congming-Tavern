@@ -122,7 +122,7 @@ export interface SendTurnDeps {
    */
   calendar?: Calendar;
   /**
-   * ADR-037's `feature.timeAndScheduling` switch (docs/05-决策记录.md §757-774), whose OFF side
+   * ADR-037's `feature.timeAndScheduling` switch (docs/05-决策记录.md §758-775), whose OFF side
    * takes the world clock out of this turn. **Absent means OFF**: the `settings` row it is read
    * from follows the 口径 缺席即关闭，读取处就是判定处, so a caller that has never heard of the
    * switch gets the switch's default rather than the behaviour that predates it — the two can

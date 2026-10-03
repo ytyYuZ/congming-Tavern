@@ -39,7 +39,7 @@ CI 的第一步就是 `pnpm install --frozen-lockfile`，所以它一坏不是�
 1. **manifest 与 lockfile 的 specifier 对不上**（`ERR_PNPM_OUTDATED_LOCKFILE`）。
    典型成因：手改了某个 `package.json` 的版本（尤其是把 `^x` 换成精确版本）却没有重跑安装。
    `pnpm ci:local` 现在第一步就是 `lockfile`，专门查这个
-   （`--lockfile-only --ignore-scripts`：不碰 node_modules、不跑生命周期脚本）。
+   （它只解析 lockfile：不碰 node_modules、不跑生命周期脚本）。
 2. **依赖比"最小发布年龄"更新**（`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`）。
    pnpm 12 默认拒绝安装**发布不足 24 小时**的版本；本仓库把它显式写在 `pnpm-workspace.yaml`
    里，理由与解法也在那段注释里。关键坑：**本机 pnpm 11 只校验"当前平台会装"的条目，
@@ -77,9 +77,9 @@ pnpm 12 的 `allowBuilds` / `cacheDir` / `storeDir` 都读 `pnpm-workspace.yaml`
 **不读** `.npmrc`；根目录 `.npmrc` 只为 npm 与旧版 pnpm 保留少量兼容设置。
 `cacheDir` 指向工作区内的 `.npm-cache/`，让依赖缓存留在仓库内、构建更接近封闭环境。
 
-### 受限主机（禁止子进程管道通信的沙箱等）
+### 受限环境：子进程管道不可用时
 
-一些沙箱会拒绝管道子进程，Vite 的网络驱动器探测（`net use`）因此抛 `EPERM`，
+一些受限环境会拒绝管道子进程，Vite 的网络驱动器探测（`net use`）因此抛 `EPERM`，
 `vitest` 与 `vite build` 会在启动阶段就挂掉。仓库提供了本地包装脚本，它会预加载一个
 **只中和该探测**的 shim：
 

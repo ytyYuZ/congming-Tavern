@@ -413,7 +413,7 @@ function AppearanceSection() {
 }
 
 /**
- * The feature switches (ADR-037, docs/05-决策记录.md §757-774) — today exactly one: 时间推进与
+ * The feature switches (ADR-037, docs/05-决策记录.md §758-775) — today exactly one: 时间推进与
  * 多角色发言调度, `feature.timeAndScheduling`.
  *
  * WHY THIS SECTION EXISTS AT ALL, WHEN THE DEFAULT IS OFF

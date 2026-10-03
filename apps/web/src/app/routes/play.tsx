@@ -401,7 +401,7 @@ function PlaySections({
   };
   const openingOffered = !skipped && openingChoosing(session, messageChain);
   const clockSummary = worldClockText(clockOf(calendar, session), t);
-  // ADR-037 (docs/05-决策记录.md §757-774): with the switch off the screen offers no way to advance
+  // ADR-037 (docs/05-决策记录.md §758-775): with the switch off the screen offers no way to advance
   // time and no scheduler, so those three sections do not exist here — and a section that does not
   // render is not in the table of contents either, the same rule the opening panel follows below.
   // The switch's constructed value is OFF (`state/feature-store.ts`), so the enabled layout is never

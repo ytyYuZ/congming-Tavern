@@ -159,7 +159,7 @@ function deleteDatabase(name: string): Promise<void> {
 
 /**
  * 开启态播种（ADR-037）：`feature.timeAndScheduling` 的默认是「关闭」（`settings` 行缺席即关闭，
- * 见 `docs/05-决策记录.md:757-774`），而下面这些 describe 验的是开关**开启**时的行为——手动推进
+ * 见 `docs/05-决策记录.md:758-775`），而下面这些 describe 验的是开关**开启**时的行为——手动推进
  * 时间、调度器决定谁发言、卡司干预，以及 B2 那些折叠面板里属于这三组的那几个。它们在挂载之前
  * 把这一行写进存储。
  *
@@ -2844,7 +2844,7 @@ describe('the play screen folds everything but the conversation (B2)', () => {
 /**
  * C1（ADR-037 的开关本身）：关闭时那三组控件不在场，目录里也没有它们。
  *
- * 这个开关的默认是「关闭」（`settings` 行缺席即关闭，见 `docs/05-决策记录.md:757-774`），所以本
+ * 这个开关的默认是「关闭」（`settings` 行缺席即关闭，见 `docs/05-决策记录.md:758-775`），所以本
  * describe 的基线**不播种**——上面的 describe 验的是开启态，这一组验的是关闭态与两态的对照。
  *
  * 「目录跟随实际渲染」是 ADR-037 第①条与本组的同一条规则：目录项不是一张写死的清单，而是

@@ -274,7 +274,7 @@ export const zhCN = {
    */
   'setup.percentValue': '{percent}%',
   /*
-   * THE FEATURE SWITCHES (ADR-037, docs/05-决策记录.md §757-774) — today exactly one:
+   * THE FEATURE SWITCHES (ADR-037, docs/05-决策记录.md §758-775) — today exactly one:
    * `feature.timeAndScheduling`, the switch the play screen's 时间推进, 发言调度 and 卡司干预
    * sections hang on.
    *
@@ -1326,7 +1326,8 @@ export const zhCN = {
     '让 AI 自己写状态或关系（例如自动更新变量、好感度）。\n' +
     'SillyTavern 文件的导入 / 导出入口：映射层已实现并有测试，但界面与命令行都没有暴露这条操作。\n' +
     '「时间与调度」的应用级开关：已经落地在设置页（默认关闭），打开后时间可手动推进、时钟读数进入每回合提示、本地调度器决定发言者；仍未接线的是卡片数据里那套「自动推进时间」的节奏字段。\n' +
-    '主题包、更多界面语言，以及桌面端的打包与发布细节（安装包签名、更新机制、部分受限环境无法启动窗口）。',
+    '主题包、更多界面语言，以及桌面端的打包与发布细节（安装包签名、更新机制）。\n' +
+    '术语的悬停提示：标签上的术语（宏、世界书、token、发言调度等）还没有悬停解释；应用内的「帮助」页与本指南是唯一的解释入口。',
 
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
@@ -2242,7 +2243,8 @@ export const en: Messages = {
     'Letting the AI write state or relationships (updating variables or affinity automatically, for example).\n' +
     'An import/export entry point for SillyTavern files: the mapping layer is implemented and tested, but neither the interface nor the command line exposes it.\n' +
     'The application-level “time and scheduling” switch: it has landed on the settings page (off by default), and once it is on, time can be advanced by hand, the clock reading enters every turn’s prompt, and the local scheduler decides who speaks; what is still unwired is the card data’s own “advance time automatically” rhythm.\n' +
-    'Theme packs, more interface languages, and the desktop packaging and release details (installer signing, the update mechanism, and windows that cannot start in some restricted environments).',
+    'Theme packs, more interface languages, and the desktop packaging and release details (installer signing, the update mechanism).\n' +
+    'Hover explanations for jargon: labels carry no tooltip for terms such as macros, worldbooks, tokens or the speaker scheduler; the in-app Help page and this guide are the only places that explain them.',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',
