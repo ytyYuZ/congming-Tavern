@@ -1,10 +1,13 @@
 # SmartTavern 交接说明（致后续开发 AI）
 
-- 交接时间：2026-09-26（**2026-10-02 更新：M1 已完成；同日完成首次人工验收的修复（阶段 A / B / C）**，见 §0）
+- 交接时间：2026-09-26（此后几次更新的要点记在下一条）
+- 更新记录：**2026-10-02** —— M1 的 26 行全部落地，首次人工验收的修复（阶段 A / B / C）落地；
+  **2026-10-03** —— 一键启动落地（`start-web.cmd` 双击起服务并开浏览器；release 单文件 exe 把前端内嵌，
+  不需要开发服务器），并修掉桌面版"双击无反应"（根因与修法见 §9 第 11 条、`docs/06` §10.5、`docs/07` §2）
 - 交接时状态：**只有文档，零代码**；`git` 尚未初始化；无 `package.json` / `node_modules`
-  （**2026-10-02 实际状态：M0 与 M1 共 26 行全部落地并推送，验收修复阶段 A（A1–A6）、
-  B（B1 折叠原语、B2 扮演屏重排）、C（C1 时间/调度应用级开关、C2 应用内帮助）也已落地**，
-  `pnpm ci:local` 五步全绿，仓库级 127 个测试文件 / 1676 个用例；当前版本 v0.17，ADR 至 037）
+  （**2026-10-03 实际状态：M0 与 M1 共 26 行、验收修复阶段 A（A1–A7）与 B、C 全部落地并推送，
+  `pnpm ci:local` 五步全绿；仓库级 127 个测试文件 / 1676 个用例，另有 Rust 侧 10 个 `cargo test` 用例；
+  当前版本 v0.17，ADR 至 037**）
 - 工作区：本地检出（仓库本身与检出位置、盘符、目录名无关；本文档不记录主机路径与环境细节）
 - 本文档用途：让你在 15 分钟内掌握全局，并知道第一行代码该写什么
 
@@ -49,9 +52,17 @@
    （十九节，编号一一对应）。**逐条的"能力 → 具名测试"索引在 `docs/06` §10.1。**
 3. **首次人工验收的下一半**：界面观感 / 布局 / 手感（浏览器侧导入包入口是阶段 A 的 ④，已落地）。
    桌面窗口的可见性已于 2026-10-03 确认，不再挂在待办里。
-4. **`docs/06` §10.5 里记录在案的缺口**：其中"规则包与预设尚无可持久化的形状"和"`TurnScheduler`
-   暂住 `apps/web` 而 `docs/02` §5.6 说引擎层"最值得先做决定。
+4. **`docs/06` §10.5 里记录在案的缺口**（那一节是权威列表，都是核对出来的，不是猜的）。最可能进下一轮的三条：
+   ①**规则包（rule packs）与预设（prompt presets）还没有可持久化的形状**，所以 `Session.refs.rulePack`
+   故意缺席、包导出里 `rulePacks: 0`；②**`TurnScheduler` 暂住 `apps/web/src/session/scheduler.ts`**，
+   与 `docs/02` §5.6 把它放引擎层不一致——它是纯核心，搬进 `packages/core` 是机械搬迁；
+   ③**F8-3 的术语 tooltip 半边未做**（帮助页有了，标签旁的就地说明还没有）。
 5. **仍需用户拍板的事**见 §8（其中第 1 条"产品正式名称"至今未定）。
+
+**下一个对话的起手式**（2026-10-03 交接时）：
+①先要用户对界面观感 / 布局 / 手感的具体反馈，把它整理成一张可逐条验收的清单（与 `docs/06` §10.1 的
+"A*" 行同一写法：能力 → 具名测试）；②再决定是否动 `docs/06` §10.5 记录的两个架构缺口。
+`docs/06` §10 是"哪一行做到什么程度"的唯一权威索引，别用本文档代替它。
 
 ---
 
@@ -118,6 +129,13 @@
 | `python` | ✅ 3.13.3 |
 | `rg` | ✅ 15.2.0 |
 | `cargo` / `rustc` | ✅ 1.98.1（`x86_64-pc-windows-msvc`）—— M0-T8 前装好，Tauri 桌面方案因此成立；MSVC BuildTools 2022 与 Windows SDK 10.0.26100 也都在 |
+
+桌面壳的构建与检查**不在** `pnpm ci:local` 的五步里，要单独跑：
+
+- `pnpm --filter @smarttavern/desktop tauri:check` —— `cargo fmt --check` + `clippy -D warnings` + `cargo test`；
+- `pnpm --filter @smarttavern/desktop tauri:build` —— release 单文件 exe，前端由 `generate_context!` 内嵌进可执行文件，
+  所以双击可执行文件即可，不需要开发服务器（与 `tauri:dev` / debug 产物走开发服务器地址恰好相反）；
+  产物在 `apps/desktop/src-tauri/target/release/`，构建前 `apps/web/dist` 必须已存在（先 `pnpm build`）。
 
 ---
 
@@ -280,6 +298,18 @@ M0-T0 → M0-T1 → M0-T2 → ┬─ M0-T3 → M0-T4 ─┐
 9. **平台差异**：桌面端通过 Tauri Rust 侧发请求可绕开 CORS；Web 端直连受 CORS 限制，
    部分 Provider 需要代理。设计 Provider 层时不要假设"浏览器一定能直连"。
 10. **资源文件不进数据库**：图片走 `AssetStore` 内容寻址（文件名 = SHA-256），数据库只存元数据。
+11. **桌面壳"双击无反应"的坑（已修，但要知道形状）**：Tauri 2 在 Windows 上**强制**把 WebView2 的
+    数据目录设为 `app_local_data_dir()`，并在**建窗口之前**对它做 `create_dir_all`；该目录不可创建时
+    抛出的 `io::Error` 会在 `RuntimeRunEvent::Ready` 里 `panic!("Failed to setup app: …")` 直接把进程
+    杀掉——此时**一个窗口都还没建**，用户侧表现为"双击没反应、无日志"。更关键的是顺序：配置里的
+    窗口在用户 `setup` 闭包**之前**创建，所以**用户代码救不了**。现在的做法是配置 `"create": false`，
+    改由 `apps/desktop/src-tauri/src/lib.rs` 用 `WebviewWindowBuilder::data_directory(..)` 建窗口，
+    数据目录按"默认 → 漫游 → exe 同级 → 临时目录"取第一个可写的，并把每个被拒候选打到 stderr。
+    **排障入口**：从控制台启动 exe（或 `聪明酒馆-诊断.cmd`）看 stderr 里的 `[smarttavern] webview data directory: …`。
+12. **`tauri:build` 会改被跟踪的 `apps/desktop/src-tauri/Cargo.toml`**：Tauri CLI 会把
+    `tauri = { version = "2" }` 重写成 `tauri = { version = "2", features = [] }`（语义等价，但会让
+    工作树变脏）。Rust 构建之后先看 `git status`，用 `git checkout -- apps/desktop/src-tauri/Cargo.toml` 还原，
+    再提交别的东西。`tauri:check`（fmt + clippy `-D warnings` + `cargo test`）不受影响。
 
 ---
 
@@ -325,4 +355,6 @@ M0-T0 → M0-T1 → M0-T2 → ┬─ M0-T3 → M0-T4 ─┐
 且当时世界上还没有任何一个 `.stpack` 文件，不存在兼容包袱。修订后 `formatVersion: 1` 即锁定。
 
 **当前进度**：M0 与 M1 共 26 行全部落地并推送，首次人工验收的修复计划（阶段 A / B / C）也已落地；
-下一步是首次人工验收的下一半（界面观感 / 手感、窗口里真的显示了界面）与 `docs/06` §10.5 里记录在案的缺口。
+一键启动（`start-web.cmd` + release 单文件 exe）与桌面版"双击无反应"的修复已于 2026-10-03 落地并推送
+（最近三个提交：`156583c` 网页版双击启动器、`4375ad2` 桌面窗口自建与 WebView2 数据目录回退、`ade7556` 文档同步）。
+下一步是首次人工验收的下一半（**界面观感 / 布局 / 手感**）与 `docs/06` §10.5 里记录在案的缺口。
