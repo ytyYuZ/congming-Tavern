@@ -57,7 +57,8 @@
    故意缺席、包导出里 `rulePacks: 0`；②**`TurnScheduler` 暂住 `apps/web/src/session/scheduler.ts`**，
    与 `docs/02` §5.6 把它放引擎层不一致——它是纯核心，搬进 `packages/core` 是机械搬迁；
    ③**F8-3 的术语 tooltip 半边未做**（帮助页有了，标签旁的就地说明还没有）。
-5. **仍需用户拍板的事**见 §8（其中第 1 条"产品正式名称"至今未定）。
+5. **仍需用户拍板的事**见 §8；其中第 1 条（产品正式名称）已由 §11 落定（聪明酒馆 / SmartTavern，
+   机器标识 `smarttavern` 不变），以 §11 为准。
 
 **下一个对话的起手式**（2026-10-03 交接时）：
 ①先要用户对界面观感 / 布局 / 手感的具体反馈，把它整理成一张可逐条验收的清单（与 `docs/06` §10.1 的
@@ -358,3 +359,26 @@ M0-T0 → M0-T1 → M0-T2 → ┬─ M0-T3 → M0-T4 ─┐
 一键启动（`start-web.cmd` + release 单文件 exe）与桌面版"双击无反应"的修复已于 2026-10-03 落地并推送
 （最近三个提交：`156583c` 网页版双击启动器、`4375ad2` 桌面窗口自建与 WebView2 数据目录回退、`ade7556` 文档同步）。
 下一步是首次人工验收的下一半（**界面观感 / 布局 / 手感**）与 `docs/06` §10.5 里记录在案的缺口。
+
+---
+
+## 12. 2026-10-19 接手复核（追加）
+
+本节记录一次只读复核 + 文档收口的结果；与正文冲突时以本节为准（与 §11 同级）。
+
+- **验证重跑**：`pnpm lint` / `pnpm typecheck` / `pnpm test` / `pnpm build` 四步全绿；测试
+  **127 个文件 / 1676 个用例**（与 `docs/06` §10 的数字一致）；`biome check .` 367 个文件 0 诊断；
+  构建产物 `apps/web/dist/assets/index-*.js` 正常生成。桌面 exe 仍是 2026-10-03 的构建物
+  （12,836,352 B），本轮**未重建、未重跑** `tauri:check`。
+- **代码侧**：`Session.state` 已按 ADR-032 落地 —— 必填字段在
+  `packages/schema/src/entities/session.ts:272-277`，读取收在 `clockOf()`（`apps/web/src/chat/clock.ts`），
+  写回是 `writeSessionState`（`apps/web/src/db/repository.ts:901-908`，`updatedAt` 随状态更新）；
+  包格式的 `data/state.json` 已是会话实时状态（`packages/importers/src/export-package.ts` /
+  `import-package.ts`）。没有 TODO/FIXME 堆积，也没有半成品目录。
+- **文档收口**：`README.md`「当前状态」已从 v0.10 基线更新为 2026-10-03 收尾基线、并删除
+  「桌面窗口起不来」的保留说明；`docs/06` 升到 v0.10，§9.4 / §10.2 / §10.4 已与代码现状对齐；
+  产品名冲突（§0 说未定、§11 已定）在 §0 的待办 5 里改为以 §11 为准。
+- **未推送**：`main` 比 `origin/main` 多 1 个提交（`0736e36 docs(handoff): 归档 2026-10-03…`）——
+  本复核环境没有网络（schannel 不可用），推送需在正常桌面会话完成；推送后再看一次 `git status`。
+- **仍未完成**：§0 的待办 3（观感 / 布局 / 手感人工验收）与待办 4（`docs/06` §10.5 的缺口）；
+  优先级建议见 `README.md`「当前状态」的「下一步」。
