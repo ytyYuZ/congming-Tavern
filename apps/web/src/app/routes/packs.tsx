@@ -41,6 +41,7 @@ import { packStorage } from '../../packs/pack-storage';
 import type { SessionDraft } from '../../session/roster';
 import { useChatStore } from '../../state/chat-store';
 import { useContentStore } from '../../state/content-store';
+import { TermHint } from '../term-hint';
 
 /** What a file picker offers. A `.stpack` is a ZIP, so a file manager's own guess also matches. */
 const PACK_ACCEPT = '.stpack,application/zip';
@@ -143,8 +144,9 @@ function ImportReportView({
             // mutable list, and the importer offers no key for it.
             // biome-ignore lint/suspicious/noArrayIndexKey: report lines carry no identity.
             <li key={`${entity.entity}-${index}`}>
-              {t(ENTITY_KEY[entity.entity])} · {t(ACTION_KEY[entity.action])} ·{' '}
-              {entity.name ?? entity.id ?? entity.packageId}
+              {t(ENTITY_KEY[entity.entity])}
+              {entity.entity === 'worldbook' ? <TermHint term="worldbook" /> : null} ·{' '}
+              {t(ACTION_KEY[entity.action])} · {entity.name ?? entity.id ?? entity.packageId}
             </li>
           ))}
         </ul>

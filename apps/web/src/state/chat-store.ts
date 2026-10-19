@@ -55,7 +55,7 @@
  * reason), and the same read refreshes the `headMessageId` the turn just moved.
  *
  * WHAT M1-S5 ADDED: A PROPOSAL, A VALIDATED ASSIGNMENT, AND A STORED PLAN
- * The turn scheduler's decision is a pure rule (`session/scheduler.ts`), and this store is
+ * The turn scheduler's decision is a pure rule (`engine/turn/scheduler.ts`), and this store is
  * what gives it DATA: `proposeNextTurn` resolves the session's cast pins to their voice
  * profiles, hands the rule the active chain, and publishes the answer as `schedule`;
  * `speakNextTurn` does the same for a named character, writes the `turnPlans` row and then
@@ -132,6 +132,16 @@
  * for both paths: they are the same claim ("I am writing the chain's first message") and the
  * two writes it guards are the same row.
  */
+import {
+  type CastMember,
+  type NoSpeakerReason,
+  planDraftOf,
+  planTurn,
+  type RefusalReason,
+  type SchedulerInput,
+  spokenLineOf,
+  type TurnSchedule,
+} from '@smarttavern/core';
 import type { MessageKey } from '@smarttavern/i18n';
 import type { FetchLike } from '@smarttavern/providers';
 import type {
@@ -188,16 +198,6 @@ import {
 } from '../session/cast';
 import type { ForkPoint } from '../session/fork';
 import { type SessionDraft, sessionPinsOf } from '../session/roster';
-import {
-  type CastMember,
-  type NoSpeakerReason,
-  planDraftOf,
-  planTurn,
-  type RefusalReason,
-  type SchedulerInput,
-  spokenLineOf,
-  type TurnSchedule,
-} from '../session/scheduler';
 import { renameIssueOf, titleNameOf } from '../session/title';
 import { useFeatureStore } from './feature-store';
 import { isProviderReady, useSettingsStore } from './settings-store';
@@ -268,7 +268,7 @@ export interface ChatState {
    * WHY IT IS STORE STATE AND NOT THE PANEL'S OWN: computing it needs the cast's PINNED
    * card versions, and only this layer may reach `db/repository.ts` (ADR-017) - so a view
    * cannot resolve a `Session.refs.cast` pin itself. It is a copy of the pure rule's output
-   * (`session/scheduler.ts`), refreshed by `proposeNextTurn` and by every turn this store
+   * (`engine/turn/scheduler.ts`), refreshed by `proposeNextTurn` and by every turn this store
    * starts, and it is cleared when the session changes so a proposal can never be rendered
    * against another session's cast.
    */

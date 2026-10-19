@@ -31,7 +31,7 @@ pnpm build          # Vite 构建 apps/web 与 apps/desktop
 > 此后每次 `pnpm` 调用都指向不存在的二进制。版本改由 CI 显式钉住 —— 本地版本可以不同，
 > 但请让 `pnpm install` 之后**提交 lockfile 的变化**，因为 CI 用 `--frozen-lockfile`。
 
-### CI 的 install 步骤：两类会让**四个 job 一起红**的失败（都踩过）
+### CI 的 install 步骤：两类会让**五个 job 一起红**的失败（都踩过）
 
 CI 的第一步就是 `pnpm install --frozen-lockfile`，所以它一坏不是某个 job 红，而是**四个全红**，
 日志里只有一行 `ERR_PNPM_…`，看起来非常像"环境问题"。已知两类成因：
@@ -190,9 +190,9 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 
 ---
 
-## 4. CI：四个 job 全绿才允许合并 / Four green jobs before merge
+## 4. CI：五个 job 全绿才允许合并 / Five green jobs before merge
 
-`.github/workflows/ci.yml` 按顺序串起四个 job：
+`.github/workflows/ci.yml` 按顺序串起五个 job：
 
 | job | 命令 | 内容 |
 | --- | --- | --- |
@@ -200,8 +200,9 @@ BREAKING CHANGE: contributors must format with pnpm lint:fix before pushing.
 | `typecheck` | `pnpm typecheck` | `tsc -b`（strict + `noUncheckedIndexedAccess`；core 无 DOM） |
 | `test` | `pnpm test` | Vitest 跑遍全部 workspace |
 | `build` | `pnpm build` | Vite 构建 `apps/web`、`apps/desktop` |
+| `rust` | `pnpm --filter @smarttavern/desktop tauri:check` | Tauri 壳：`cargo fmt --check` + `clippy -D warnings` + `cargo test`；先构建 `apps/desktop/dist`（`generate_context!` 在编译期内嵌前端），并在 CI 里装 `webkit2gtk-4.1` 等系统库、钉 Rust 1.98.1 |
 
-四个 job 用 `needs:` 串行；最后由 `ci` 这个 gate job 汇总，分支保护只需要把
+五个 job 用 `needs:` 串行；最后由 `ci` 这个 gate job 汇总，分支保护只需要把
 `ci` 设为必需状态检查。**任何一项变红都不允许合并。**
 
 ---
@@ -383,8 +384,8 @@ pnpm --filter @smarttavern/desktop tauri:check          # cargo fmt --check + cl
 正文字节一致。**改一侧的形状，另一侧的测试就会红。**（顺带一条 serde 经验：枚举上
 `rename_all` 只重命名**变体**，变体里的字段要靠 `rename_all_fields` —— 这条正是夹具测试抓出来的。）
 
-**Rust 目前不在 CI 里 —— 这是已知缺口，不是疏忽。** 原因：`cargo test` 要编译整棵 `tauri`
-依赖树，Linux runner 还得装 `webkit2gtk-4.1` 一类系统库，冷构建十分钟起步，而 M0 的四个 job
-要保持在"几分钟内给人答案"的量级。因此在桌面端有改动的 PR 上，**`tauri:check` 与
-`tauri:build` 是提交前必须自己跑的一步**，把结果写进 PR 说明。补一个带缓存的 Rust job
-已记在 `docs/06-开发任务拆解.md` 的后续项里。
+**Rust 已经在 CI 里（2026-10 起），但只到 `tauri:check`。** `rust` job 装好 Linux 系统库、钉住
+Rust 1.98.1、先跑 `pnpm --filter @smarttavern/desktop build`（否则 `generate_context!` 找不到
+`frontendDist`），再跑 `tauri:check`。它排在 `build` 之后，冷构建要几分钟；这是刻意接受的代价
+（桌面壳是发布物，曾经只有手动闸门）。**`tauri:build` 仍然只手动跑**：它会改写被跟踪的
+`Cargo.toml`，完整打包还要联网下载工具，所以「出安装包」是发布动作，不是 CI 动作。

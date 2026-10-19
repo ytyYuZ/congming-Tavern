@@ -31,6 +31,12 @@ export * from './engine/prompt';
  */
 export * from './engine/time';
 /**
+ * The turn scheduler (`docs/02` §5.6, M1-S5): who speaks next, as a pure function
+ * of the cast, the transcript and each card's limits. It produces a `TurnPlan`
+ * whose reasons are facts; the catalog sentences live in the app layer.
+ */
+export * from './engine/turn';
+/**
  * The port contracts (docs/02 §6, §13 #3/#7/#8) and their in-memory test
  * doubles. Re-exported from the entry point so an adapter package imports one
  * specifier; `./ports/mock` stays reachable through the barrel for tests.

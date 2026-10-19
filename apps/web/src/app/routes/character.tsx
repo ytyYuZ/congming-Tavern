@@ -92,7 +92,7 @@ const CHARACTER_SECTIONS: readonly SectionDefinition[] = [
   { id: 'st', title: 'character.sectionSt', openByDefault: true },
   { id: 'voice', title: 'character.sectionVoice', openByDefault: false },
   { id: 'visual', title: 'character.sectionVisual', openByDefault: false },
-  { id: 'sampling', title: 'character.sectionSampling', openByDefault: false },
+  { id: 'sampling', title: 'character.sectionSampling', openByDefault: false, term: 'token' },
 ];
 
 /** One section's definition, by id — see `routes/world.tsx`'s twin for why a typo throws here. */

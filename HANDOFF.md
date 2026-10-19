@@ -54,9 +54,12 @@
    桌面窗口的可见性已于 2026-10-03 确认，不再挂在待办里。
 4. **`docs/06` §10.5 里记录在案的缺口**（那一节是权威列表，都是核对出来的，不是猜的）。最可能进下一轮的三条：
    ①**规则包（rule packs）与预设（prompt presets）还没有可持久化的形状**，所以 `Session.refs.rulePack`
-   故意缺席、包导出里 `rulePacks: 0`；②**`TurnScheduler` 暂住 `apps/web/src/session/scheduler.ts`**，
-   与 `docs/02` §5.6 把它放引擎层不一致——它是纯核心，搬进 `packages/core` 是机械搬迁；
-   ③**F8-3 的术语 tooltip 半边未做**（帮助页有了，标签旁的就地说明还没有）。
+   故意缺席、包导出里 `rulePacks: 0`；②**`TurnScheduler` 已搬进 `packages/core`**（不再是一条缺口）：
+   规则住 `packages/core/src/engine/turn/scheduler.ts`，`planTurn` / `planDraftOf` / `MAX_SPEAKERS_PER_ROUND`
+   从 `@smarttavern/core` 导入；catalog 文本映射仍在 `apps/web/src/session/scheduler-text.ts`；
+   ③**F8-3 的术语 tooltip 半边已兑现**（不再是一条缺口）：`apps/web/src/app/term-hint.tsx` + `term-hint.test.tsx`；
+   宏 / 发言调度 / token / 世界书四个术语分别挂在状态栏、发言调度、采样、内容包 worldbook 行，文案在
+   `packages/i18n/src/catalog.ts` 的 `term.*`；覆盖面仍只有这四个术语，长解释仍在帮助页与 `docs/07`。
 5. **仍需用户拍板的事**见 §8；其中第 1 条（产品正式名称）已由 §11 落定（聪明酒馆 / SmartTavern，
    机器标识 `smarttavern` 不变），以 §11 为准。
 
@@ -131,7 +134,8 @@
 | `rg` | ✅ 15.2.0 |
 | `cargo` / `rustc` | ✅ 1.98.1（`x86_64-pc-windows-msvc`）—— M0-T8 前装好，Tauri 桌面方案因此成立；MSVC BuildTools 2022 与 Windows SDK 10.0.26100 也都在 |
 
-桌面壳的构建与检查**不在** `pnpm ci:local` 的五步里，要单独跑：
+桌面壳的检查**不在** `pnpm ci:local` 的五步里（那是本地脚本）；GitHub 的 CI 从 2026-10 起有
+独立的 `rust` job 跑 `tauri:check`。本地要跑时：
 
 - `pnpm --filter @smarttavern/desktop tauri:check` —— `cargo fmt --check` + `clippy -D warnings` + `cargo test`；
 - `pnpm --filter @smarttavern/desktop tauri:build` —— release 单文件 exe，前端由 `generate_context!` 内嵌进可执行文件，
@@ -186,7 +190,7 @@
 2. 建 pnpm workspaces 骨架（见 `docs/02-技术架构.md` §3 的目录树）：
    `apps/web`、`apps/desktop`、`packages/{schema,core,providers,storage,rules,packages,importers,ui,i18n}`、`tools/`
 3. 配置 Biome（lint + format）、Vitest、TypeScript `strict` + `noUncheckedIndexedAccess`
-4. CI 四个 job：`lint` → `typecheck` → `test` → `build`，全绿才允许合并
+4. CI 五个 job：`lint` → `typecheck` → `test` → `build` → `rust`，全绿才允许合并（`rust` 是 2026-10 加的，只检查桌面壳）
 5. **用 lint 规则固化依赖方向**（例如 Biome 的 `noRestrictedImports`），并写一个"故意违规应导致 CI 失败"的验证
 6. 提交规范：Conventional Commits（`feat:` / `fix:` / `docs:` / `refactor:` / `test:`）
 
@@ -382,3 +386,26 @@ M0-T0 → M0-T1 → M0-T2 → ┬─ M0-T3 → M0-T4 ─┐
   本复核环境没有网络（schannel 不可用），推送需在正常桌面会话完成；推送后再看一次 `git status`。
 - **仍未完成**：§0 的待办 3（观感 / 布局 / 手感人工验收）与待办 4（`docs/06` §10.5 的缺口）；
   优先级建议见 `README.md`「当前状态」的「下一步」。
+---
+
+## 13. A 步落地（2026-10，追加）
+
+本节记录 `docs/06` §10.5 中四项低风险收尾的落地结果；与正文冲突时以本节为准。
+
+- **`TurnScheduler` 搬进 `packages/core`**：规则住 `packages/core/src/engine/turn/scheduler.ts`，
+  `planTurn` / `planDraftOf` / `MAX_SPEAKERS_PER_ROUND` 等从 `@smarttavern/core` 导出；catalog 文本
+  映射仍是 app 层的 `apps/web/src/session/scheduler-text.ts`（core 保持 locale-free），其测试
+  `scheduler-text.test.ts` 留在 `apps/web/src/session/`。§10.5 的对应缺口已关闭。
+- **F8-3 的术语 tooltip 已落地**：`apps/web/src/app/term-hint.tsx`（四个术语：宏 / 发言调度 /
+  token / 世界书；文案在 `packages/i18n/src/catalog.ts` 的 `term.*`）挂在扮演屏「状态栏」「发言调度」、
+  角色屏「采样」、内容包导入报告的 worldbook 行。`app/term-hint.test.tsx` 钉住按钮命名、
+  `aria-describedby` 指向真正渲染的句子、点击钉住。**覆盖面仍只有这四个术语**，长解释仍在帮助页
+  与 `docs/07`（`help.sec19` 的旧说法已改写）。
+- **`docs/04` §7 与代码对齐**：冲突表与 §12 第 10 条改写真键 `x-smarttavern.origin-id` /
+  `x-smarttavern.imported-from`（驼峰 `originId` 不可能做键），`docs/02` §8 的摘要同步。
+- **CI 增加 `rust` job**：`.github/workflows/ci.yml` 新增 `rust`（`needs: build`，`ubuntu-latest`，
+  apt 装 webkit2gtk-4.1 等、Rust 钉 1.98.1、先构建 `apps/desktop/dist`、再 `tauri:check`），
+  `gate` 的 `needs` 与文案同步为五个 job；`CONTRIBUTING` §4/§7、`docs/06` §0.1/§9.4/§10.2 已更新。
+  **这条 job 还没有在 GitHub 上真正跑过**（本机无网络）：第一次推送后先看它的日志。
+- **验证**：`pnpm ci:local` 的 lint / typecheck / test / build 全绿；测试 **129 个文件 / 1679 个用例**
+  （比 §12 的 127/1676 多，因为新增 `term-hint.test.tsx` 与 app 层的 `scheduler-text.test.ts`）。

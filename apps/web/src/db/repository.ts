@@ -71,7 +71,13 @@
  * `state/locale-store.ts` -> here is already a path in one direction, and closing it
  * makes a module half-evaluated). A leaf has no such path to close.
  */
-import { COLLECTIONS, type Collection, type RowBase, type Tx } from '@smarttavern/core';
+import {
+  COLLECTIONS,
+  type Collection,
+  type RowBase,
+  type TurnPlanDraft,
+  type Tx,
+} from '@smarttavern/core';
 import { isLocale, type Locale } from '@smarttavern/i18n';
 import {
   type Character,
@@ -127,7 +133,6 @@ import {
   isEncryptedSecret,
 } from '../secrets/secret-crypto';
 import { type ForkAnchor, type ForkPoint, planFork } from '../session/fork';
-import type { TurnPlanDraft } from '../session/scheduler';
 import { copyState } from '../session/state-copy';
 import { readTable, write } from './database';
 
@@ -1571,10 +1576,10 @@ async function forkAnchorOf(
  * the explanation of a silence. It is ONE row in ONE transaction, like a save point: the
  * entries and the exclusions are one decision, and a reader must never see half of it.
  *
- * WHY `TurnPlanDraft` COMES FROM `session/scheduler.ts`
+ * WHY `TurnPlanDraft` COMES FROM `engine/turn/scheduler.ts`
  * The id and the timestamp are minted HERE, exactly as `appendMessage` and `createCheckpoint`
  * mint theirs, so there is one minter for this collection. Everything else is the rule's
- * output, and `session/scheduler.ts` owns it (`planDraftOf` is where the structured reasons
+ * output, and `engine/turn/scheduler.ts` owns it (`planDraftOf` is where the structured reasons
  * become the row's locale-free fact strings) — this module only persists what it is handed.
  */
 export type TurnPlanRow = TurnPlan & RowBase;

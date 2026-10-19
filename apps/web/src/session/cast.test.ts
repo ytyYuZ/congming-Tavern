@@ -5,7 +5,7 @@
  * WHAT THIS FILE HAS TO PROVE, IN THE MILESTONE'S OWN TERMS
  * The row's clause that names these two acts is 「禁言」 / 「把角色移出当前场景」, and the
  * acceptance is 「干预后调度器行为符合预期」. The scheduler's half of that is asserted in
- * `session/scheduler.test.ts` (the muted and absent rows of the state table, and the refusal of a
+ * `engine/turn/scheduler.test.ts` (the muted and absent rows of the state table, and the refusal of a
  * named assignment); what is left for THIS file is the value the scheduler reads, and it is
  * checked the way `chat/vars.test.ts` checks a variable:
  * 1. every write is PURE - the input state and its record come out unchanged, because a

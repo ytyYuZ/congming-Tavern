@@ -528,7 +528,7 @@ async function recordOutcome(
     content: draft.text,
     // WHO SPOKE, when a local schedule said so (M1-S5). The field is what makes the NEXT
     // round's caps enforceable, because the scheduler counts each character's lines by
-    // reading this column (`session/scheduler.ts`).
+    // reading this column (`engine/turn/scheduler.ts`).
     ...(speaking.speakerId === undefined ? {} : { speakerId: speaking.speakerId }),
     // `model` is the id the user configured — a label, never a credential
     // (HANDOFF §4.1 invariant 6). `tokens` is present only when the vendor

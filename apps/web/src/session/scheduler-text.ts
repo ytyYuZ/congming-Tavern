@@ -15,8 +15,8 @@
  * every language into TypeScript instead of into the catalog. The two locales genuinely
  * order these clauses differently, which is the same argument `play.clock` records.
  */
+import type { ExclusionReason, RefusalReason, SpeakerReason } from '@smarttavern/core';
 import type { MessageKey, TranslateParams } from '@smarttavern/i18n';
-import type { ExclusionReason, RefusalReason, SpeakerReason } from './scheduler';
 
 /** One catalog sentence plus the values its placeholders take. */
 export interface ReasonText {

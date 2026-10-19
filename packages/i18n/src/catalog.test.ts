@@ -22,7 +22,9 @@ import { LOCALES } from './locale';
  * patch, accept/reject, undo — not a world card's, and `M1-C2` and ADR-031's variable proposal
  * are the two callers that make that a distinction rather than a taste. `help` was added by the
  * in-app help route (C2): its nineteen sections mirror `docs/07-使用指南.md`, so its copy is the
- * TOUR's — short points per section — and not a place for a screen's own labels.
+ * TOUR's — short points per section — and not a place for a screen's own labels. `term` was added
+ * by F8-3's tooltip half: its sentences are the GLOSSARY's (one label and one explanation per
+ * jargon word), rendered in place beside a label rather than inside a screen's own copy.
  */
 const AREAS = [
   'common',
@@ -37,6 +39,7 @@ const AREAS = [
   'play',
   'help',
   'error',
+  'term',
 ];
 
 describe('message catalogs', () => {

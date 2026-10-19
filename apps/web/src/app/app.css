@@ -1195,3 +1195,84 @@ body {
   margin-top: 0.75rem;
   padding-top: 0.6rem;
 }
+
+/*
+ * An in-place term explanation (F8-3): the marker sits beside the label it explains, and the
+ * tooltip is a CHILD of the marker — not a portal — so it needs no open state, no focus trap and
+ * no measurement; CSS shows it on hover and on keyboard focus. A click pins it open
+ * (`data-pinned`), which is the only state the component keeps.
+ *
+ * The tip is `display: none` until shown rather than transparent: a hidden-but-laid-out tip would
+ * still take a hit-test rectangle over whatever sits above the label. `pointer-events: none` keeps
+ * a shown tip from flickering when the pointer crosses it on the way to something else.
+ */
+.term-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.3rem;
+  vertical-align: baseline;
+}
+
+/*
+ * The marker is a BUTTON, so every default a browser gives a button has to be undone: the look
+ * here is a small circled question mark, not a control with a face.
+ */
+.term-hint-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  height: 1.15em;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.7em;
+  line-height: 1;
+  cursor: help;
+  opacity: 0.65;
+}
+
+.term-hint:hover .term-hint-mark,
+.term-hint-mark:focus-visible,
+.term-hint[data-pinned="true"] .term-hint-mark {
+  opacity: 1;
+}
+
+/* The ring is the only cue that the marker is reachable with Tab, so it is not removed. */
+.term-hint-mark:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.term-hint-tip {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 0.4rem;
+  width: max-content;
+  max-width: 22rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.term-hint:hover .term-hint-tip,
+.term-hint:focus-within .term-hint-tip,
+.term-hint[data-pinned="true"] .term-hint-tip {
+  display: block;
+}

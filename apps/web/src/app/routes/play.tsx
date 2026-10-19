@@ -86,10 +86,11 @@
  * cast list they act on and each row says what the intervention did, before and after the click.
  * This file decides nothing about what an intervention MEANS: the transition is
  * `session/cast.ts` (pure), the write is `state/chat-store.ts`'s `interveneCast`, and the
- * scheduler's answer to it is `session/scheduler.ts`'s `muted` / `absent` reasons — all of which
+ * scheduler's answer to it is `engine/turn/scheduler.ts`'s `muted` / `absent` reasons — all of which
  * this panel renders. The undo it offers is the value that call returned, so it restores exactly
  * what the user replaced rather than a value this screen re-derived.
  */
+import { MAX_SPEAKERS_PER_ROUND, type TurnSchedule } from '@smarttavern/core';
 import type { MessageKey, Translator } from '@smarttavern/i18n';
 import type { Calendar, Checkpoint, Id, Message, Session } from '@smarttavern/schema';
 import { Link, useNavigate } from '@tanstack/react-router';
@@ -110,7 +111,6 @@ import { useTranslation } from '../../i18n/use-translation';
 import { UnlockAction } from '../../secrets/unlock-dialog';
 import { type CastIntervention, interventionOf } from '../../session/cast';
 import type { ForkPoint } from '../../session/fork';
-import { MAX_SPEAKERS_PER_ROUND, type TurnSchedule } from '../../session/scheduler';
 import {
   exclusionReasonText,
   type ReasonText,
@@ -155,10 +155,10 @@ const PLAY_SECTIONS: readonly SectionDefinition[] = [
   { id: 'session', title: 'play.sessionTitle', openByDefault: true },
   { id: 'clock', title: 'play.clockTitle', openByDefault: false },
   { id: 'advance', title: 'play.advanceTitle', openByDefault: false },
-  { id: 'status', title: 'play.variablesTitle', openByDefault: false },
+  { id: 'status', title: 'play.variablesTitle', openByDefault: false, term: 'macro' },
   { id: 'checkpoints', title: 'play.checkpointTitle', openByDefault: false },
   { id: 'forks', title: 'play.forkTitle', openByDefault: false },
-  { id: 'scheduler', title: 'play.schedulerTitle', openByDefault: false },
+  { id: 'scheduler', title: 'play.schedulerTitle', openByDefault: false, term: 'scheduler' },
   { id: 'cast', title: 'play.castInterventionTitle', openByDefault: false },
   { id: 'opening', title: 'play.openingTitle', openByDefault: false },
 ];

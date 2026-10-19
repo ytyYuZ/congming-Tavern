@@ -1327,7 +1327,7 @@ export const zhCN = {
     'SillyTavern 文件的导入 / 导出入口：映射层已实现并有测试，但界面与命令行都没有暴露这条操作。\n' +
     '「时间与调度」的应用级开关：已经落地在设置页（默认关闭），打开后时间可手动推进、时钟读数进入每回合提示、本地调度器决定发言者；仍未接线的是卡片数据里那套「自动推进时间」的节奏字段。\n' +
     '主题包、更多界面语言，以及桌面端的打包与发布细节（安装包签名、更新机制）。\n' +
-    '术语的悬停提示：标签上的术语（宏、世界书、token、发言调度等）还没有悬停解释；应用内的「帮助」页与本指南是唯一的解释入口。',
+    '术语的深入解释：标签旁已有「?」（宏、世界书、token、发言调度四个术语，悬停或键盘聚焦即显示一句解释）；更长的机制说明仍只在帮助页与本指南。',
 
   /* ── error: what a failed turn shows ────────────────────────────────────── */
   /*
@@ -1401,6 +1401,24 @@ export const zhCN = {
    * an ordinary stale click as an app fault.
    */
   'error.messageMissing': '这条消息已不在当前分支上，请刷新后重试',
+  /*
+   * The in-place term explanations (F8-3's tooltip half, `apps/web/src/app/term-hint.tsx`).
+   * BEING A KEY AND NOT A `title=` ON THE CONTROL is the point: `title` is unreachable from
+   * the keyboard, so the hint is a real element the catalog describes. Each label is the
+   * marker's accessible name ("术语：宏"); each hint is the sentence the tooltip shows.
+   */
+  'term.macroLabel': '术语：宏',
+  'term.macroHint':
+    '宏是提示词里的占位符：拼装请求时它被替换成实际内容，例如角色名、当前时间或一个会话变量的值。角色卡与世界书里都可以写，帮助页第 9 节列了全套写法。',
+  'term.schedulerLabel': '术语：发言调度',
+  'term.schedulerHint':
+    '发言调度决定本轮谁下一个说话：先看手动指定的顺序，再看每轮人数上限与每张卡的「每轮行数 / 间隔」；被禁言或不在场的角色会被明确拒绝，而不是被悄悄换掉。',
+  'term.tokenLabel': '术语：token',
+  'term.tokenHint':
+    'token 是模型计量文本的最小单位，大致相当于一个词的一部分。上下文预算与 max_tokens 都按它计，所以「超出上下文预算」说的是 token 数而不是字数。',
+  'term.worldbookLabel': '术语：世界书',
+  'term.worldbookHint':
+    '世界书是一组按关键词触发的补充设定条目（传统 SillyTavern 的 world_info 与角色卡里的 character_book）。它随内容包导入导出，应用里还没有编辑条目本身的页面。',
 };
 
 /** Every key that must exist in every catalog, derived from the source of truth. */
@@ -2244,7 +2262,7 @@ export const en: Messages = {
     'An import/export entry point for SillyTavern files: the mapping layer is implemented and tested, but neither the interface nor the command line exposes it.\n' +
     'The application-level “time and scheduling” switch: it has landed on the settings page (off by default), and once it is on, time can be advanced by hand, the clock reading enters every turn’s prompt, and the local scheduler decides who speaks; what is still unwired is the card data’s own “advance time automatically” rhythm.\n' +
     'Theme packs, more interface languages, and the desktop packaging and release details (installer signing, the update mechanism).\n' +
-    'Hover explanations for jargon: labels carry no tooltip for terms such as macros, worldbooks, tokens or the speaker scheduler; the in-app Help page and this guide are the only places that explain them.',
+    'In-depth explanations of jargon: only four terms carry a “?” hint (macro, worldbook, token, speaker scheduling) and it is one sentence, shown on hover or keyboard focus; longer explanations still live only in the in-app Help page and this guide.',
 
   /* ── error ──────────────────────────────────────────────────────────────── */
   'error.auth': 'The API key was rejected. Check it in Settings.',
@@ -2261,6 +2279,19 @@ export const en: Messages = {
   'error.keyLocked':
     'The key is encrypted and locked. Choose Unlock below and enter the passphrase to continue.',
   'error.messageMissing': 'That message is no longer on the active branch. Refresh and try again.',
+  /* ── term ───────────────────────────────────────────────────────────────── */
+  'term.macroLabel': 'Term: macro',
+  'term.macroHint':
+    'A macro is a placeholder in a prompt: it is replaced with real content when the request is assembled — a character name, the current time, or the value of a session variable. Character cards and worldbook entries can both use them; Help section 9 lists every form.',
+  'term.schedulerLabel': 'Term: speaker scheduling',
+  'term.schedulerHint':
+    'Speaker scheduling picks who speaks next this round: a manual order comes first, then the per-round speaker cap and each card’s lines-per-round and cooldown. A muted or absent character is refused by name rather than silently swapped out.',
+  'term.tokenLabel': 'Term: token',
+  'term.tokenHint':
+    'A token is the smallest unit a model counts text in, roughly a piece of a word. Both the context budget and max_tokens are measured in tokens, so “over the context budget” is about tokens, not characters.',
+  'term.worldbookLabel': 'Term: worldbook',
+  'term.worldbookHint':
+    'A worldbook is a set of extra setting entries triggered by keywords (SillyTavern’s world_info and a card’s character_book). Entries travel with content packs; the app has no page for editing them yet.',
 };
 
 /**

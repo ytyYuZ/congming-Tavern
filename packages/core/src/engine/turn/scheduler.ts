@@ -7,20 +7,19 @@
  * WHY THIS IS A MODULE AND NOT A COMPONENT
  * The decision is a function of DATA: the session's cast, the recent transcript, and the
  * limits each pinned card carries. React has nothing to do with it and the DOM has nothing
- * to do with it, so it lives here, beside `session/roster.ts` (M1-S1's cast rule), which is
- * the same kind of session-domain pure rule and whose output this module consumes:
- * `Session.refs.cast` is the roster, and it already excludes the player.
+ * to do with it, so it lives in `packages/core`'s engine layer beside the prompt composer
+ * and the world clock, which is where `docs/02` section 5.6 puts it. `Session.refs.cast` is
+ * its roster input.
  *
- * WHY NOT `packages/rules`
- * docs/02 section 5.6 puts the `TurnScheduler` in the engine layer, i.e. `packages/core`,
- * which this task may not touch. `packages/rules` is defined by its own manifest and header
- * as "dice, check resolution and retrieval, plus the built-in openly-licensed rule pack
- * data" - a turn scheduler is a session engine, not rules content, so hosting it there
- * would be a category error the next reader would have to undo. Two smaller reasons point
- * the same way: the dependency checker forbids `packages/rules` from importing
- * `packages/i18n` (even as a type), while this module's output has to be rendered in the
- * catalog's terms (`session/scheduler-text.ts`); and the app layer already owns the
- * session-domain pure rules (M1-S1, M1-S6, M1-T1).
+ * WHERE IT CAME FROM
+ * M1-S5 first wrote it as `apps/web/src/session/scheduler.ts` because that milestone's scope
+ * forbade touching `packages/core`, and `docs/06` §10.5 recorded the deviation. Moving it
+ * into core is mechanical: no behaviour changed. What stays in the app is the catalog
+ * rendering of its structured reasons (`apps/web/src/session/scheduler-text.ts`), which is
+ * exactly why the rule itself is locale-free. It deliberately does NOT live in
+ * `packages/rules`: that package is dice, check resolution and retrieval, plus
+ * openly-licensed rule pack data - a session engine there would be a category error, and
+ * the dependency checker forbids `rules → i18n` anyway.
  *
  * THE SELECTION RULE (M1-S5's "user" mode; docs/01 F4-6, docs/02 section 5.6)
  * 1. The user's manual assignment wins: an id they named comes first, in the order they
@@ -82,7 +81,7 @@
  * explicitly silenced would name a rule that had nothing to do with the decision, and the
  * milestone's acceptance is that the scheduler's behaviour reflects the INTERVENTION. So the two
  * facts are named (`muted`, `absent`), they come first in the exclusion order, the scheduler's
- * own reason vocabulary is where they live, and `session/scheduler-text.ts` renders them in the
+ * own reason vocabulary is where they live, and `apps/web/src/session/scheduler-text.ts` renders them in the
  * catalog's terms like every other reason. `absent` wins over `muted` when both are true: being
  * off stage is the more fundamental answer to "can they speak", and `present: false` is what
  * docs/02 section 5.6 makes the stronger constraint (「不参与」 rather than 「跳过」).
@@ -167,7 +166,7 @@ export interface SchedulerInput {
 
 /**
  * Why a character was placed in the round. A structured fact, never prose: the catalogs own
- * the sentences (`session/scheduler-text.ts`) and the stored plan owns a locale-free trace
+ * the sentences (`apps/web/src/session/scheduler-text.ts`) and the stored plan owns a locale-free trace
  * (`speakerReasonFact`), so a language switch cannot leave a stored sentence behind.
  */
 export type SpeakerReason =
@@ -591,7 +590,7 @@ export interface TurnPlanDraft {
  * WHY THE PLAN STORES A FACT STRING AND NOT A SENTENCE: a `TurnPlan` row is PERSISTED DATA,
  * so a translated sentence inside it would freeze the language it was written in, and a
  * catalog key would make the database depend on a key a later edit may remove. The screen
- * renders prose from the SAME structure through `session/scheduler-text.ts`, where the
+ * renders prose from the SAME structure through `apps/web/src/session/scheduler-text.ts`, where the
  * language belongs; nothing reads these strings back, and docs/02 section 5.6's "explain
  * every score" is satisfied by the pair: the fact in the row, the sentence on screen.
  */

@@ -93,7 +93,7 @@ export function interventionOf(cast: SessionState['cast'], characterId: Id): Cas
 
 /**
  * Whether the scheduler may consider this member at all - `false` for an absent or a muted
- * character, which is the fact `session/scheduler.ts` reports as `absent` / `muted`.
+ * character, which is the fact `engine/turn/scheduler.ts` reports as `absent` / `muted`.
  *
  * It exists so the rule and the panel ask the same question in the same terms: the panel
  * renders "can speak" / "cannot speak and why" from the intervention, and the scheduler's

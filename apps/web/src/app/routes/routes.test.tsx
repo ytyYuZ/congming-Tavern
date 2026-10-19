@@ -2064,7 +2064,7 @@ describe('M1-S3: the opening panel', () => {
  * Every clause of the M1-S5 row is a fact about an END STATE rather than about a function: the
  * caps decide who the SCREEN offers, the manual assignment has to reach the assistant ROW, and
  * "the TurnPlan is stored" is a row in `turnPlans` that a message points at. A unit test of the
- * pure rule (`session/scheduler.test.ts`) cannot see any of that, so the cases below build the
+ * pure rule (`engine/turn/scheduler.test.ts`) cannot see any of that, so the cases below build the
  * cast out of real cards (`createCharacter`), mount the real play route, and let the scheduled
  * turn stream through the app's one turn path over a hand-written SSE body.
  *
@@ -2189,7 +2189,7 @@ describe('M1-S5: the turn scheduler', () => {
   /**
    * One round already played: the player spoke, and the cast member answered.
    *
-   * `speakerId` is what makes the round readable to the scheduler (`session/scheduler.ts` counts
+   * `speakerId` is what makes the round readable to the scheduler (`engine/turn/scheduler.ts` counts
    * each character's lines from it), so this fixture is the position a scheduled turn leaves
    * behind - and the reason these cases can be about caps at all.
    */

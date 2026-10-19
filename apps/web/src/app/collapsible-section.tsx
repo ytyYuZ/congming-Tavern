@@ -46,6 +46,7 @@
 import type { MessageKey } from '@smarttavern/i18n';
 import { type ReactNode, useCallback, useState } from 'react';
 import { useTranslation } from '../i18n/use-translation';
+import { TermHint, type TermKey } from './term-hint';
 
 export interface SectionDefinition {
   /** Self-describing and collision-free: see `sectionId`. */
@@ -54,6 +55,14 @@ export interface SectionDefinition {
   readonly title: MessageKey;
   /** The layout on entry. Exactly one section per card form leaves this true. */
   readonly openByDefault: boolean;
+  /**
+   * An optional jargon term this section's heading explains in place (F8-3's tooltip half).
+   *
+   * It is a FIELD and not a prop because the term describes the SECTION, not one render of it:
+   * the same list drives both the fold and the table of contents, so a term attached here cannot
+   * disagree with the heading it belongs to. `undefined` means the heading needs no explanation.
+   */
+  readonly term?: TermKey;
 }
 
 /** Which sections of one form are open, by `SectionDefinition.id`. */
@@ -256,6 +265,10 @@ export function CollapsibleSection({
             </span>
           )}
         </button>
+        {/* The hint is a SIBLING of the toggle, not a child: the toggle's accessible name is the act
+            it performs (`common.sectionExpand` / `Collapse`), and nesting a second focusable thing
+            inside a button is invalid markup and would steal the click. */}
+        {section.term === undefined ? null : <TermHint term={section.term} />}
       </h3>
       {/* `hidden` and never a missing element — the field inventory has to stay complete. */}
       <div className="section-body" id={bodyId} hidden={!open}>

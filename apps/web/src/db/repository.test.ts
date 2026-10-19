@@ -24,7 +24,7 @@
  *    intervention" is a fact about the row and not only about the pure rule.
  */
 import 'fake-indexeddb/auto';
-import { COLLECTIONS } from '@smarttavern/core';
+import { type CastMember, COLLECTIONS, planTurn } from '@smarttavern/core';
 import type { Message, Session, SessionState, VoiceProfile } from '@smarttavern/schema';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, readTable, resetDatabase, subscribe, write } from '../db/database';
@@ -54,7 +54,6 @@ import {
 // file's subject is the repository's rows and queries, not which world a session pins.
 import { createTestSession as createSession } from '../db/session.test-helpers';
 import { intervene, interventionOf, restoreIntervention } from '../session/cast';
-import { type CastMember, planTurn } from '../session/scheduler';
 
 let databases = 0;
 let databaseName = '';

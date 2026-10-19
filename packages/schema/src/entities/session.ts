@@ -192,7 +192,7 @@ export const SessionStateSchema = z.object({
   innerClock: InnerClockSchema.optional(),
   /**
    * Where each cast member stands right now — M1-S4's intervention, and the value the
-   * scheduler reads (`apps/web/src/session/scheduler.ts`). OPTIONAL because a row
+   * scheduler reads (`packages/core/src/engine/turn/scheduler.ts`). OPTIONAL because a row
    * written before this field existed is completed with `{}` at the read boundary; see
    * the header.
    */
